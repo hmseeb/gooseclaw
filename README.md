@@ -1,17 +1,18 @@
 # gooseclaw
 
-> personal AI agent in 5 minutes. deploy on railway, chat on telegram.
+> personal AI agent in 5 minutes. deploy on railway, chat on telegram or web.
 
-gooseclaw is a personal AI agent built on [Goose](https://github.com/block/goose) by Block. it runs on Railway, talks to you on Telegram, and learns who you are over time.
+gooseclaw is a personal AI agent built on [Goose](https://github.com/block/goose) by Block. it runs on Railway, talks to you on Telegram and via a web UI, and learns who you are over time.
 
 [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template/TEMPLATE_CODE)
 
 ## what you get
 
-- **telegram bot** that knows who you are and remembers across conversations
+- **web UI + telegram bot** — chat from your browser or phone
 - **interactive onboarding** on first message (no config files to edit)
 - **persistent memory** that survives redeploys (Railway volume + optional git backup)
 - **30+ LLM providers** supported (Claude, GPT, Gemini, Groq, self-hosted, etc.)
+- **scheduled tasks** — morning briefings, daily summaries, or anything you ask for
 
 ## quick start
 
@@ -82,31 +83,34 @@ message your bot. on first contact, it'll walk you through a quick setup to lear
 |----------|---------|-------------|
 | `GOOSE_MODEL` | provider default | model override |
 | `TZ` | `UTC` | timezone |
+| `GOOSE_WEB_AUTH_TOKEN` | auto-generated | auth token for web UI (set for stable token across deploys) |
 | `GITHUB_PAT` | — | GitHub PAT for git-based state persistence |
 | `GITHUB_REPO` | — | repo for git persistence (e.g. `username/my-agent`) |
 
 ## how it works
 
 ```
-┌─────────────────────────────────────────┐
-│           Railway Container              │
-│                                          │
-│  entrypoint.sh                           │
-│  ├── health server (HTTP on $PORT)       │
-│  ├── goose gateway (telegram bot)        │
-│  └── persist loop (git push, optional)   │
-│                                          │
-│  /data/ (Railway volume)                 │
-│  ├── identity/                           │
-│  │   ├── soul.md       ← agent personality│
-│  │   ├── user.md       ← your profile    │
-│  │   ├── tools.md      ← capabilities    │
-│  │   ├── memory.md     ← learned facts   │
-│  │   ├── heartbeat.md  ← proactive rules │
-│  │   └── journal/      ← daily logs      │
-│  ├── config/           ← goose config    │
-│  └── sessions/         ← session state   │
-└─────────────────────────────────────────┘
+┌──────────────────────────────────────────┐
+│           Railway Container               │
+│                                           │
+│  entrypoint.sh                            │
+│  ├── goose web (chat UI on $PORT)         │
+│  ├── goose gateway (telegram bot)         │
+│  ├── goose schedule (cron jobs)           │
+│  └── persist loop (git push, optional)    │
+│                                           │
+│  /data/ (Railway volume)                  │
+│  ├── identity/                            │
+│  │   ├── soul.md       ← personality      │
+│  │   ├── user.md       ← your profile     │
+│  │   ├── tools.md      ← capabilities     │
+│  │   ├── memory.md     ← learned facts    │
+│  │   ├── heartbeat.md  ← proactive rules  │
+│  │   └── journal/      ← daily logs       │
+│  ├── recipes/          ← scheduled tasks  │
+│  ├── config/           ← goose config     │
+│  └── sessions/         ← session state    │
+└──────────────────────────────────────────┘
 ```
 
 ### identity architecture

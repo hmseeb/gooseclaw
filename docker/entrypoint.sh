@@ -148,11 +148,30 @@ else
     echo "[persist] state persists on Railway volume only"
 fi
 
-# ─── start health check server ─────────────────────────────────────────────
+# ─── start web UI ─────────────────────────────────────────────────────────
 
-echo "[health] starting on port ${PORT:-8080}..."
-python3 "$APP_DIR/docker/health.py" &
-HEALTH_PID=$!
+WEB_PORT="${PORT:-8080}"
+
+# auto-generate auth token if not set
+if [ -z "${GOOSE_WEB_AUTH_TOKEN:-}" ]; then
+    GOOSE_WEB_AUTH_TOKEN=$(head -c 32 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 24)
+    echo ""
+    echo "========================================"
+    echo "  WEB UI AUTH TOKEN (auto-generated)"
+    echo "========================================"
+    echo ""
+    echo "  >>> $GOOSE_WEB_AUTH_TOKEN <<<"
+    echo ""
+    echo "  set GOOSE_WEB_AUTH_TOKEN in Railway"
+    echo "  to use a fixed token across deploys."
+    echo ""
+    echo "========================================"
+    echo ""
+fi
+
+echo "[web] starting goose web on 0.0.0.0:${WEB_PORT}..."
+goose web --host 0.0.0.0 --port "$WEB_PORT" --auth-token "$GOOSE_WEB_AUTH_TOKEN" &
+WEB_PID=$!
 
 # ─── start telegram gateway ────────────────────────────────────────────────
 
@@ -225,7 +244,7 @@ shutdown() {
         "$APP_DIR/scripts/persist.sh" 2>&1 || true
     fi
 
-    kill "$HEALTH_PID" 2>/dev/null || true
+    kill "$WEB_PID" 2>/dev/null || true
     [ -n "${GATEWAY_PID:-}" ] && kill "$GATEWAY_PID" 2>/dev/null || true
     [ -n "${PERSIST_PID:-}" ] && kill "$PERSIST_PID" 2>/dev/null || true
 
@@ -238,6 +257,6 @@ echo "[gooseclaw] agent is live!"
 echo ""
 
 # wait for any process to exit
-wait -n "$HEALTH_PID" ${GATEWAY_PID:+"$GATEWAY_PID"}
+wait -n "$WEB_PID" ${GATEWAY_PID:+"$GATEWAY_PID"}
 echo "[gooseclaw] process exited unexpectedly, shutting down..."
 exit 1

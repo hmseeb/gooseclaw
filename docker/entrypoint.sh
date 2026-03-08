@@ -163,11 +163,8 @@ HEALTH_PID=$!
 if [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then
     echo "[gateway] starting telegram gateway..."
 
-    # construct platform config JSON
-    PLATFORM_CONFIG=$(jq -n --arg token "$TELEGRAM_BOT_TOKEN" '{"bot_token": $token}')
-
     # start gateway in background
-    goose gateway start telegram --config "$PLATFORM_CONFIG" &
+    goose gateway start --bot-token "$TELEGRAM_BOT_TOKEN" telegram &
     GATEWAY_PID=$!
 
     # wait for gateway to initialize

@@ -4,7 +4,7 @@
 
 gooseclaw is a personal AI agent built on [Goose](https://github.com/block/goose) by Block. it runs on Railway, talks to you on Telegram and via a web UI, and learns who you are over time.
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template/TEMPLATE_CODE)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/AD_ArJ?referralCode=Rnr2IU)
 
 ## what you get
 

@@ -19,8 +19,7 @@ COPY . /app/
 # make scripts executable
 RUN chmod +x /app/docker/entrypoint.sh /app/scripts/persist.sh
 
-# persistent data directory (Railway volume mounts here)
+# persistent data directory (Railway volume mounts at /data)
 RUN mkdir -p /data
-VOLUME ["/data"]
 
 CMD ["/app/docker/entrypoint.sh"]

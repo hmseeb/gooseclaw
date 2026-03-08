@@ -16,11 +16,7 @@ gooseclaw is a personal AI agent built on [Goose](https://github.com/block/goose
 
 ## quick start
 
-### 1. create a telegram bot
-
-open Telegram, find [@BotFather](https://t.me/BotFather), send `/newbot`, follow the prompts. copy the bot token.
-
-### 2. choose your LLM provider
+### 1. choose your LLM provider
 
 | option | what you need | cost |
 |--------|---------------|------|
@@ -28,7 +24,7 @@ open Telegram, find [@BotFather](https://t.me/BotFather), send `/newbot`, follow
 | API key | get a key from Anthropic, OpenAI, Google, etc. | pay-per-use |
 | Custom endpoint | any OpenAI-compatible URL | depends |
 
-### 3. deploy on railway
+### 2. deploy on railway
 
 click the deploy button above, or:
 
@@ -38,23 +34,21 @@ click the deploy button above, or:
 4. set environment variables (see below)
 5. deploy
 
-### 4. pair your telegram
+### 3. open the web UI
 
-after deployment, check Railway logs for a 6-character pairing code. send it to your bot on Telegram. this is a one-time step.
+after deployment, check Railway logs for your web UI auth token (or set `GOOSE_WEB_AUTH_TOKEN` in Railway for a stable one). visit your Railway URL to chat.
+
+### 4. (optional) add telegram
+
+want a Telegram bot too? create one with [@BotFather](https://t.me/BotFather), set `TELEGRAM_BOT_TOKEN` in Railway, and redeploy. check logs for the pairing code, send it to your bot. one-time step.
 
 ### 5. say hello
 
-message your bot. on first contact, it'll walk you through a quick setup to learn your name, preferences, and communication style. after that, it's your personal agent.
+on first message (web or telegram), the agent walks you through a quick setup to learn your name, preferences, and communication style. after that, it's your personal agent.
 
 ## environment variables
 
-### required
-
-| variable | description |
-|----------|-------------|
-| `TELEGRAM_BOT_TOKEN` | bot token from @BotFather |
-
-### LLM provider (pick one set)
+### required (pick one LLM provider)
 
 **Claude subscription:**
 
@@ -84,6 +78,7 @@ message your bot. on first contact, it'll walk you through a quick setup to lear
 | `GOOSE_MODEL` | provider default | model override |
 | `TZ` | `UTC` | timezone |
 | `GOOSE_WEB_AUTH_TOKEN` | auto-generated | auth token for web UI (set for stable token across deploys) |
+| `TELEGRAM_BOT_TOKEN` | — | Telegram bot token from @BotFather (enables Telegram interface) |
 | `GITHUB_PAT` | — | GitHub PAT for git-based state persistence |
 | `GITHUB_REPO` | — | repo for git persistence (e.g. `username/my-agent`) |
 

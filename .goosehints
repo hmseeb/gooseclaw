@@ -1,4 +1,4 @@
-# nix-template identity bootstrap
+# gooseclaw identity bootstrap
 # these files are auto-loaded every session via @file syntax
 
 @identity/soul.md

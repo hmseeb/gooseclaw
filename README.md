@@ -11,7 +11,6 @@ gooseclaw is a personal AI agent built on [Goose](https://github.com/block/goose
 - **telegram bot** that knows who you are and remembers across conversations
 - **interactive onboarding** on first message (no config files to edit)
 - **persistent memory** that survives redeploys (Railway volume + optional git backup)
-- **scheduled tasks** (morning briefings, daily summaries, weekly reviews)
 - **30+ LLM providers** supported (Claude, GPT, Gemini, Groq, self-hosted, etc.)
 
 ## quick start
@@ -82,7 +81,7 @@ message your bot. on first contact, it'll walk you through a quick setup to lear
 | variable | default | description |
 |----------|---------|-------------|
 | `GOOSE_MODEL` | provider default | model override |
-| `TZ` | `UTC` | timezone for scheduled tasks |
+| `TZ` | `UTC` | timezone |
 | `GITHUB_PAT` | — | GitHub PAT for git-based state persistence |
 | `GITHUB_REPO` | — | repo for git persistence (e.g. `username/my-agent`) |
 
@@ -118,9 +117,9 @@ inspired by [OpenClaw](https://github.com/openclaw)'s bootstrap pattern. identit
 |------|---------|------------|
 | `soul.md` | personality, values, communication style | onboarding, then you |
 | `user.md` | your name, role, timezone, preferences | onboarding, then you |
-| `tools.md` | what the agent can do | template |
+| `tools.md` | platform info | template |
 | `memory.md` | long-term facts learned over time | agent |
-| `heartbeat.md` | proactive behavior rules | template, then you |
+| `heartbeat.md` | proactive behaviors | onboarding, then you |
 | `journal/` | daily session logs | agent |
 
 ### onboarding
@@ -133,7 +132,7 @@ on first message, the agent detects that identity files haven't been configured 
 4. how should I talk to you?
 5. what do you want help with?
 
-answers are written to `soul.md` and `user.md`. subsequent messages use the populated identity.
+answers are written to `soul.md`, `user.md`, and `heartbeat.md`. subsequent messages use the populated identity.
 
 ### persistence
 
@@ -183,8 +182,7 @@ cat /data/identity/soul.md
 for deeper customization, fork this repo and modify:
 
 - `identity/persistent-instructions.md` (always-on agent instructions)
-- `identity/heartbeat.md` (scheduled behavior rules)
-- `recipes/` (add custom scheduled tasks)
+- `identity/heartbeat.md` (proactive behavior definitions)
 
 ## credits
 

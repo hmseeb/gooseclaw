@@ -624,7 +624,7 @@ body::after {
     </div>
     <div class="btn-row">
       <div></div>
-      <button class="btn btn-primary" id="nextBtn0" disabled onclick="goToStep(1)">
+      <button class="btn btn-primary" id="nextBtn0" onclick="if(selectedProvider){goToStep(1)}else{showAlert('info','pick a provider first')}">
         Continue
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5.5 3L9.5 7L5.5 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
@@ -750,7 +750,6 @@ function selectProvider(card) {
   document.querySelectorAll('.provider-card').forEach(c => c.classList.remove('selected'));
   card.classList.add('selected');
   selectedProvider = card.dataset.provider;
-  document.getElementById('nextBtn0').disabled = false;
   buildCredFields();
 }
 

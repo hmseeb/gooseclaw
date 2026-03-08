@@ -1,0 +1,12 @@
+version: 1.0.0
+title: Daily Summary
+description: End-of-day summary. Recap accomplishments, list open items, write to journal.
+prompt: |
+  You are running as a scheduled daily summary. Be concise.
+
+  1. Read /data/identity/journal/ for today's entries
+  2. Summarize what was accomplished today
+  3. List any open or unresolved items
+  4. Write a summary to /data/identity/journal/ with today's date
+
+  Format as bullet points. Keep it brief.

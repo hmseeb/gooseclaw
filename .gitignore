@@ -1,0 +1,27 @@
+# secrets
+.env
+*.secret
+credentials.*
+*token*
+vault.yaml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# editor
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# python
+__pycache__/
+*.pyc
+
+# node (if claude CLI is installed)
+node_modules/
+
+# goose state (persisted via volume, not git)
+sessions.db

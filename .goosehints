@@ -1,0 +1,13 @@
+# nix-template identity bootstrap
+# these files are auto-loaded every session via @file syntax
+
+@identity/soul.md
+@identity/user.md
+@identity/tools.md
+@identity/memory.md
+@identity/heartbeat.md
+
+# project context
+nix is a personal autonomous AI agent deployed on Railway.
+Identity files are in /data/identity/ (volume-persisted).
+Journal entries go to /data/identity/journal/YYYY-MM-DD.md.

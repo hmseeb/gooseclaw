@@ -1,0 +1,14 @@
+version: 1.0.0
+title: Weekly Review
+description: Weekly review. Analyze patterns, identify wins and blockers, suggest priorities.
+prompt: |
+  You are running as a scheduled weekly review.
+
+  1. Read /data/identity/journal/ for the past 7 days of entries
+  2. Read /data/identity/memory.md for accumulated knowledge
+  3. Identify patterns, blockers, and wins from the week
+  4. Suggest priorities for the coming week
+  5. Consolidate any important learnings into /data/identity/memory.md
+  6. Write the review to /data/identity/journal/ with today's date
+
+  Be thorough but concise. Tables are good for comparisons.

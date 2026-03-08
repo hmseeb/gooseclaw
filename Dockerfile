@@ -5,7 +5,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # minimal runtime deps
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-      curl git python3 ca-certificates jq && \
+      curl git python3 ca-certificates jq bzip2 && \
     rm -rf /var/lib/apt/lists/*
 
 # install goose (prebuilt binary via official script)

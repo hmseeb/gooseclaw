@@ -12,6 +12,8 @@ CONFIG_DIR="/data/config"
 IDENTITY_DIR="/data/identity"
 HOME_DIR="${HOME:-/root}"
 
+export APP_DIR DATA_DIR CONFIG_DIR IDENTITY_DIR
+
 # ─── first boot: copy template files to volume ─────────────────────────────
 
 if [ ! -f "$DATA_DIR/.initialized" ]; then
@@ -41,7 +43,7 @@ if [ -f "$DATA_DIR/sessions/sessions.db" ]; then
     ln -sf "$DATA_DIR/sessions/sessions.db" "$HOME_DIR/.local/share/goose/sessions/sessions.db"
 fi
 
-# generate config.yaml
+# generate base config.yaml (provider may be added by env vars or setup wizard)
 cat > "$CONFIG_DIR/config.yaml" << YAML
 keyring: false
 GOOSE_MODE: auto
@@ -50,10 +52,12 @@ GOOSE_MAX_TURNS: 50
 GOOSE_DISABLE_SESSION_NAMING: true
 YAML
 
-# ─── provider setup ────────────────────────────────────────────────────────
+# ─── provider setup (env vars — optional, setup wizard is the alternative) ─
+
+PROVIDER_CONFIGURED=false
 
 if [ -n "${CLAUDE_SETUP_TOKEN:-}" ]; then
-    echo "[provider] tier 1: claude subscription (setup-token)"
+    echo "[provider] claude subscription (setup-token)"
 
     # install claude CLI if not present
     if command -v claude &>/dev/null; then
@@ -70,25 +74,21 @@ if [ -n "${CLAUDE_SETUP_TOKEN:-}" ]; then
         }
     fi
 
-    # authenticate with setup token
     export CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_SETUP_TOKEN"
-
-    # skip claude onboarding wizard
     mkdir -p "$HOME_DIR/.claude"
     cat > "$HOME_DIR/.claude.json" << CJSON
 {
     "hasCompletedOnboarding": true
 }
 CJSON
-
     echo "GOOSE_PROVIDER: claude-code" >> "$CONFIG_DIR/config.yaml"
+    PROVIDER_CONFIGURED=true
 
 elif [ -n "${GOOSE_API_KEY:-}" ]; then
     PROVIDER="${GOOSE_PROVIDER:-anthropic}"
-    echo "[provider] tier 2: API key ($PROVIDER)"
+    echo "[provider] API key ($PROVIDER)"
     echo "GOOSE_PROVIDER: $PROVIDER" >> "$CONFIG_DIR/config.yaml"
 
-    # set the appropriate env var for the provider
     case "$PROVIDER" in
         anthropic)  export ANTHROPIC_API_KEY="$GOOSE_API_KEY" ;;
         openai)     export OPENAI_API_KEY="$GOOSE_API_KEY" ;;
@@ -97,9 +97,10 @@ elif [ -n "${GOOSE_API_KEY:-}" ]; then
         openrouter) export OPENROUTER_API_KEY="$GOOSE_API_KEY" ;;
         *)          export GOOSE_PROVIDER__API_KEY="$GOOSE_API_KEY" ;;
     esac
+    PROVIDER_CONFIGURED=true
 
 elif [ -n "${CUSTOM_PROVIDER_URL:-}" ]; then
-    echo "[provider] tier 3: custom provider ($CUSTOM_PROVIDER_URL)"
+    echo "[provider] custom provider ($CUSTOM_PROVIDER_URL)"
     mkdir -p "$CONFIG_DIR/custom_providers"
     cat > "$CONFIG_DIR/custom_providers/custom.json" << CPJSON
 {
@@ -111,17 +112,15 @@ elif [ -n "${CUSTOM_PROVIDER_URL:-}" ]; then
 }
 CPJSON
     echo "GOOSE_PROVIDER: custom" >> "$CONFIG_DIR/config.yaml"
+    PROVIDER_CONFIGURED=true
 
-else
-    echo ""
-    echo "ERROR: no LLM provider configured."
-    echo ""
-    echo "set ONE of these in Railway environment variables:"
-    echo "  CLAUDE_SETUP_TOKEN  — claude subscription (run 'claude setup-token' locally)"
-    echo "  GOOSE_API_KEY       — API key (set GOOSE_PROVIDER too: anthropic, openai, google, etc.)"
-    echo "  CUSTOM_PROVIDER_URL — any OpenAI-compatible endpoint"
-    echo ""
-    exit 1
+elif [ -f "$CONFIG_DIR/setup.json" ]; then
+    echo "[provider] configured via setup wizard"
+    PROVIDER_CONFIGURED=true
+fi
+
+if [ "$PROVIDER_CONFIGURED" = false ]; then
+    echo "[provider] no provider configured yet. setup wizard will handle it."
 fi
 
 # model override
@@ -148,44 +147,22 @@ else
     echo "[persist] state persists on Railway volume only"
 fi
 
-# ─── start web UI ─────────────────────────────────────────────────────────
+# ─── start gateway (setup wizard + reverse proxy to goose web) ────────────
 
-WEB_PORT="${PORT:-8080}"
-
-# auto-generate auth token if not set
-if [ -z "${GOOSE_WEB_AUTH_TOKEN:-}" ]; then
-    GOOSE_WEB_AUTH_TOKEN=$(head -c 32 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 24)
-    echo ""
-    echo "========================================"
-    echo "  WEB UI AUTH TOKEN (auto-generated)"
-    echo "========================================"
-    echo ""
-    echo "  >>> $GOOSE_WEB_AUTH_TOKEN <<<"
-    echo ""
-    echo "  set GOOSE_WEB_AUTH_TOKEN in Railway"
-    echo "  to use a fixed token across deploys."
-    echo ""
-    echo "========================================"
-    echo ""
-fi
-
-echo "[web] starting goose web on 0.0.0.0:${WEB_PORT}..."
-goose web --host 0.0.0.0 --port "$WEB_PORT" --auth-token "$GOOSE_WEB_AUTH_TOKEN" &
-WEB_PID=$!
+echo "[gateway] starting gateway on port ${PORT:-8080}..."
+python3 "$APP_DIR/docker/gateway.py" &
+GATEWAY_PY_PID=$!
 
 # ─── start telegram gateway ────────────────────────────────────────────────
 
 if [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then
-    echo "[gateway] starting telegram gateway..."
+    echo "[telegram] starting telegram gateway..."
 
-    # start gateway in background
     goose gateway start --bot-token "$TELEGRAM_BOT_TOKEN" telegram &
-    GATEWAY_PID=$!
+    TELEGRAM_PID=$!
 
-    # wait for gateway to initialize
     sleep 8
 
-    # generate pairing code
     echo ""
     echo "========================================"
     echo "  TELEGRAM PAIRING"
@@ -214,8 +191,8 @@ if [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then
     echo "========================================"
     echo ""
 else
-    echo "[gateway] TELEGRAM_BOT_TOKEN not set, skipping telegram"
-    GATEWAY_PID=""
+    echo "[telegram] TELEGRAM_BOT_TOKEN not set, skipping telegram"
+    TELEGRAM_PID=""
 fi
 
 # ─── start persist loop (if git enabled) ───────────────────────────────────
@@ -238,14 +215,13 @@ fi
 shutdown() {
     echo "[shutdown] SIGTERM received"
 
-    # persist final state before exit
     if [ -n "${GITHUB_PAT:-}" ] && [ -n "${GITHUB_REPO:-}" ]; then
         echo "[shutdown] persisting final state..."
         "$APP_DIR/scripts/persist.sh" 2>&1 || true
     fi
 
-    kill "$WEB_PID" 2>/dev/null || true
-    [ -n "${GATEWAY_PID:-}" ] && kill "$GATEWAY_PID" 2>/dev/null || true
+    kill "$GATEWAY_PY_PID" 2>/dev/null || true
+    [ -n "${TELEGRAM_PID:-}" ] && kill "$TELEGRAM_PID" 2>/dev/null || true
     [ -n "${PERSIST_PID:-}" ] && kill "$PERSIST_PID" 2>/dev/null || true
 
     echo "[shutdown] done"
@@ -257,6 +233,6 @@ echo "[gooseclaw] agent is live!"
 echo ""
 
 # wait for any process to exit
-wait -n "$WEB_PID" ${GATEWAY_PID:+"$GATEWAY_PID"}
+wait -n "$GATEWAY_PY_PID" ${TELEGRAM_PID:+"$TELEGRAM_PID"}
 echo "[gooseclaw] process exited unexpectedly, shutting down..."
 exit 1

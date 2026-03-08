@@ -17,7 +17,7 @@ WORKDIR /app
 COPY . /app/
 
 # make scripts executable
-RUN chmod +x /app/docker/entrypoint.sh /app/scripts/persist.sh
+RUN chmod +x /app/docker/entrypoint.sh /app/docker/gateway.py /app/scripts/persist.sh
 
 # persistent data directory (Railway volume mounts at /data)
 RUN mkdir -p /data

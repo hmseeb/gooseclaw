@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>gooseclaw setup</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #0a0a0a; color: #e0e0e0;
+    min-height: 100vh; display: flex; justify-content: center; align-items: flex-start;
+    padding: 40px 20px;
+  }
+  .container { max-width: 560px; width: 100%; }
+  h1 { font-size: 28px; font-weight: 700; margin-bottom: 4px; }
+  h1 span { color: #a78bfa; }
+  .subtitle { color: #888; font-size: 14px; margin-bottom: 32px; }
+  .step { display: none; }
+  .step.active { display: block; }
+  .step-indicator {
+    display: flex; gap: 8px; margin-bottom: 28px;
+  }
+  .step-dot {
+    width: 32px; height: 4px; border-radius: 2px; background: #222;
+    transition: background 0.3s;
+  }
+  .step-dot.done { background: #a78bfa; }
+  .step-dot.current { background: #7c3aed; }
+
+  label { display: block; font-size: 13px; color: #aaa; margin-bottom: 6px; font-weight: 500; }
+  input, select {
+    width: 100%; padding: 10px 14px; border-radius: 8px;
+    border: 1px solid #333; background: #141414; color: #e0e0e0;
+    font-size: 14px; outline: none; transition: border-color 0.2s;
+  }
+  input:focus, select:focus { border-color: #7c3aed; }
+  input::placeholder { color: #555; }
+  .field { margin-bottom: 18px; }
+  .field-hint { font-size: 12px; color: #666; margin-top: 4px; }
+
+  .provider-cards {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px;
+  }
+  .provider-card {
+    padding: 14px; border: 2px solid #222; border-radius: 10px;
+    cursor: pointer; transition: all 0.2s; background: #111;
+  }
+  .provider-card:hover { border-color: #444; }
+  .provider-card.selected { border-color: #7c3aed; background: #1a1425; }
+  .provider-card .name { font-weight: 600; font-size: 14px; margin-bottom: 2px; }
+  .provider-card .desc { font-size: 12px; color: #888; }
+
+  .btn {
+    padding: 10px 24px; border-radius: 8px; border: none;
+    font-size: 14px; font-weight: 600; cursor: pointer;
+    transition: all 0.2s;
+  }
+  .btn-primary { background: #7c3aed; color: white; }
+  .btn-primary:hover { background: #6d28d9; }
+  .btn-primary:disabled { background: #333; color: #666; cursor: not-allowed; }
+  .btn-secondary { background: #222; color: #ccc; }
+  .btn-secondary:hover { background: #333; }
+  .btn-validate { background: #1a2332; color: #60a5fa; border: 1px solid #1e3a5f; }
+  .btn-validate:hover { background: #1e3a5f; }
+
+  .btn-row { display: flex; gap: 10px; justify-content: space-between; margin-top: 24px; }
+
+  .alert {
+    padding: 12px 16px; border-radius: 8px; font-size: 13px; margin-bottom: 16px;
+    display: none;
+  }
+  .alert-success { background: #0f2a1a; border: 1px solid #166534; color: #4ade80; }
+  .alert-error { background: #2a0f0f; border: 1px solid #7f1d1d; color: #f87171; }
+  .alert-info { background: #1a1a2e; border: 1px solid #312e81; color: #a78bfa; }
+  .alert.show { display: block; }
+
+  .spinner {
+    display: inline-block; width: 14px; height: 14px;
+    border: 2px solid #666; border-top-color: #fff;
+    border-radius: 50%; animation: spin 0.6s linear infinite;
+    vertical-align: middle; margin-right: 6px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .success-screen {
+    text-align: center; padding: 40px 0;
+  }
+  .success-screen .icon { font-size: 48px; margin-bottom: 16px; }
+  .success-screen h2 { font-size: 22px; margin-bottom: 8px; }
+  .success-screen p { color: #888; margin-bottom: 24px; font-size: 14px; }
+  .success-screen .token-box {
+    background: #141414; border: 1px solid #333; border-radius: 8px;
+    padding: 14px; margin: 16px 0; text-align: left;
+  }
+  .success-screen .token-box code {
+    font-family: 'SF Mono', Monaco, monospace; color: #a78bfa;
+    font-size: 13px; word-break: break-all;
+  }
+  .success-screen .token-box .label { font-size: 11px; color: #666; margin-bottom: 4px; }
+
+  .reconfigure-banner {
+    background: #1a1a2e; border: 1px solid #312e81; border-radius: 8px;
+    padding: 12px 16px; margin-bottom: 20px; font-size: 13px; color: #a78bfa;
+    display: none;
+  }
+  .reconfigure-banner.show { display: block; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1><span>gooseclaw</span> setup</h1>
+  <p class="subtitle">configure your personal AI agent</p>
+
+  <div class="reconfigure-banner" id="reconfigBanner">
+    reconfiguring. changes will restart the agent.
+  </div>
+
+  <div class="step-indicator">
+    <div class="step-dot current" id="dot-0"></div>
+    <div class="step-dot" id="dot-1"></div>
+    <div class="step-dot" id="dot-2"></div>
+  </div>
+
+  <div id="alert" class="alert"></div>
+
+  <!-- step 0: provider -->
+  <div class="step active" id="step-0">
+    <label>choose your LLM provider</label>
+    <div class="provider-cards">
+      <div class="provider-card" data-provider="claude-code" onclick="selectProvider(this)">
+        <div class="name">Claude subscription</div>
+        <div class="desc">use your existing sub</div>
+      </div>
+      <div class="provider-card" data-provider="anthropic" onclick="selectProvider(this)">
+        <div class="name">Anthropic API</div>
+        <div class="desc">claude via API key</div>
+      </div>
+      <div class="provider-card" data-provider="openai" onclick="selectProvider(this)">
+        <div class="name">OpenAI</div>
+        <div class="desc">GPT models</div>
+      </div>
+      <div class="provider-card" data-provider="google" onclick="selectProvider(this)">
+        <div class="name">Google</div>
+        <div class="desc">Gemini models</div>
+      </div>
+      <div class="provider-card" data-provider="groq" onclick="selectProvider(this)">
+        <div class="name">Groq</div>
+        <div class="desc">fast inference</div>
+      </div>
+      <div class="provider-card" data-provider="openrouter" onclick="selectProvider(this)">
+        <div class="name">OpenRouter</div>
+        <div class="desc">multi-model routing</div>
+      </div>
+      <div class="provider-card" data-provider="custom" onclick="selectProvider(this)">
+        <div class="name">Custom endpoint</div>
+        <div class="desc">any OpenAI-compatible API</div>
+      </div>
+    </div>
+    <div class="btn-row">
+      <div></div>
+      <button class="btn btn-primary" id="nextBtn0" disabled onclick="goToStep(1)">next</button>
+    </div>
+  </div>
+
+  <!-- step 1: credentials -->
+  <div class="step" id="step-1">
+    <div id="cred-fields"></div>
+    <div class="btn-row">
+      <button class="btn btn-secondary" onclick="goToStep(0)">back</button>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-validate" id="validateBtn" onclick="validateKey()">test connection</button>
+        <button class="btn btn-primary" onclick="goToStep(2)">next</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- step 2: options -->
+  <div class="step" id="step-2">
+    <div class="field">
+      <label>model override (optional)</label>
+      <input type="text" id="model" placeholder="leave blank for provider default">
+      <div class="field-hint">e.g. claude-sonnet-4-20250514, gpt-4o, gemini-pro</div>
+    </div>
+    <div class="field">
+      <label>timezone</label>
+      <select id="timezone"></select>
+    </div>
+    <div class="field">
+      <label>telegram bot token (optional)</label>
+      <input type="text" id="telegramToken" placeholder="paste token from @BotFather">
+      <div class="field-hint">skip this if you only want the web UI</div>
+    </div>
+    <div class="field">
+      <label>web UI auth token (optional)</label>
+      <input type="text" id="webAuthToken" placeholder="auto-generated if blank">
+      <div class="field-hint">set a memorable token or leave blank for a random one</div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-secondary" onclick="goToStep(1)">back</button>
+      <button class="btn btn-primary" id="saveBtn" onclick="saveConfig()">save & start agent</button>
+    </div>
+  </div>
+
+  <!-- success -->
+  <div class="step" id="step-success">
+    <div class="success-screen">
+      <div class="icon">&#129442;</div>
+      <h2>agent is starting</h2>
+      <p>give it a few seconds to boot up, then you're good to go.</p>
+      <div class="token-box" id="tokenBox" style="display:none">
+        <div class="label">your web UI auth token (save this!)</div>
+        <code id="savedToken"></code>
+      </div>
+      <button class="btn btn-primary" onclick="window.location.href='/'">open chat</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let selectedProvider = '';
+let isReconfigure = false;
+
+// populate timezone dropdown
+const tzSelect = document.getElementById('timezone');
+const commonTZ = [
+  'UTC','America/New_York','America/Chicago','America/Denver','America/Los_Angeles',
+  'Europe/London','Europe/Paris','Europe/Berlin','Asia/Tokyo','Asia/Shanghai',
+  'Asia/Kolkata','Asia/Karachi','Australia/Sydney','Pacific/Auckland'
+];
+try {
+  const all = Intl.supportedValuesOf('timeZone');
+  const guess = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  // put guessed timezone first
+  const opts = [guess, ...commonTZ.filter(t => t !== guess), '---', ...all.filter(t => !commonTZ.includes(t) && t !== guess)];
+  opts.forEach(tz => {
+    if (tz === '---') { const o = document.createElement('option'); o.disabled = true; o.textContent = '───'; tzSelect.appendChild(o); return; }
+    const o = document.createElement('option');
+    o.value = tz; o.textContent = tz;
+    if (tz === guess) o.selected = true;
+    tzSelect.appendChild(o);
+  });
+} catch(e) {
+  commonTZ.forEach(tz => { const o = document.createElement('option'); o.value = tz; o.textContent = tz; tzSelect.appendChild(o); });
+}
+
+// check if already configured
+fetch('/api/setup/config').then(r => r.json()).then(data => {
+  if (data.configured) {
+    isReconfigure = true;
+    document.getElementById('reconfigBanner').classList.add('show');
+    // pre-select provider
+    const p = data.config.provider_type;
+    if (p) {
+      const card = document.querySelector(`[data-provider="${p}"]`);
+      if (card) selectProvider(card);
+    }
+  }
+});
+
+function selectProvider(card) {
+  document.querySelectorAll('.provider-card').forEach(c => c.classList.remove('selected'));
+  card.classList.add('selected');
+  selectedProvider = card.dataset.provider;
+  document.getElementById('nextBtn0').disabled = false;
+  buildCredFields();
+}
+
+function buildCredFields() {
+  const container = document.getElementById('cred-fields');
+  let html = '';
+
+  if (selectedProvider === 'claude-code') {
+    html = `
+      <div class="field">
+        <label>claude setup token</label>
+        <input type="password" id="claudeToken" placeholder="sk-ant-oat01-...">
+        <div class="field-hint">run <code>claude setup-token</code> locally to get this</div>
+      </div>`;
+  } else if (selectedProvider === 'custom') {
+    html = `
+      <div class="field">
+        <label>API endpoint URL</label>
+        <input type="url" id="customUrl" placeholder="https://my-llm.corp.com/v1">
+      </div>
+      <div class="field">
+        <label>model name</label>
+        <input type="text" id="customModel" placeholder="gpt-4" value="gpt-4">
+      </div>
+      <div class="field">
+        <label>API key (if needed)</label>
+        <input type="password" id="customKey" placeholder="optional">
+      </div>`;
+  } else {
+    const names = {anthropic:'Anthropic',openai:'OpenAI',google:'Google',groq:'Groq',openrouter:'OpenRouter'};
+    const placeholders = {anthropic:'sk-ant-api03-...',openai:'sk-...',google:'AI...',groq:'gsk_...',openrouter:'sk-or-...'};
+    html = `
+      <div class="field">
+        <label>${names[selectedProvider]} API key</label>
+        <input type="password" id="apiKey" placeholder="${placeholders[selectedProvider] || ''}">
+      </div>`;
+  }
+  container.innerHTML = html;
+}
+
+function goToStep(n) {
+  document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
+  document.getElementById(`step-${n}`).classList.add('active');
+  document.querySelectorAll('.step-dot').forEach((d, i) => {
+    d.className = 'step-dot';
+    if (i < n) d.classList.add('done');
+    if (i === n) d.classList.add('current');
+  });
+  hideAlert();
+}
+
+function showAlert(type, msg) {
+  const el = document.getElementById('alert');
+  el.className = `alert alert-${type} show`;
+  el.innerHTML = msg;
+}
+function hideAlert() {
+  document.getElementById('alert').className = 'alert';
+}
+
+async function validateKey() {
+  const btn = document.getElementById('validateBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> testing...';
+  hideAlert();
+
+  const payload = { provider_type: selectedProvider };
+  if (selectedProvider === 'claude-code') {
+    payload.claude_setup_token = document.getElementById('claudeToken')?.value;
+  } else if (selectedProvider === 'custom') {
+    payload.url = document.getElementById('customUrl')?.value;
+    payload.api_key = document.getElementById('customKey')?.value;
+  } else {
+    payload.api_key = document.getElementById('apiKey')?.value;
+  }
+
+  try {
+    const resp = await fetch('/api/setup/validate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    const data = await resp.json();
+    if (data.valid) {
+      showAlert('success', data.note || 'connection successful!');
+    } else {
+      showAlert('error', data.error || 'validation failed');
+    }
+  } catch(e) {
+    showAlert('error', 'could not reach validation endpoint');
+  }
+
+  btn.disabled = false;
+  btn.textContent = 'test connection';
+}
+
+async function saveConfig() {
+  const btn = document.getElementById('saveBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> saving...';
+  hideAlert();
+
+  const config = {
+    provider_type: selectedProvider,
+    model: document.getElementById('model')?.value || '',
+    timezone: document.getElementById('timezone')?.value || 'UTC',
+    telegram_bot_token: document.getElementById('telegramToken')?.value || '',
+    web_auth_token: document.getElementById('webAuthToken')?.value || '',
+  };
+
+  // provider-specific fields
+  if (selectedProvider === 'claude-code') {
+    config.claude_setup_token = document.getElementById('claudeToken')?.value || '';
+  } else if (selectedProvider === 'custom') {
+    config.custom_url = document.getElementById('customUrl')?.value || '';
+    config.custom_model = document.getElementById('customModel')?.value || 'gpt-4';
+    config.custom_key = document.getElementById('customKey')?.value || '';
+  } else {
+    config.api_key = document.getElementById('apiKey')?.value || '';
+  }
+
+  try {
+    const resp = await fetch('/api/setup/save', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(config),
+    });
+    const data = await resp.json();
+    if (data.success) {
+      if (data.auth_token) {
+        document.getElementById('savedToken').textContent = data.auth_token;
+        document.getElementById('tokenBox').style.display = 'block';
+      }
+      goToStep('success');
+    } else {
+      showAlert('error', data.error || 'save failed');
+      btn.disabled = false;
+      btn.textContent = 'save & start agent';
+    }
+  } catch(e) {
+    showAlert('error', 'could not save configuration');
+    btn.disabled = false;
+    btn.textContent = 'save & start agent';
+  }
+}
+</script>
+</body>
+</html>

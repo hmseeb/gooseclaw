@@ -16,7 +16,7 @@ HOME_DIR="${HOME:-/root}"
 
 if [ ! -f "$DATA_DIR/.initialized" ]; then
     echo "[init] first boot detected. setting up /data..."
-    mkdir -p "$IDENTITY_DIR/journal" "$CONFIG_DIR" "$DATA_DIR/sessions"
+    mkdir -p "$IDENTITY_DIR/journal" "$CONFIG_DIR" "$DATA_DIR/sessions" "$DATA_DIR/recipes"
 
     # copy template identity files
     cp -r "$APP_DIR/identity/"* "$IDENTITY_DIR/"

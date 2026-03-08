@@ -49,7 +49,27 @@ If it does NOT contain "ONBOARDING_NEEDED":
 
    d. Write a first entry to /data/identity/memory.md — onboarding date and key preferences.
 
+   e. If the user requested recurring tasks (briefings, reminders, summaries, etc.):
+      - For EACH requested task, create a recipe YAML file at /data/recipes/<task-name>.yaml
+        Recipe format:
+        ```yaml
+        version: 1.0.0
+        title: "<task title>"
+        description: "<what this task does>"
+        instructions:
+          - content: "<detailed instruction for what the agent should do>"
+        ```
+      - Register each recipe with the scheduler by running:
+        `goose schedule add --schedule-id "<task-name>" --cron "<cron expression>" --recipe-source /data/recipes/<task-name>.yaml`
+      - Use the user's timezone (from question c) when setting cron times
+      - Common patterns:
+        - morning briefing: "0 8 * * *"
+        - daily summary: "0 18 * * *"
+        - weekly review: "0 10 * * 1"
+      - Record what was scheduled in heartbeat.md under "## Scheduled Behaviors"
+
 4. Confirm: "all set. i know who you are now. message me anytime."
+   If scheduled tasks were registered, list them: "i've set up these recurring tasks: ..."
 
 ## Post-Onboarding
 
@@ -58,3 +78,11 @@ If it does NOT contain "ONBOARDING_NEEDED":
 - Update memory.md with verified facts after significant conversations
 - Write journal entries to journal/YYYY-MM-DD.md after substantial work
 - Never expose secrets, tokens, or API keys
+
+## Scheduling (anytime)
+
+When the user asks to add, remove, or change scheduled tasks:
+- Create/update recipe files in /data/recipes/
+- Use `goose schedule add`, `goose schedule remove`, or `goose schedule list` as needed
+- Update heartbeat.md to reflect the current schedule
+- Always confirm what was changed

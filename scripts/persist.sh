@@ -7,11 +7,11 @@
 #
 # Required env vars:
 #   GITHUB_PAT    — fine-grained PAT with Contents: read/write
-#   GITHUB_REPO   — e.g. "username/nix-agent"
+#   GITHUB_REPO   — e.g. "username/gooseclaw"
 #
 # Optional env vars:
-#   GIT_USER_NAME    — commit author name  (default: "nix-agent")
-#   GIT_USER_EMAIL   — commit author email (default: "nix-agent@users.noreply.github.com")
+#   GIT_USER_NAME    — commit author name  (default: "gooseclaw")
+#   GIT_USER_EMAIL   — commit author email (default: "gooseclaw@users.noreply.github.com")
 #   PERSIST_BRANCH   — branch to push to   (default: "main")
 
 set -o pipefail
@@ -26,8 +26,8 @@ for arg in "$@"; do
     esac
 done
 
-GIT_USER_NAME="${GIT_USER_NAME:-nix-agent}"
-GIT_USER_EMAIL="${GIT_USER_EMAIL:-nix-agent@users.noreply.github.com}"
+GIT_USER_NAME="${GIT_USER_NAME:-gooseclaw}"
+GIT_USER_EMAIL="${GIT_USER_EMAIL:-gooseclaw@users.noreply.github.com}"
 PERSIST_BRANCH="${PERSIST_BRANCH:-main}"
 
 # files to persist (identity state only)
@@ -107,7 +107,7 @@ FILE_COUNT=$(echo "$CHANGED_FILES" | wc -l | tr -d ' ')
 
 COMMIT_MSG="chore(identity): auto-persist state — ${TIMESTAMP}
 
-Auto-persisted by nix-agent.
+Auto-persisted by gooseclaw.
 Files: ${FILE_COUNT} changed
 ${CHANGED_FILES}"
 

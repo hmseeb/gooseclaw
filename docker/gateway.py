@@ -170,6 +170,40 @@ def validate_provider(provider_type, credentials):
 
 # ── goose web subprocess management ─────────────────────────────────────────
 
+def _setup_claude_cli():
+    """Install claude CLI and create config if needed (for claude-code provider)."""
+    home = os.environ.get("HOME", "/root")
+
+    # check if already installed
+    if subprocess.run(["which", "claude"], capture_output=True).returncode == 0:
+        print("[gateway] claude CLI already installed")
+    else:
+        print("[gateway] installing claude CLI...")
+        try:
+            subprocess.run(
+                ["bash", "-c", "curl -fsSL https://claude.ai/install.sh | bash"],
+                check=True, timeout=120,
+            )
+        except Exception:
+            print("[gateway] native install failed, trying npm...")
+            try:
+                subprocess.run(
+                    ["bash", "-c", "apt-get update -qq && apt-get install -y -qq nodejs npm >/dev/null 2>&1 && npm install -g @anthropic-ai/claude-code 2>/dev/null"],
+                    check=True, timeout=180,
+                )
+            except Exception as e:
+                print(f"[gateway] ERROR: could not install claude CLI: {e}")
+                return
+
+    # create ~/.claude.json if missing
+    claude_json = os.path.join(home, ".claude.json")
+    if not os.path.exists(claude_json):
+        os.makedirs(os.path.join(home, ".claude"), exist_ok=True)
+        with open(claude_json, "w") as f:
+            json.dump({"hasCompletedOnboarding": True}, f)
+        print("[gateway] created ~/.claude.json")
+
+
 def apply_config(config):
     """Write goose config.yaml and set env vars from setup config."""
     provider_type = config.get("provider_type", "")
@@ -193,6 +227,8 @@ def apply_config(config):
     if provider_type == "claude-code":
         os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = config.get("claude_setup_token", "")
         lines.append("GOOSE_PROVIDER: claude-code")
+        # ensure claude CLI is installed and configured
+        _setup_claude_cli()
     elif provider_type == "custom":
         url = config.get("custom_url", "")
         custom_model = config.get("custom_model", "gpt-4")
@@ -250,7 +286,8 @@ def start_goose_web():
             cmd += ["--no-auth"]
 
         print(f"[gateway] starting goose web on 127.0.0.1:{GOOSE_WEB_PORT}")
-        goose_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print(f"[gateway] cmd: {' '.join(cmd)}")
+        goose_process = subprocess.Popen(cmd, stdout=sys.stdout, stderr=sys.stderr)
 
         # wait for it to listen
         for _ in range(30):
@@ -336,7 +373,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         if load_setup() and not check_auth(self):
             self.send_response(401)
             self.send_header("WWW-Authenticate", 'Basic realm="gooseclaw setup"')
-            self.send_header("Content-Length", 23)
+            self.send_header("Content-Length", "23")
             self.end_headers()
             self.wfile.write(b"Authentication required")
             return

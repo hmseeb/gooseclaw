@@ -4,224 +4,713 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>gooseclaw setup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    background: #0a0a0a; color: #e0e0e0;
-    min-height: 100vh; display: flex; justify-content: center; align-items: flex-start;
-    padding: 40px 20px;
-  }
-  .container { max-width: 560px; width: 100%; }
-  h1 { font-size: 28px; font-weight: 700; margin-bottom: 4px; }
-  h1 span { color: #a78bfa; }
-  .subtitle { color: #888; font-size: 14px; margin-bottom: 32px; }
-  .step { display: none; }
-  .step.active { display: block; }
-  .step-indicator {
-    display: flex; gap: 8px; margin-bottom: 28px;
-  }
-  .step-dot {
-    width: 32px; height: 4px; border-radius: 2px; background: #222;
-    transition: background 0.3s;
-  }
-  .step-dot.done { background: #a78bfa; }
-  .step-dot.current { background: #7c3aed; }
+:root {
+  --bg-deep: #050508;
+  --bg-surface: #0c0c12;
+  --bg-elevated: #12121c;
+  --bg-card: rgba(18, 18, 30, 0.6);
+  --bg-card-hover: rgba(24, 24, 42, 0.7);
+  --bg-card-selected: rgba(124, 58, 237, 0.08);
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border-mid: rgba(255, 255, 255, 0.1);
+  --border-accent: rgba(124, 58, 237, 0.5);
+  --text-primary: #e8e6f0;
+  --text-secondary: #8b8898;
+  --text-tertiary: #5c5870;
+  --text-accent: #b49aff;
+  --accent: #7c3aed;
+  --accent-bright: #a78bfa;
+  --accent-glow: rgba(124, 58, 237, 0.25);
+  --success: #34d399;
+  --success-bg: rgba(52, 211, 153, 0.08);
+  --error: #f87171;
+  --error-bg: rgba(248, 113, 113, 0.08);
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+}
 
-  label { display: block; font-size: 13px; color: #aaa; margin-bottom: 6px; font-weight: 500; }
-  input, select {
-    width: 100%; padding: 10px 14px; border-radius: 8px;
-    border: 1px solid #333; background: #141414; color: #e0e0e0;
-    font-size: 14px; outline: none; transition: border-color 0.2s;
-  }
-  input:focus, select:focus { border-color: #7c3aed; }
-  input::placeholder { color: #555; }
-  .field { margin-bottom: 18px; }
-  .field-hint { font-size: 12px; color: #666; margin-top: 4px; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
 
-  .provider-cards {
-    display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px;
-  }
-  .provider-card {
-    padding: 14px; border: 2px solid #222; border-radius: 10px;
-    cursor: pointer; transition: all 0.2s; background: #111;
-  }
-  .provider-card:hover { border-color: #444; }
-  .provider-card.selected { border-color: #7c3aed; background: #1a1425; }
-  .provider-card .name { font-weight: 600; font-size: 14px; margin-bottom: 2px; }
-  .provider-card .desc { font-size: 12px; color: #888; }
+body {
+  font-family: 'DM Sans', sans-serif;
+  background: var(--bg-deep);
+  color: var(--text-primary);
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 60px 24px 80px;
+  overflow-x: hidden;
+}
 
-  .btn {
-    padding: 10px 24px; border-radius: 8px; border: none;
-    font-size: 14px; font-weight: 600; cursor: pointer;
-    transition: all 0.2s;
-  }
-  .btn-primary { background: #7c3aed; color: white; }
-  .btn-primary:hover { background: #6d28d9; }
-  .btn-primary:disabled { background: #333; color: #666; cursor: not-allowed; }
-  .btn-secondary { background: #222; color: #ccc; }
-  .btn-secondary:hover { background: #333; }
-  .btn-validate { background: #1a2332; color: #60a5fa; border: 1px solid #1e3a5f; }
-  .btn-validate:hover { background: #1e3a5f; }
+/* atmospheric background */
+body::before {
+  content: '';
+  position: fixed;
+  top: -40%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 800px;
+  height: 800px;
+  background: radial-gradient(ellipse, rgba(124, 58, 237, 0.07) 0%, transparent 70%);
+  pointer-events: none;
+  z-index: 0;
+}
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+  pointer-events: none;
+  z-index: 0;
+}
 
-  .btn-row { display: flex; gap: 10px; justify-content: space-between; margin-top: 24px; }
+.container {
+  max-width: 540px;
+  width: 100%;
+  position: relative;
+  z-index: 1;
+}
 
-  .alert {
-    padding: 12px 16px; border-radius: 8px; font-size: 13px; margin-bottom: 16px;
-    display: none;
-  }
-  .alert-success { background: #0f2a1a; border: 1px solid #166534; color: #4ade80; }
-  .alert-error { background: #2a0f0f; border: 1px solid #7f1d1d; color: #f87171; }
-  .alert-info { background: #1a1a2e; border: 1px solid #312e81; color: #a78bfa; }
-  .alert.show { display: block; }
+/* ── header ── */
+.header {
+  margin-bottom: 40px;
+  animation: fadeSlideIn 0.6s ease-out;
+}
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.logo-icon {
+  width: 36px;
+  height: 36px;
+  background: linear-gradient(135deg, var(--accent), #9333ea);
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  box-shadow: 0 0 24px var(--accent-glow);
+}
+.logo-text {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  color: var(--text-primary);
+}
+.logo-text span { color: var(--text-tertiary); font-weight: 400; }
+.subtitle {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+  letter-spacing: 0.2px;
+}
 
-  .spinner {
-    display: inline-block; width: 14px; height: 14px;
-    border: 2px solid #666; border-top-color: #fff;
-    border-radius: 50%; animation: spin 0.6s linear infinite;
-    vertical-align: middle; margin-right: 6px;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
+/* ── progress ── */
+.progress {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  margin-bottom: 32px;
+  animation: fadeSlideIn 0.6s ease-out 0.1s both;
+}
+.progress-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.progress-num {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1.5px solid var(--border-mid);
+  color: var(--text-tertiary);
+  background: transparent;
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  flex-shrink: 0;
+}
+.progress-num.current {
+  border-color: var(--accent);
+  color: var(--accent-bright);
+  background: var(--accent-glow);
+  box-shadow: 0 0 16px rgba(124, 58, 237, 0.2);
+}
+.progress-num.done {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: white;
+}
+.progress-num.done::after { content: none; }
+.progress-label {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  font-weight: 500;
+  transition: color 0.3s;
+  white-space: nowrap;
+}
+.progress-step.active .progress-label { color: var(--text-secondary); }
+.progress-step.done .progress-label { color: var(--text-secondary); }
+.progress-line {
+  flex: 1;
+  height: 1px;
+  background: var(--border-subtle);
+  margin: 0 12px;
+  position: relative;
+  min-width: 20px;
+}
+.progress-line::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.progress-line.filled::after { width: 100%; }
 
-  .success-screen {
-    text-align: center; padding: 40px 0;
-  }
-  .success-screen .icon { font-size: 48px; margin-bottom: 16px; }
-  .success-screen h2 { font-size: 22px; margin-bottom: 8px; }
-  .success-screen p { color: #888; margin-bottom: 24px; font-size: 14px; }
-  .success-screen .token-box {
-    background: #141414; border: 1px solid #333; border-radius: 8px;
-    padding: 14px; margin: 16px 0; text-align: left;
-  }
-  .success-screen .token-box code {
-    font-family: 'SF Mono', Monaco, monospace; color: #a78bfa;
-    font-size: 13px; word-break: break-all;
-  }
-  .success-screen .token-box .label { font-size: 11px; color: #666; margin-bottom: 4px; }
+/* ── reconfigure banner ── */
+.reconfig-banner {
+  display: none;
+  padding: 10px 16px;
+  border-radius: var(--radius-sm);
+  background: rgba(124, 58, 237, 0.06);
+  border: 1px solid rgba(124, 58, 237, 0.15);
+  font-size: 13px;
+  color: var(--text-accent);
+  margin-bottom: 24px;
+  backdrop-filter: blur(8px);
+  animation: fadeSlideIn 0.4s ease-out;
+}
+.reconfig-banner.show { display: flex; align-items: center; gap: 8px; }
+.reconfig-banner svg { flex-shrink: 0; }
 
-  .reconfigure-banner {
-    background: #1a1a2e; border: 1px solid #312e81; border-radius: 8px;
-    padding: 12px 16px; margin-bottom: 20px; font-size: 13px; color: #a78bfa;
-    display: none;
-  }
-  .reconfigure-banner.show { display: block; }
+/* ── alert ── */
+#alert {
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  margin-bottom: 20px;
+  padding: 0;
+  max-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition: all 0.3s ease;
+  border: 1px solid transparent;
+}
+#alert.show {
+  padding: 11px 16px;
+  max-height: 80px;
+  opacity: 1;
+}
+#alert.alert-success { background: var(--success-bg); border-color: rgba(52, 211, 153, 0.2); color: var(--success); }
+#alert.alert-error { background: var(--error-bg); border-color: rgba(248, 113, 113, 0.2); color: var(--error); }
+#alert.alert-info { background: rgba(124, 58, 237, 0.06); border-color: rgba(124, 58, 237, 0.15); color: var(--text-accent); }
+
+/* ── steps ── */
+.step {
+  display: none;
+  animation: stepIn 0.35s ease-out;
+}
+.step.active { display: block; }
+
+.step-title {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  margin-bottom: 20px;
+}
+
+/* ── provider cards ── */
+.provider-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.provider-card {
+  position: relative;
+  padding: 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  background: var(--bg-card);
+  backdrop-filter: blur(12px);
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden;
+}
+.provider-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(135deg, rgba(124, 58, 237, 0.05), transparent 60%);
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+.provider-card:hover {
+  border-color: var(--border-mid);
+  background: var(--bg-card-hover);
+  transform: translateY(-1px);
+}
+.provider-card:hover::before { opacity: 1; }
+.provider-card.selected {
+  border-color: var(--border-accent);
+  background: var(--bg-card-selected);
+  box-shadow: 0 0 0 1px rgba(124, 58, 237, 0.15), 0 4px 24px rgba(124, 58, 237, 0.08);
+}
+.provider-card.selected::before { opacity: 1; }
+.provider-card .card-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  margin-bottom: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-subtle);
+}
+.provider-card .card-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text-primary);
+  margin-bottom: 2px;
+  position: relative;
+}
+.provider-card .card-desc {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  position: relative;
+}
+.provider-card.selected .card-name { color: var(--accent-bright); }
+.provider-card.selected .card-icon {
+  background: var(--accent-glow);
+  border-color: rgba(124, 58, 237, 0.3);
+}
+
+/* full-width last card if odd count */
+.provider-grid .provider-card:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+
+/* ── form fields ── */
+.field {
+  margin-bottom: 20px;
+}
+.field label {
+  display: block;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 8px;
+}
+.field input,
+.field select {
+  width: 100%;
+  padding: 11px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 14px;
+  outline: none;
+  transition: all 0.2s ease;
+  backdrop-filter: blur(8px);
+}
+.field input:focus,
+.field select:focus {
+  border-color: var(--border-accent);
+  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.1);
+}
+.field input::placeholder { color: var(--text-tertiary); }
+.field select { cursor: pointer; }
+.field select option { background: var(--bg-elevated); }
+.field-hint {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-top: 6px;
+  line-height: 1.5;
+}
+.field-hint code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--text-accent);
+  background: rgba(124, 58, 237, 0.08);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+/* ── buttons ── */
+.btn-row {
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 28px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border-subtle);
+}
+.btn-group { display: flex; gap: 8px; }
+
+.btn {
+  padding: 10px 22px;
+  border-radius: var(--radius-sm);
+  border: none;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  letter-spacing: 0.2px;
+}
+.btn-primary {
+  background: var(--accent);
+  color: white;
+  box-shadow: 0 2px 12px rgba(124, 58, 237, 0.25);
+}
+.btn-primary:hover {
+  background: #6d28d9;
+  box-shadow: 0 4px 20px rgba(124, 58, 237, 0.35);
+  transform: translateY(-1px);
+}
+.btn-primary:active { transform: translateY(0); }
+.btn-primary:disabled {
+  background: var(--bg-elevated);
+  color: var(--text-tertiary);
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+}
+.btn-ghost {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
+}
+.btn-ghost:hover {
+  background: var(--bg-card);
+  border-color: var(--border-mid);
+  color: var(--text-primary);
+}
+.btn-test {
+  background: rgba(124, 58, 237, 0.08);
+  color: var(--text-accent);
+  border: 1px solid rgba(124, 58, 237, 0.2);
+}
+.btn-test:hover {
+  background: rgba(124, 58, 237, 0.14);
+  border-color: rgba(124, 58, 237, 0.35);
+}
+.btn-test:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ── spinner ── */
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255,255,255,0.2);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+  vertical-align: middle;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── success screen ── */
+.success-screen {
+  text-align: center;
+  padding: 48px 0 24px;
+  animation: successPop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.success-orb {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent), #9333ea);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 24px;
+  font-size: 32px;
+  box-shadow: 0 0 48px rgba(124, 58, 237, 0.3), 0 0 96px rgba(124, 58, 237, 0.1);
+  animation: orbPulse 2s ease-in-out infinite;
+}
+.success-screen h2 {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 20px;
+  font-weight: 700;
+  margin-bottom: 8px;
+  color: var(--text-primary);
+}
+.success-screen p {
+  color: var(--text-secondary);
+  font-size: 14px;
+  margin-bottom: 28px;
+  line-height: 1.6;
+}
+.token-box {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  margin: 20px 0 28px;
+  text-align: left;
+  backdrop-filter: blur(12px);
+}
+.token-box .token-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--text-tertiary);
+  margin-bottom: 8px;
+}
+.token-box code {
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--accent-bright);
+  font-size: 13px;
+  word-break: break-all;
+  line-height: 1.6;
+  display: block;
+  padding: 8px 12px;
+  background: rgba(124, 58, 237, 0.06);
+  border-radius: 6px;
+  border: 1px solid rgba(124, 58, 237, 0.1);
+}
+
+/* ── animations ── */
+@keyframes fadeSlideIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes stepIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes successPop {
+  from { opacity: 0; transform: scale(0.95) translateY(10px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes orbPulse {
+  0%, 100% { box-shadow: 0 0 48px rgba(124, 58, 237, 0.3), 0 0 96px rgba(124, 58, 237, 0.1); }
+  50% { box-shadow: 0 0 64px rgba(124, 58, 237, 0.4), 0 0 120px rgba(124, 58, 237, 0.15); }
+}
+
+/* stagger card animations */
+.provider-card { animation: fadeSlideIn 0.35s ease-out both; }
+.provider-card:nth-child(1) { animation-delay: 0.05s; }
+.provider-card:nth-child(2) { animation-delay: 0.1s; }
+.provider-card:nth-child(3) { animation-delay: 0.15s; }
+.provider-card:nth-child(4) { animation-delay: 0.2s; }
+.provider-card:nth-child(5) { animation-delay: 0.25s; }
+.provider-card:nth-child(6) { animation-delay: 0.3s; }
+.provider-card:nth-child(7) { animation-delay: 0.35s; }
+
+/* ── responsive ── */
+@media (max-width: 480px) {
+  body { padding: 32px 16px 60px; }
+  .provider-grid { grid-template-columns: 1fr; }
+  .progress-label { display: none; }
+  .btn-row { flex-wrap: wrap; }
+}
 </style>
 </head>
 <body>
 <div class="container">
-  <h1><span>gooseclaw</span> setup</h1>
-  <p class="subtitle">configure your personal AI agent</p>
 
-  <div class="reconfigure-banner" id="reconfigBanner">
-    reconfiguring. changes will restart the agent.
+  <!-- header -->
+  <div class="header">
+    <div class="logo">
+      <div class="logo-icon">&#129442;</div>
+      <div class="logo-text">gooseclaw<span> /setup</span></div>
+    </div>
+    <p class="subtitle">configure your personal AI agent</p>
   </div>
 
-  <div class="step-indicator">
-    <div class="step-dot current" id="dot-0"></div>
-    <div class="step-dot" id="dot-1"></div>
-    <div class="step-dot" id="dot-2"></div>
+  <!-- reconfigure banner -->
+  <div class="reconfig-banner" id="reconfigBanner">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M8 5v3.5M8 10.5h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+    reconfiguring &mdash; changes will restart the agent
   </div>
 
-  <div id="alert" class="alert"></div>
+  <!-- progress -->
+  <div class="progress" id="progressBar">
+    <div class="progress-step active" id="pstep-0">
+      <div class="progress-num current" id="pnum-0">1</div>
+      <span class="progress-label">Provider</span>
+    </div>
+    <div class="progress-line" id="pline-0"></div>
+    <div class="progress-step" id="pstep-1">
+      <div class="progress-num" id="pnum-1">2</div>
+      <span class="progress-label">Credentials</span>
+    </div>
+    <div class="progress-line" id="pline-1"></div>
+    <div class="progress-step" id="pstep-2">
+      <div class="progress-num" id="pnum-2">3</div>
+      <span class="progress-label">Options</span>
+    </div>
+  </div>
 
-  <!-- step 0: provider -->
+  <!-- alert -->
+  <div id="alert"></div>
+
+  <!-- step 0: provider selection -->
   <div class="step active" id="step-0">
-    <label>choose your LLM provider</label>
-    <div class="provider-cards">
+    <div class="step-title">Choose Provider</div>
+    <div class="provider-grid">
       <div class="provider-card" data-provider="claude-code" onclick="selectProvider(this)">
-        <div class="name">Claude subscription</div>
-        <div class="desc">use your existing sub</div>
+        <div class="card-icon">&#9672;</div>
+        <div class="card-name">Claude Subscription</div>
+        <div class="card-desc">use your existing plan</div>
       </div>
       <div class="provider-card" data-provider="anthropic" onclick="selectProvider(this)">
-        <div class="name">Anthropic API</div>
-        <div class="desc">claude via API key</div>
+        <div class="card-icon">&#9651;</div>
+        <div class="card-name">Anthropic API</div>
+        <div class="card-desc">claude via API key</div>
       </div>
       <div class="provider-card" data-provider="openai" onclick="selectProvider(this)">
-        <div class="name">OpenAI</div>
-        <div class="desc">GPT models</div>
+        <div class="card-icon">&#9673;</div>
+        <div class="card-name">OpenAI</div>
+        <div class="card-desc">GPT models</div>
       </div>
       <div class="provider-card" data-provider="google" onclick="selectProvider(this)">
-        <div class="name">Google</div>
-        <div class="desc">Gemini models</div>
+        <div class="card-icon">&#9830;</div>
+        <div class="card-name">Google</div>
+        <div class="card-desc">Gemini models</div>
       </div>
       <div class="provider-card" data-provider="groq" onclick="selectProvider(this)">
-        <div class="name">Groq</div>
-        <div class="desc">fast inference</div>
+        <div class="card-icon">&#9889;</div>
+        <div class="card-name">Groq</div>
+        <div class="card-desc">fast inference</div>
       </div>
       <div class="provider-card" data-provider="openrouter" onclick="selectProvider(this)">
-        <div class="name">OpenRouter</div>
-        <div class="desc">multi-model routing</div>
+        <div class="card-icon">&#8644;</div>
+        <div class="card-name">OpenRouter</div>
+        <div class="card-desc">multi-model routing</div>
       </div>
       <div class="provider-card" data-provider="custom" onclick="selectProvider(this)">
-        <div class="name">Custom endpoint</div>
-        <div class="desc">any OpenAI-compatible API</div>
+        <div class="card-icon">&#9881;</div>
+        <div class="card-name">Custom Endpoint</div>
+        <div class="card-desc">any OpenAI-compatible API</div>
       </div>
     </div>
     <div class="btn-row">
       <div></div>
-      <button class="btn btn-primary" id="nextBtn0" disabled onclick="goToStep(1)">next</button>
+      <button class="btn btn-primary" id="nextBtn0" disabled onclick="goToStep(1)">
+        Continue
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5.5 3L9.5 7L5.5 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
     </div>
   </div>
 
   <!-- step 1: credentials -->
   <div class="step" id="step-1">
+    <div class="step-title">Enter Credentials</div>
     <div id="cred-fields"></div>
     <div class="btn-row">
-      <button class="btn btn-secondary" onclick="goToStep(0)">back</button>
-      <div style="display:flex;gap:8px;">
-        <button class="btn btn-validate" id="validateBtn" onclick="validateKey()">test connection</button>
-        <button class="btn btn-primary" onclick="goToStep(2)">next</button>
+      <button class="btn btn-ghost" onclick="goToStep(0)">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M8.5 3L4.5 7L8.5 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Back
+      </button>
+      <div class="btn-group">
+        <button class="btn btn-test" id="validateBtn" onclick="validateKey()">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 7.5L5.5 11L12 3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Test
+        </button>
+        <button class="btn btn-primary" onclick="goToStep(2)">
+          Continue
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5.5 3L9.5 7L5.5 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
       </div>
     </div>
   </div>
 
   <!-- step 2: options -->
   <div class="step" id="step-2">
+    <div class="step-title">Optional Settings</div>
     <div class="field">
-      <label>model override (optional)</label>
+      <label>Model Override</label>
       <input type="text" id="model" placeholder="leave blank for provider default">
-      <div class="field-hint">e.g. claude-sonnet-4-20250514, gpt-4o, gemini-pro</div>
+      <div class="field-hint">e.g. <code>claude-sonnet-4-20250514</code>, <code>gpt-4o</code>, <code>gemini-pro</code></div>
     </div>
     <div class="field">
-      <label>timezone</label>
+      <label>Timezone</label>
       <select id="timezone"></select>
     </div>
     <div class="field">
-      <label>telegram bot token (optional)</label>
+      <label>Telegram Bot Token</label>
       <input type="text" id="telegramToken" placeholder="paste token from @BotFather">
-      <div class="field-hint">skip this if you only want the web UI</div>
+      <div class="field-hint">skip if you only want the web UI</div>
     </div>
     <div class="field">
-      <label>web UI auth token (optional)</label>
+      <label>Web Auth Token</label>
       <input type="text" id="webAuthToken" placeholder="auto-generated if blank">
       <div class="field-hint">set a memorable token or leave blank for a random one</div>
     </div>
     <div class="btn-row">
-      <button class="btn btn-secondary" onclick="goToStep(1)">back</button>
-      <button class="btn btn-primary" id="saveBtn" onclick="saveConfig()">save & start agent</button>
+      <button class="btn btn-ghost" onclick="goToStep(1)">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M8.5 3L4.5 7L8.5 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Back
+      </button>
+      <button class="btn btn-primary" id="saveBtn" onclick="saveConfig()">
+        Save &amp; Start Agent
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5.5 3L9.5 7L5.5 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
     </div>
   </div>
 
-  <!-- success -->
+  <!-- success screen -->
   <div class="step" id="step-success">
     <div class="success-screen">
-      <div class="icon">&#129442;</div>
+      <div class="success-orb">&#129442;</div>
       <h2>agent is starting</h2>
-      <p>give it a few seconds to boot up, then you're good to go.</p>
+      <p>give it a few seconds to boot up, then you're all set.</p>
       <div class="token-box" id="tokenBox" style="display:none">
-        <div class="label">your web UI auth token (save this!)</div>
+        <div class="token-label">Web UI Auth Token &mdash; save this</div>
         <code id="savedToken"></code>
       </div>
-      <button class="btn btn-primary" onclick="window.location.href='/'">open chat</button>
+      <button class="btn btn-primary" onclick="window.location.href='/'">
+        Open Chat
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5.5 3L9.5 7L5.5 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
     </div>
   </div>
+
 </div>
 
 <script>
 let selectedProvider = '';
 let isReconfigure = false;
 
-// populate timezone dropdown
+/* ── timezone dropdown ── */
 const tzSelect = document.getElementById('timezone');
 const commonTZ = [
   'UTC','America/New_York','America/Chicago','America/Denver','America/Los_Angeles',
@@ -231,10 +720,9 @@ const commonTZ = [
 try {
   const all = Intl.supportedValuesOf('timeZone');
   const guess = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  // put guessed timezone first
   const opts = [guess, ...commonTZ.filter(t => t !== guess), '---', ...all.filter(t => !commonTZ.includes(t) && t !== guess)];
   opts.forEach(tz => {
-    if (tz === '---') { const o = document.createElement('option'); o.disabled = true; o.textContent = '───'; tzSelect.appendChild(o); return; }
+    if (tz === '---') { const o = document.createElement('option'); o.disabled = true; o.textContent = '\u2500\u2500\u2500'; tzSelect.appendChild(o); return; }
     const o = document.createElement('option');
     o.value = tz; o.textContent = tz;
     if (tz === guess) o.selected = true;
@@ -244,20 +732,20 @@ try {
   commonTZ.forEach(tz => { const o = document.createElement('option'); o.value = tz; o.textContent = tz; tzSelect.appendChild(o); });
 }
 
-// check if already configured
+/* ── check existing config ── */
 fetch('/api/setup/config').then(r => r.json()).then(data => {
   if (data.configured) {
     isReconfigure = true;
     document.getElementById('reconfigBanner').classList.add('show');
-    // pre-select provider
     const p = data.config.provider_type;
     if (p) {
       const card = document.querySelector(`[data-provider="${p}"]`);
       if (card) selectProvider(card);
     }
   }
-});
+}).catch(() => {});
 
+/* ── provider selection ── */
 function selectProvider(card) {
   document.querySelectorAll('.provider-card').forEach(c => c.classList.remove('selected'));
   card.classList.add('selected');
@@ -273,60 +761,84 @@ function buildCredFields() {
   if (selectedProvider === 'claude-code') {
     html = `
       <div class="field">
-        <label>claude setup token</label>
+        <label>Claude Setup Token</label>
         <input type="password" id="claudeToken" placeholder="sk-ant-oat01-...">
         <div class="field-hint">run <code>claude setup-token</code> locally to get this</div>
       </div>`;
   } else if (selectedProvider === 'custom') {
     html = `
       <div class="field">
-        <label>API endpoint URL</label>
+        <label>API Endpoint URL</label>
         <input type="url" id="customUrl" placeholder="https://my-llm.corp.com/v1">
       </div>
       <div class="field">
-        <label>model name</label>
+        <label>Model Name</label>
         <input type="text" id="customModel" placeholder="gpt-4" value="gpt-4">
       </div>
       <div class="field">
-        <label>API key (if needed)</label>
+        <label>API Key</label>
         <input type="password" id="customKey" placeholder="optional">
+        <div class="field-hint">leave blank if your endpoint doesn't require auth</div>
       </div>`;
   } else {
     const names = {anthropic:'Anthropic',openai:'OpenAI',google:'Google',groq:'Groq',openrouter:'OpenRouter'};
     const placeholders = {anthropic:'sk-ant-api03-...',openai:'sk-...',google:'AI...',groq:'gsk_...',openrouter:'sk-or-...'};
     html = `
       <div class="field">
-        <label>${names[selectedProvider]} API key</label>
+        <label>${names[selectedProvider]} API Key</label>
         <input type="password" id="apiKey" placeholder="${placeholders[selectedProvider] || ''}">
       </div>`;
   }
   container.innerHTML = html;
 }
 
+/* ── step navigation ── */
 function goToStep(n) {
   document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
   document.getElementById(`step-${n}`).classList.add('active');
-  document.querySelectorAll('.step-dot').forEach((d, i) => {
-    d.className = 'step-dot';
-    if (i < n) d.classList.add('done');
-    if (i === n) d.classList.add('current');
-  });
+
+  // update progress bar
+  for (let i = 0; i < 3; i++) {
+    const num = document.getElementById(`pnum-${i}`);
+    const step = document.getElementById(`pstep-${i}`);
+    const line = document.getElementById(`pline-${i}`);
+    num.className = 'progress-num';
+    step.className = 'progress-step';
+    if (i < n) {
+      num.classList.add('done');
+      num.innerHTML = '<svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M2.5 7L5.5 10L11.5 4" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+      step.classList.add('done');
+    } else {
+      num.textContent = i + 1;
+    }
+    if (i === n) {
+      num.classList.add('current');
+      step.classList.add('active');
+    }
+    if (line) {
+      line.classList.toggle('filled', i < n);
+    }
+  }
   hideAlert();
 }
 
+/* ── alerts ── */
 function showAlert(type, msg) {
   const el = document.getElementById('alert');
-  el.className = `alert alert-${type} show`;
+  el.className = `alert-${type} show`;
   el.innerHTML = msg;
 }
 function hideAlert() {
-  document.getElementById('alert').className = 'alert';
+  const el = document.getElementById('alert');
+  el.className = '';
+  el.innerHTML = '';
 }
 
+/* ── validate API key ── */
 async function validateKey() {
   const btn = document.getElementById('validateBtn');
   btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span> testing...';
+  btn.innerHTML = '<span class="spinner"></span> Testing\u2026';
   hideAlert();
 
   const payload = { provider_type: selectedProvider };
@@ -347,7 +859,7 @@ async function validateKey() {
     });
     const data = await resp.json();
     if (data.valid) {
-      showAlert('success', data.note || 'connection successful!');
+      showAlert('success', data.note || '\u2713 connection successful');
     } else {
       showAlert('error', data.error || 'validation failed');
     }
@@ -356,13 +868,14 @@ async function validateKey() {
   }
 
   btn.disabled = false;
-  btn.textContent = 'test connection';
+  btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 7.5L5.5 11L12 3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg> Test';
 }
 
+/* ── save config ── */
 async function saveConfig() {
   const btn = document.getElementById('saveBtn');
   btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span> saving...';
+  btn.innerHTML = '<span class="spinner"></span> Saving\u2026';
   hideAlert();
 
   const config = {
@@ -373,7 +886,6 @@ async function saveConfig() {
     web_auth_token: document.getElementById('webAuthToken')?.value || '',
   };
 
-  // provider-specific fields
   if (selectedProvider === 'claude-code') {
     config.claude_setup_token = document.getElementById('claudeToken')?.value || '';
   } else if (selectedProvider === 'custom') {
@@ -400,12 +912,12 @@ async function saveConfig() {
     } else {
       showAlert('error', data.error || 'save failed');
       btn.disabled = false;
-      btn.textContent = 'save & start agent';
+      btn.innerHTML = 'Save &amp; Start Agent <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5.5 3L9.5 7L5.5 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
     }
   } catch(e) {
     showAlert('error', 'could not save configuration');
     btn.disabled = false;
-    btn.textContent = 'save & start agent';
+    btn.innerHTML = 'Save &amp; Start Agent <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5.5 3L9.5 7L5.5 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   }
 }
 </script>

@@ -16,60 +16,41 @@ gooseclaw is a personal AI agent built on [Goose](https://github.com/block/goose
 
 ## quick start
 
-### 1. choose your LLM provider
+### 1. deploy on railway
 
-| option | what you need | cost |
-|--------|---------------|------|
-| Claude subscription | run `claude setup-token` locally, copy the token | your existing sub |
-| API key | get a key from Anthropic, OpenAI, Google, etc. | pay-per-use |
-| Custom endpoint | any OpenAI-compatible URL | depends |
+click the deploy button above. no environment variables needed.
 
-### 2. deploy on railway
+or manually: fork this repo, connect to Railway, add a volume mounted at `/data`, deploy.
 
-click the deploy button above, or:
+### 2. run the setup wizard
 
-1. fork this repo
-2. connect it to Railway
-3. add a volume mounted at `/data`
-4. set environment variables (see below)
-5. deploy
+visit your Railway URL. the setup wizard walks you through:
 
-### 3. open the web UI
+1. **pick a provider** (Claude, Anthropic, OpenAI, Google, Groq, OpenRouter, or custom endpoint)
+2. **enter credentials** with one-click validation
+3. **optional settings** (model override, timezone, Telegram, auth token)
 
-after deployment, check Railway logs for your web UI auth token (or set `GOOSE_WEB_AUTH_TOKEN` in Railway for a stable one). visit your Railway URL to chat.
+the agent starts automatically after setup.
+
+### 3. say hello
+
+on first message, the agent runs a quick onboarding Q&A to learn your name, preferences, and communication style. after that, it's your personal agent.
 
 ### 4. (optional) add telegram
 
-want a Telegram bot too? create one with [@BotFather](https://t.me/BotFather), set `TELEGRAM_BOT_TOKEN` in Railway, and redeploy. check logs for the pairing code, send it to your bot. one-time step.
-
-### 5. say hello
-
-on first message (web or telegram), the agent walks you through a quick setup to learn your name, preferences, and communication style. after that, it's your personal agent.
+want a Telegram bot too? create one with [@BotFather](https://t.me/BotFather), add the token in the setup wizard or set `TELEGRAM_BOT_TOKEN` in Railway, and redeploy. check logs for the pairing code. one-time step.
 
 ## environment variables
 
-### required (pick one LLM provider)
+the setup wizard handles provider configuration, so no env vars are required for a basic deploy. for advanced use or CI/CD, you can set these instead:
 
-**Claude subscription:**
-
-| variable | description |
-|----------|-------------|
-| `CLAUDE_SETUP_TOKEN` | token from `claude setup-token` command |
-
-**API key:**
+### LLM provider (alternative to setup wizard)
 
 | variable | description |
 |----------|-------------|
-| `GOOSE_PROVIDER` | provider name: `anthropic`, `openai`, `google`, `groq`, `openrouter` |
-| `GOOSE_API_KEY` | API key for the provider |
-
-**Custom endpoint:**
-
-| variable | description |
-|----------|-------------|
-| `CUSTOM_PROVIDER_URL` | OpenAI-compatible API endpoint |
-| `CUSTOM_PROVIDER_MODEL` | model name (default: `gpt-4`) |
-| `CUSTOM_PROVIDER_KEY` | API key (if needed) |
+| `CLAUDE_SETUP_TOKEN` | Claude subscription token from `claude setup-token` |
+| `GOOSE_PROVIDER` + `GOOSE_API_KEY` | API key provider (`anthropic`, `openai`, `google`, `groq`, `openrouter`) |
+| `CUSTOM_PROVIDER_URL` | any OpenAI-compatible endpoint (+ `CUSTOM_PROVIDER_MODEL`, `CUSTOM_PROVIDER_KEY`) |
 
 ### optional
 
@@ -77,8 +58,8 @@ on first message (web or telegram), the agent walks you through a quick setup to
 |----------|---------|-------------|
 | `GOOSE_MODEL` | provider default | model override |
 | `TZ` | `UTC` | timezone |
-| `GOOSE_WEB_AUTH_TOKEN` | auto-generated | auth token for web UI (set for stable token across deploys) |
-| `TELEGRAM_BOT_TOKEN` | — | Telegram bot token from @BotFather (enables Telegram interface) |
+| `GOOSE_WEB_AUTH_TOKEN` | auto-generated | stable auth token for web UI across deploys |
+| `TELEGRAM_BOT_TOKEN` | — | Telegram bot token from @BotFather |
 | `GITHUB_PAT` | — | GitHub PAT for git-based state persistence |
 | `GITHUB_REPO` | — | repo for git persistence (e.g. `username/my-agent`) |
 
@@ -88,10 +69,15 @@ on first message (web or telegram), the agent walks you through a quick setup to
 ┌──────────────────────────────────────────┐
 │           Railway Container               │
 │                                           │
+│  gateway.py (reverse proxy on $PORT)      │
+│  ├── /setup       → setup wizard          │
+│  ├── /api/setup/* → config API            │
+│  └── /*           → goose web (port 3001) │
+│                                           │
 │  entrypoint.sh                            │
-│  ├── goose web (chat UI on $PORT)         │
+│  ├── gateway.py (setup + proxy)           │
+│  ├── goose web (chat UI)                  │
 │  ├── goose gateway (telegram bot)         │
-│  ├── goose schedule (cron jobs)           │
 │  └── persist loop (git push, optional)    │
 │                                           │
 │  /data/ (Railway volume)                  │

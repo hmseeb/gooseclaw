@@ -2,14 +2,15 @@
 set -e
 
 echo "========================================"
-echo "  nix — personal AI agent on railway"
+echo "  gooseclaw — personal AI agent"
 echo "========================================"
 echo ""
 
-APP_DIR="/home/nix/app"
+APP_DIR="/app"
 DATA_DIR="/data"
 CONFIG_DIR="/data/config"
 IDENTITY_DIR="/data/identity"
+HOME_DIR="${HOME:-/root}"
 
 # ─── first boot: copy template files to volume ─────────────────────────────
 
@@ -25,9 +26,6 @@ if [ ! -f "$DATA_DIR/.initialized" ]; then
     cp -r "$APP_DIR/recipes/"* "$DATA_DIR/recipes/" 2>/dev/null || true
     echo "[init] recipes copied to $DATA_DIR/recipes/"
 
-    # copy persistent instructions (MOIM file)
-    cp "$APP_DIR/identity/persistent-instructions.md" "$IDENTITY_DIR/persistent-instructions.md"
-
     touch "$DATA_DIR/.initialized"
     echo "[init] first boot setup complete"
 else
@@ -36,15 +34,15 @@ fi
 
 # ─── goose config ───────────────────────────────────────────────────────────
 
-# symlink goose config directory
-mkdir -p /home/nix/.config
-rm -rf /home/nix/.config/goose
-ln -sf "$CONFIG_DIR" /home/nix/.config/goose
+# symlink goose config directory to volume
+mkdir -p "$HOME_DIR/.config"
+rm -rf "$HOME_DIR/.config/goose"
+ln -sf "$CONFIG_DIR" "$HOME_DIR/.config/goose"
 
-# symlink sessions db to volume for persistence
-mkdir -p /home/nix/.local/share/goose/sessions
+# symlink sessions db to volume for persistence across deploys
+mkdir -p "$HOME_DIR/.local/share/goose/sessions"
 if [ -f "$DATA_DIR/sessions/sessions.db" ]; then
-    ln -sf "$DATA_DIR/sessions/sessions.db" /home/nix/.local/share/goose/sessions/sessions.db
+    ln -sf "$DATA_DIR/sessions/sessions.db" "$HOME_DIR/.local/share/goose/sessions/sessions.db"
 fi
 
 # generate config.yaml
@@ -61,13 +59,14 @@ YAML
 if [ -n "${CLAUDE_SETUP_TOKEN:-}" ]; then
     echo "[provider] tier 1: claude subscription (setup-token)"
 
-    # install claude CLI
+    # install claude CLI if not present
     if command -v claude &>/dev/null; then
         echo "[provider] claude CLI already installed"
     else
         echo "[provider] installing claude CLI..."
         curl -fsSL https://claude.ai/install.sh | bash 2>/dev/null || {
             echo "[provider] native install failed, trying npm..."
+            apt-get update -qq && apt-get install -y -qq nodejs npm >/dev/null 2>&1
             npm install -g @anthropic-ai/claude-code 2>/dev/null || {
                 echo "[provider] ERROR: could not install claude CLI"
                 exit 1
@@ -78,9 +77,9 @@ if [ -n "${CLAUDE_SETUP_TOKEN:-}" ]; then
     # authenticate with setup token
     export CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_SETUP_TOKEN"
 
-    # create minimal claude config to skip onboarding
-    mkdir -p /home/nix/.claude
-    cat > /home/nix/.claude.json << CJSON
+    # skip claude onboarding wizard
+    mkdir -p "$HOME_DIR/.claude"
+    cat > "$HOME_DIR/.claude.json" << CJSON
 {
     "hasCompletedOnboarding": true
 }
@@ -142,15 +141,15 @@ export GOOSE_MOIM_MESSAGE_FILE="$IDENTITY_DIR/persistent-instructions.md"
 
 if [ -n "${GITHUB_PAT:-}" ] && [ -n "${GITHUB_REPO:-}" ]; then
     echo "[persist] git persistence enabled (${GITHUB_REPO})"
-    export GIT_USER_NAME="${GIT_USER_NAME:-nix-agent}"
-    export GIT_USER_EMAIL="${GIT_USER_EMAIL:-nix-agent@users.noreply.github.com}"
+    export GIT_USER_NAME="${GIT_USER_NAME:-gooseclaw-agent}"
+    export GIT_USER_EMAIL="${GIT_USER_EMAIL:-gooseclaw@users.noreply.github.com}"
     export PERSIST_BRANCH="${PERSIST_BRANCH:-main}"
 
     git config --global user.name "$GIT_USER_NAME"
     git config --global user.email "$GIT_USER_EMAIL"
 else
-    echo "[persist] git persistence disabled (no GITHUB_PAT/GITHUB_REPO set)"
-    echo "[persist] identity state will persist on Railway volume only"
+    echo "[persist] git persistence disabled (no GITHUB_PAT/GITHUB_REPO)"
+    echo "[persist] state persists on Railway volume only"
 fi
 
 # ─── start health check server ─────────────────────────────────────────────
@@ -172,33 +171,32 @@ if [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then
     GATEWAY_PID=$!
 
     # wait for gateway to initialize
-    sleep 5
+    sleep 8
 
-    # generate pairing code for user
+    # generate pairing code
     echo ""
     echo "========================================"
     echo "  TELEGRAM PAIRING"
     echo "========================================"
     echo ""
-    echo "  your bot is running! to connect:"
+    echo "  your bot is running! to pair:"
     echo ""
-    echo "  1. open telegram"
-    echo "  2. find your bot (the one you created with @BotFather)"
-    echo "  3. send /start"
-    echo "  4. the bot will ask for a pairing code"
+    echo "  1. open Telegram, find your bot"
+    echo "  2. send /start or any message"
+    echo "  3. it will ask for a pairing code"
     echo ""
 
-    # try to generate a code via CLI
     PAIR_OUTPUT=$(goose gateway pair telegram 2>&1) || true
     if echo "$PAIR_OUTPUT" | grep -qE '[A-Z0-9]{6}'; then
         PAIR_CODE=$(echo "$PAIR_OUTPUT" | grep -oE '[A-Z0-9]{6}' | head -1)
-        echo "  YOUR PAIRING CODE: $PAIR_CODE"
+        echo "  >>> PAIRING CODE: $PAIR_CODE <<<"
         echo ""
-        echo "  send this code to your bot on telegram."
-        echo "  pairing is one-time. it persists across restarts."
+        echo "  send this code to your bot."
+        echo "  pairing is one-time. persists across restarts."
     else
-        echo "  run 'goose gateway pair telegram' to generate a code"
-        echo "  (check Railway logs after gateway is fully started)"
+        echo "  could not auto-generate code."
+        echo "  check logs after gateway is fully started."
+        echo "  output: $PAIR_OUTPUT"
     fi
     echo ""
     echo "========================================"
@@ -212,7 +210,7 @@ fi
 
 if [ -n "${GITHUB_PAT:-}" ] && [ -n "${GITHUB_REPO:-}" ]; then
     PERSIST_INTERVAL="${PERSIST_INTERVAL:-300}"
-    echo "[persist] starting persist loop (every ${PERSIST_INTERVAL}s)"
+    echo "[persist] loop started (every ${PERSIST_INTERVAL}s)"
 
     while true; do
         sleep "$PERSIST_INTERVAL"
@@ -228,13 +226,12 @@ fi
 shutdown() {
     echo "[shutdown] SIGTERM received"
 
-    # persist final state
+    # persist final state before exit
     if [ -n "${GITHUB_PAT:-}" ] && [ -n "${GITHUB_REPO:-}" ]; then
         echo "[shutdown] persisting final state..."
         "$APP_DIR/scripts/persist.sh" 2>&1 || true
     fi
 
-    # stop processes
     kill "$HEALTH_PID" 2>/dev/null || true
     [ -n "${GATEWAY_PID:-}" ] && kill "$GATEWAY_PID" 2>/dev/null || true
     [ -n "${PERSIST_PID:-}" ] && kill "$PERSIST_PID" 2>/dev/null || true
@@ -244,10 +241,10 @@ shutdown() {
 }
 trap shutdown SIGTERM SIGINT
 
-echo "[nix] agent is live!"
+echo "[gooseclaw] agent is live!"
 echo ""
 
 # wait for any process to exit
 wait -n "$HEALTH_PID" ${GATEWAY_PID:+"$GATEWAY_PID"}
-echo "[nix] process exited unexpectedly. shutting down..."
+echo "[gooseclaw] process exited unexpectedly, shutting down..."
 exit 1

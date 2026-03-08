@@ -18,7 +18,7 @@ class HealthHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             body = {
                 "status": "healthy",
-                "agent": "nix",
+                "agent": "gooseclaw",
                 "version": "1.0.0",
             }
             self.wfile.write(json.dumps(body).encode())

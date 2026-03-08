@@ -8,6 +8,6 @@
 @identity/heartbeat.md
 
 # project context
-nix is a personal autonomous AI agent deployed on Railway.
+gooseclaw is a personal autonomous AI agent deployed on Railway.
 Identity files are in /data/identity/ (volume-persisted).
 Journal entries go to /data/identity/journal/YYYY-MM-DD.md.

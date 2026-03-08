@@ -1,8 +1,8 @@
-# nix
+# gooseclaw
 
 > personal AI agent in 5 minutes. deploy on railway, chat on telegram.
 
-nix is a personal AI agent built on [Goose](https://github.com/block/goose) by Block. it runs on Railway, talks to you on Telegram, and learns who you are over time.
+gooseclaw is a personal AI agent built on [Goose](https://github.com/block/goose) by Block. it runs on Railway, talks to you on Telegram, and learns who you are over time.
 
 [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template/TEMPLATE_CODE)
 
@@ -146,16 +146,16 @@ identity state persists two ways:
 
 ```bash
 # clone
-git clone https://github.com/YOUR_USERNAME/nix-template.git
-cd nix-template
+git clone https://github.com/hmseeb/gooseclaw.git
+cd gooseclaw
 
 # copy env
 cp .env.example .env
 # edit .env with your values
 
 # build and run
-docker build -t nix-agent .
-docker run --env-file .env -p 8080:8080 -v nix-data:/data nix-agent
+docker build -t gooseclaw .
+docker run --env-file .env -p 8080:8080 -v gooseclaw-data:/data gooseclaw
 ```
 
 ## customization

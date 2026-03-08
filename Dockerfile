@@ -5,28 +5,22 @@ ENV DEBIAN_FRONTEND=noninteractive
 # minimal runtime deps
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-      curl git python3 ca-certificates jq cron && \
+      curl git python3 ca-certificates jq && \
     rm -rf /var/lib/apt/lists/*
 
 # install goose (prebuilt binary via official script)
 RUN curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh \
     | CONFIGURE=false GOOSE_BIN_DIR=/usr/local/bin bash
 
-# create non-root user
-RUN useradd -m -s /bin/bash nix
-
-# persistent data directory (Railway volume mounts here)
-RUN mkdir -p /data && chown nix:nix /data
-VOLUME ["/data"]
-
-# copy application files
-COPY --chown=nix:nix . /home/nix/app/
+# app directory
+WORKDIR /app
+COPY . /app/
 
 # make scripts executable
-RUN chmod +x /home/nix/app/docker/entrypoint.sh \
-             /home/nix/app/scripts/persist.sh
+RUN chmod +x /app/docker/entrypoint.sh /app/scripts/persist.sh
 
-USER nix
-WORKDIR /home/nix/app
+# persistent data directory (Railway volume mounts here)
+RUN mkdir -p /data
+VOLUME ["/data"]
 
-CMD ["/home/nix/app/docker/entrypoint.sh"]
+CMD ["/app/docker/entrypoint.sh"]

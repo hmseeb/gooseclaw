@@ -2,7 +2,7 @@
 
 ## Agent: Goose (by Block)
 
-You are running as a goose agent deployed on Railway.
+You are running as a gooseclaw agent deployed on Railway.
 
 ### Capabilities
 

@@ -46,10 +46,10 @@ Plans:
   3. Claude-code provider shows clear manual instructions since remote validation is impossible
   4. After container restart, all previously configured env vars are restored and goose starts with correct provider/model
   5. When reconfiguring, form fields are pre-filled with existing values (API keys masked)
-**Plans:** 3 plans
+**Plans:** 2/3 plans executed
 
 Plans:
-- [ ] 02-01-PLAN.md -- Sync env var mapping and rehydration across gateway.py and entrypoint.sh for all 23 providers
+- [x] 02-01-PLAN.md -- Sync env var mapping and rehydration across gateway.py and entrypoint.sh for all 23 providers (completed 2026-03-10)
 - [ ] 02-02-PLAN.md -- Frontend validation gating, per-provider format checks, and form pre-fill on reconfigure
 - [ ] 02-03-PLAN.md -- Harden dispatch_validation credential extraction and end-to-end verification
 
@@ -117,7 +117,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Provider UI Expansion | 2/2 | Complete   | 2026-03-10 |
-| 2. Validation and Env Plumbing | 0/3 | Not started | - |
+| 2. Validation and Env Plumbing | 2/3 | In Progress|  |
 | 3. Gateway Resilience and Live Feedback | 0/2 | Not started | - |
 | 4. Advanced Multi-Model Settings | 0/1 | Not started | - |
 | 5. Production Hardening | 6/6 | Complete   | 2026-03-10 |

@@ -5,14 +5,14 @@
 See: .planning/PROJECT.md (updated 2026-03-10)
 
 **Core value:** A user with zero DevOps knowledge can deploy and configure GooseClaw correctly on the first try
-**Current focus:** Phase 5: Production Hardening
+**Current focus:** Phase 2: Validation and Env Plumbing
 
 ## Current Position
 
-Phase: 5 of 5 (Production Hardening -- Security, Reliability, Deployment Quality)
-Plan: 6 of 6 in current phase (05-01, 05-04, 05-05, 05-06 complete)
-Status: Complete
-Last activity: 2026-03-11 -- Completed 05-06 (security headers, structured logging, error sanitization, /api/version, input sanitization)
+Phase: 2 of 5 (Validation and Env Plumbing)
+Plan: 2 of 3 in current phase (02-01, 02-02 complete)
+Status: In progress
+Last activity: 2026-03-10 -- Completed 02-02 (frontend credential validation gating, format hints, wizard pre-fill on reconfigure)
 
 Progress: [##########] 100%
 
@@ -30,13 +30,15 @@ Progress: [##########] 100%
 | 01-provider-ui-expansion | 2 | ~19 min | ~10 min |
 
 **Recent Trend:**
-- Last 5 plans: 4 min, ~15 min
+- Last 5 plans: 4 min, ~15 min, 2 min
 - Trend: -
 
 *Updated after each plan completion*
 | Phase 05 P02 | 6 | 2 tasks | 3 files |
 | Phase 05 P05 | 3 | 2 tasks | 2 files |
 | Phase 05 P06 | 4 | 3 tasks | 1 file |
+| Phase 02 P01 | 2 | 2 tasks | 2 files |
+| Phase 02 P02 | 3 | 2 tasks | 1 file |
 
 ## Accumulated Context
 
@@ -75,6 +77,14 @@ Recent decisions affecting current work:
 - 05-06: unsafe-inline in CSP script-src accepted; CSP still blocks frame-ancestors and external origins; HSTS conditional on RAILWAY_ENVIRONMENT
 - 05-06: log_request() override with _request_start timing; _internal_error() helper for sanitized 500s; error codes INTERNAL_ERROR/RATE_LIMITED/INVALID_CONFIG
 - 05-06: _sanitize_string() applied to all POST endpoints (strip, truncate 2000 chars, remove control chars except \\n and \\t)
+- 02-01: azure-openai setup.html saves azure_key (not api_key) and azure_endpoint; field_map translates to AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT
+- 02-01: github-copilot device flow at runtime; api_key -> GITHUB_TOKEN in field_map and rehydration for manual config scenarios
+- 02-01: local providers (ollama/lm-studio/docker-model-runner/ramalama) all share ollama_host key; OLLAMA_HOST exported if present
+- 02-01: field_map pattern in apply_config: targeted override dict preserves backward compat for single-key providers
+- 02-02: validationPassed flag tracks whether credentials tested; disabled Save button until true; reset on provider switch
+- 02-02: advanceFromCredentials() gate: blocks empty API keys, validates URL format for local providers, auto-passes for github-copilot
+- 02-02: prefillWizard(config) centralizes reconfigure pre-fill; secrets shown as masked placeholder ('already set'), value never sent to DOM
+- 02-02: saveConfig() omits empty credential fields during reconfigure so backend never receives empty string override of existing secrets
 
 ### Pending Todos
 
@@ -97,6 +107,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-11
-Stopped at: Completed 05-06 -- security headers, structured logging, error sanitization, /api/version, input sanitization
+Last session: 2026-03-10
+Stopped at: Completed 02-02 -- frontend credential validation gating, format hints, wizard pre-fill on reconfigure
 Resume file: None

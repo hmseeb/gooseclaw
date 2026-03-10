@@ -10,17 +10,17 @@
 - [x] **PROV-01**: Wizard offers 15+ providers organized into categories (Cloud API, Subscription, Local, Custom)
 - [x] **PROV-02**: Each provider card shows name, description, pricing hint, and "get API key" link
 - [x] **PROV-03**: New providers added: mistral, xai, deepseek, together, cerebras, perplexity, ollama, azure-openai
-- [ ] **PROV-04**: Each provider has correct env var mapping in gateway.py and entrypoint.sh
-- [ ] **PROV-05**: Each provider has a sensible default model
-- [ ] **PROV-06**: Each provider has a working validation endpoint
+- [x] **PROV-04**: Each provider has correct env var mapping in gateway.py and entrypoint.sh
+- [x] **PROV-05**: Each provider has a sensible default model
+- [x] **PROV-06**: Each provider has a working validation endpoint
 
 ### Credential Validation
 
-- [ ] **CRED-01**: API key field rejects empty input before save
-- [ ] **CRED-02**: API key format is validated per provider (prefix check, length check)
-- [ ] **CRED-03**: "Test" button is mandatory or strongly gated (save disabled until tested or explicitly skipped)
-- [ ] **CRED-04**: Validation errors show specific messages (not just "invalid key")
-- [ ] **CRED-05**: Claude-code shows clear instructions since remote validation is impossible
+- [x] **CRED-01**: API key field rejects empty input before save
+- [x] **CRED-02**: API key format is validated per provider (prefix check, length check)
+- [x] **CRED-03**: "Test" button is mandatory or strongly gated (save disabled until tested or explicitly skipped)
+- [x] **CRED-04**: Validation errors show specific messages (not just "invalid key")
+- [x] **CRED-05**: Claude-code shows clear instructions since remote validation is impossible
 
 ### Model Selection
 
@@ -39,10 +39,10 @@
 
 ### Env Var Rehydration
 
-- [ ] **ENV-01**: entrypoint.sh reads ALL provider env vars from setup.json on restart (not just 5)
-- [ ] **ENV-02**: gateway.py calls apply_config on startup when setup.json exists
-- [ ] **ENV-03**: All new providers (mistral, xai, deepseek, etc.) are in env_map in both files
-- [ ] **ENV-04**: PATH includes ~/.local/bin for claude CLI
+- [x] **ENV-01**: entrypoint.sh reads ALL provider env vars from setup.json on restart (not just 5)
+- [x] **ENV-02**: gateway.py calls apply_config on startup when setup.json exists
+- [x] **ENV-03**: All new providers (mistral, xai, deepseek, etc.) are in env_map in both files
+- [x] **ENV-04**: PATH includes ~/.local/bin for claude CLI
 
 ### UX Flow
 
@@ -52,12 +52,12 @@
 - [x] **UX-04**: Step 3 shows optional settings (telegram, timezone, auth token)
 - [x] **UX-05**: Step 4 shows confirmation summary of what was configured
 - [ ] **UX-06**: After save, shows real-time startup status (checking config, starting goose, ready/error)
-- [ ] **UX-07**: Reconfigure pre-fills form with existing values (secrets masked)
+- [x] **UX-07**: Reconfigure pre-fills form with existing values (secrets masked)
 
 ### Telegram
 
 - [x] **TG-01**: Wizard shows BotFather instructions for creating a bot
-- [ ] **TG-02**: Telegram token format is validated (digits:alphanumeric)
+- [x] **TG-02**: Telegram token format is validated (digits:alphanumeric)
 - [ ] **TG-03**: Pairing code is shown in the web UI after setup completes (not just logs)
 
 ### Advanced Settings
@@ -104,12 +104,12 @@
 | PROV-03 | Phase 1 | Complete |
 | PROV-04 | Phase 2 | Pending |
 | PROV-05 | Phase 2 | Pending |
-| PROV-06 | Phase 2 | Pending |
-| CRED-01 | Phase 2 | Pending |
-| CRED-02 | Phase 2 | Pending |
-| CRED-03 | Phase 2 | Pending |
-| CRED-04 | Phase 2 | Pending |
-| CRED-05 | Phase 2 | Pending |
+| PROV-06 | Phase 2 | Complete |
+| CRED-01 | Phase 2 | Complete |
+| CRED-02 | Phase 2 | Complete |
+| CRED-03 | Phase 2 | Complete |
+| CRED-04 | Phase 2 | Complete |
+| CRED-05 | Phase 2 | Complete |
 | MODL-01 | Phase 1 | Complete |
 | MODL-02 | Phase 1 | Complete |
 | MODL-03 | Phase 1 | Complete |
@@ -129,9 +129,9 @@
 | UX-04 | Phase 1 | Complete |
 | UX-05 | Phase 1 | Complete |
 | UX-06 | Phase 3 | Pending |
-| UX-07 | Phase 2 | Pending |
+| UX-07 | Phase 2 | Complete |
 | TG-01 | Phase 1 | Complete |
-| TG-02 | Phase 2 | Pending |
+| TG-02 | Phase 2 | Complete |
 | TG-03 | Phase 3 | Pending |
 | ADV-01 | Phase 4 | Pending |
 | ADV-02 | Phase 4 | Pending |

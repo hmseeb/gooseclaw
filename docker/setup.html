@@ -898,6 +898,47 @@ body::after {
   transition: color 0.2s;
 }
 .dashboard-link:hover { color: var(--text-secondary); }
+
+/* ── advanced multi-model toggle ── */
+.advanced-section {
+  margin-top: 8px;
+  margin-bottom: 20px;
+}
+.advanced-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 0;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  transition: color 0.2s;
+}
+.advanced-toggle:hover { color: var(--text-primary); }
+.advanced-toggle.open { color: var(--accent-bright); border-color: var(--border-accent); }
+.advanced-arrow {
+  display: inline-block;
+  font-size: 10px;
+  transition: transform 0.25s ease;
+}
+.advanced-toggle.open .advanced-arrow { transform: rotate(90deg); }
+.advanced-panel {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.35s ease, padding 0.35s ease;
+  padding: 0;
+}
+.advanced-panel.open {
+  max-height: 500px;
+  padding: 16px 0 0;
+}
 </style>
 </head>
 <body>
@@ -1035,6 +1076,33 @@ body::after {
       <label>Web Auth Token</label>
       <input type="text" id="webAuthToken" placeholder="auto-generated if blank">
       <div class="field-hint">set a memorable token or leave blank for a random one</div>
+    </div>
+    <div class="advanced-section">
+      <button type="button" class="advanced-toggle" onclick="toggleAdvanced()" id="advancedToggle">
+        <span class="advanced-arrow">&#9654;</span> Advanced: Multi-Model Setup
+      </button>
+      <div class="advanced-panel" id="advancedPanel">
+        <div class="field-hint" style="margin-bottom:12px">
+          Configure a separate "lead" model for planning while the main model handles execution.
+          Leave blank to use a single model for everything.
+        </div>
+        <div class="field">
+          <label>Lead Provider</label>
+          <select id="leadProvider" onchange="onLeadProviderChange()">
+            <option value="">Same as main provider</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Lead Model</label>
+          <input type="text" id="leadModel" list="leadModelSuggestions" placeholder="e.g. claude-sonnet-4-20250514">
+          <datalist id="leadModelSuggestions"></datalist>
+        </div>
+        <div class="field">
+          <label>Lead Turn Count</label>
+          <input type="number" id="leadTurnCount" min="1" max="50" value="" placeholder="3">
+          <div class="field-hint">Number of turns the lead model takes before handing off to the worker (default: 3)</div>
+        </div>
+      </div>
     </div>
     <div class="btn-row">
       <button class="btn btn-ghost" onclick="goToStep(2)">
@@ -1175,6 +1243,33 @@ body::after {
           <input type="text" id="dfi-authtoken" placeholder="leave blank to keep current">
         </div>
         <button class="dashboard-edit-btn" onclick="startDashboardEdit('authtoken')">edit</button>
+      </div>
+      <div class="dashboard-field" id="df-lead-provider" style="display:none">
+        <span class="dashboard-field-label">Lead Provider</span>
+        <span class="dashboard-field-value" id="dfv-lead-provider"></span>
+        <div class="dashboard-field-edit" id="dfe-lead-provider">
+          <select id="dfi-lead-provider" onchange="onDashboardLeadProviderChange(this.value)">
+            <option value="">Same as main provider</option>
+          </select>
+        </div>
+        <button class="dashboard-edit-btn" onclick="startDashboardEdit('lead-provider')">edit</button>
+      </div>
+      <div class="dashboard-field" id="df-lead-model" style="display:none">
+        <span class="dashboard-field-label">Lead Model</span>
+        <span class="dashboard-field-value" id="dfv-lead-model"></span>
+        <div class="dashboard-field-edit" id="dfe-lead-model">
+          <input type="text" id="dfi-lead-model" list="dbLeadModelSuggestions" placeholder="lead model name">
+          <datalist id="dbLeadModelSuggestions"></datalist>
+        </div>
+        <button class="dashboard-edit-btn" onclick="startDashboardEdit('lead-model')">edit</button>
+      </div>
+      <div class="dashboard-field" id="df-lead-turn-count" style="display:none">
+        <span class="dashboard-field-label">Lead Turns</span>
+        <span class="dashboard-field-value" id="dfv-lead-turn-count"></span>
+        <div class="dashboard-field-edit" id="dfe-lead-turn-count">
+          <input type="number" id="dfi-lead-turn-count" min="1" max="50" placeholder="3">
+        </div>
+        <button class="dashboard-edit-btn" onclick="startDashboardEdit('lead-turn-count')">edit</button>
       </div>
     </div>
     <div id="pair-card-container" style="display:none"></div>
@@ -1978,6 +2073,18 @@ function buildSummary() {
     },
   ];
 
+  /* advanced multi-model settings */
+  const leadProv = document.getElementById('leadProvider')?.value || '';
+  if (leadProv) {
+    const leadProvObj = PROVIDERS[leadProv];
+    const leadProvName = leadProvObj ? leadProvObj.name : leadProv;
+    const leadMod = document.getElementById('leadModel')?.value || (leadProvObj && leadProvObj.defaultModel) || 'default';
+    const leadTurns = document.getElementById('leadTurnCount')?.value || '3';
+    rows.push({ key: 'Lead Provider', val: leadProvName, cls: '' });
+    rows.push({ key: 'Lead Model', val: leadMod, cls: '' });
+    rows.push({ key: 'Lead Turns', val: leadTurns, cls: '' });
+  }
+
   const html = `<div class="summary-container">
     ${rows.map(r => `
       <div class="summary-row">
@@ -2006,6 +2113,7 @@ function goToStep(n) {
 
   /* populate dynamic content for specific steps */
   if (n === 2) buildModelStep();
+  if (n === 3) populateLeadProviders();
   if (n === 4) { buildSummary(); updateSaveBtn(); }
 
   /* update progress indicators for steps 0-4 */
@@ -2197,6 +2305,88 @@ function advanceFromCredentials() {
   goToStep(2);
 }
 
+/* ── advanced multi-model toggle & helpers ── */
+function toggleAdvanced() {
+  const toggle = document.getElementById('advancedToggle');
+  const panel = document.getElementById('advancedPanel');
+  if (!toggle || !panel) return;
+  const isOpen = panel.classList.contains('open');
+  if (isOpen) {
+    panel.classList.remove('open');
+    toggle.classList.remove('open');
+  } else {
+    panel.classList.add('open');
+    toggle.classList.add('open');
+    populateLeadProviders();
+  }
+}
+
+function populateLeadProviders() {
+  const sel = document.getElementById('leadProvider');
+  if (!sel) return;
+  /* preserve current value */
+  const currentVal = sel.value;
+  /* rebuild options */
+  sel.innerHTML = '<option value="">Same as main provider</option>';
+  const skipCategories = ['custom'];
+  const categoryOrder = ['cloud', 'subscription', 'local', 'enterprise'];
+  categoryOrder.forEach(cat => {
+    Object.entries(PROVIDERS).forEach(([id, p]) => {
+      if (p.category !== cat) return;
+      if (skipCategories.includes(p.category)) return;
+      const opt = document.createElement('option');
+      opt.value = id;
+      opt.textContent = p.name;
+      if (id === currentVal) opt.selected = true;
+      sel.appendChild(opt);
+    });
+  });
+}
+
+function onLeadProviderChange() {
+  const sel = document.getElementById('leadProvider');
+  const datalist = document.getElementById('leadModelSuggestions');
+  const modelInput = document.getElementById('leadModel');
+  if (!sel || !datalist) return;
+  const val = sel.value;
+  datalist.innerHTML = '';
+  if (!val) {
+    if (modelInput) modelInput.value = '';
+    return;
+  }
+  const provider = PROVIDERS[val];
+  if (provider && provider.models) {
+    provider.models.forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m;
+      datalist.appendChild(opt);
+    });
+  }
+  /* pre-fill default model */
+  if (modelInput && !modelInput.value && provider && provider.defaultModel) {
+    modelInput.value = provider.defaultModel;
+  }
+}
+
+function onDashboardLeadProviderChange(val) {
+  const datalist = document.getElementById('dbLeadModelSuggestions');
+  const modelInput = document.getElementById('dfi-lead-model');
+  if (datalist) {
+    datalist.innerHTML = '';
+    if (val) {
+      const provider = PROVIDERS[val];
+      if (provider && provider.models) {
+        provider.models.forEach(m => {
+          const opt = document.createElement('option');
+          opt.value = m;
+          datalist.appendChild(opt);
+        });
+      }
+      if (modelInput && provider && provider.defaultModel) modelInput.value = provider.defaultModel;
+    }
+  }
+}
+
 /* ── telegram token format validation on blur ── */
 function validateTelegramFormat(input) {
   const errEl = document.getElementById('telegramFormatError');
@@ -2382,6 +2572,61 @@ function renderDashboardValues(config) {
     afv.textContent = at ? at : 'Auto-generated';
     afv.className = 'dashboard-field-value' + (at ? '' : ' muted');
   }
+
+  /* lead/worker multi-model settings */
+  const lp = config.lead_provider || '';
+  const lpField = document.getElementById('df-lead-provider');
+  const lmField = document.getElementById('df-lead-model');
+  const ltcField = document.getElementById('df-lead-turn-count');
+  if (lp) {
+    const lpProvider = PROVIDERS[lp];
+    /* show the dashboard fields */
+    if (lpField) lpField.style.display = '';
+    if (lmField) lmField.style.display = '';
+    if (ltcField) ltcField.style.display = '';
+    /* set values */
+    const lpfv = document.getElementById('dfv-lead-provider');
+    if (lpfv) lpfv.textContent = lpProvider ? `${lpProvider.icon} ${lpProvider.name}` : lp;
+    const lmfv = document.getElementById('dfv-lead-model');
+    if (lmfv) lmfv.textContent = config.lead_model || (lpProvider && lpProvider.defaultModel) || 'default';
+    const ltcfv = document.getElementById('dfv-lead-turn-count');
+    if (ltcfv) ltcfv.textContent = config.lead_turn_count || '3';
+    /* populate dashboard lead provider select */
+    const lpSel = document.getElementById('dfi-lead-provider');
+    if (lpSel) {
+      lpSel.innerHTML = '<option value="">Same as main provider</option>';
+      const categoryOrder = ['cloud', 'subscription', 'local', 'enterprise'];
+      categoryOrder.forEach(cat => {
+        Object.entries(PROVIDERS).forEach(([id, p]) => {
+          if (p.category !== cat || p.category === 'custom') return;
+          const opt = document.createElement('option');
+          opt.value = id;
+          opt.textContent = p.name;
+          if (id === lp) opt.selected = true;
+          lpSel.appendChild(opt);
+        });
+      });
+    }
+    /* populate lead model datalist */
+    const dbLeadDatalist = document.getElementById('dbLeadModelSuggestions');
+    if (dbLeadDatalist && lpProvider && lpProvider.models) {
+      dbLeadDatalist.innerHTML = '';
+      lpProvider.models.forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m;
+        dbLeadDatalist.appendChild(opt);
+      });
+    }
+    const lmInput = document.getElementById('dfi-lead-model');
+    if (lmInput) lmInput.value = config.lead_model || '';
+    const ltcInput = document.getElementById('dfi-lead-turn-count');
+    if (ltcInput) ltcInput.value = config.lead_turn_count || '';
+  } else {
+    /* hide lead fields when not configured */
+    if (lpField) lpField.style.display = 'none';
+    if (lmField) lmField.style.display = 'none';
+    if (ltcField) ltcField.style.display = 'none';
+  }
 }
 
 function updateDashboardCredField(pt) {
@@ -2512,6 +2757,30 @@ async function saveDashboardChanges() {
     config.web_auth_token = newAt;
   }
 
+  /* lead provider */
+  const lpField = document.getElementById('df-lead-provider');
+  if (lpField && lpField.classList.contains('editing')) {
+    const newLp = document.getElementById('dfi-lead-provider')?.value || '';
+    config.lead_provider = newLp;
+    if (!newLp) {
+      config.lead_model = '';
+      config.lead_turn_count = '';
+    }
+  }
+
+  /* lead model */
+  const lmField = document.getElementById('df-lead-model');
+  if (lmField && lmField.classList.contains('editing')) {
+    config.lead_model = document.getElementById('dfi-lead-model')?.value?.trim() || '';
+  }
+
+  /* lead turn count */
+  const ltcField = document.getElementById('df-lead-turn-count');
+  if (ltcField && ltcField.classList.contains('editing')) {
+    const ltcVal = document.getElementById('dfi-lead-turn-count')?.value?.trim() || '';
+    config.lead_turn_count = ltcVal ? parseInt(ltcVal, 10) : '';
+  }
+
   /* persist saved keys */
   config.saved_keys = savedKeys;
 
@@ -2626,6 +2895,25 @@ function prefillWizard(config) {
   if (tgEl && config.telegram_bot_token_set) {
     tgEl.value = '';
     tgEl.placeholder = 'Token already set (leave blank to keep)';
+  }
+
+  /* pre-fill advanced multi-model settings */
+  if (config.lead_provider) {
+    /* open the advanced panel */
+    const toggle = document.getElementById('advancedToggle');
+    const panel = document.getElementById('advancedPanel');
+    if (toggle) toggle.classList.add('open');
+    if (panel) panel.classList.add('open');
+    populateLeadProviders();
+    const lpSel = document.getElementById('leadProvider');
+    if (lpSel) {
+      lpSel.value = config.lead_provider;
+      onLeadProviderChange();
+    }
+    const lmEl = document.getElementById('leadModel');
+    if (lmEl && config.lead_model) lmEl.value = config.lead_model;
+    const ltcEl = document.getElementById('leadTurnCount');
+    if (ltcEl && config.lead_turn_count) ltcEl.value = config.lead_turn_count;
   }
 
   /* mark validation as passed since this config was previously validated */
@@ -3045,6 +3333,16 @@ async function saveConfig() {
   /* handle web_auth_token: keep existing if blank during reconfigure */
   if (!config.web_auth_token && isReconfigure) {
     delete config.web_auth_token;
+  }
+
+  /* advanced multi-model (lead/worker) settings */
+  const leadProv = document.getElementById('leadProvider')?.value || '';
+  const leadMod = document.getElementById('leadModel')?.value || '';
+  const leadTurns = document.getElementById('leadTurnCount')?.value || '';
+  if (leadProv) {
+    config.lead_provider = leadProv;
+    config.lead_model = leadMod;
+    config.lead_turn_count = leadTurns ? parseInt(leadTurns, 10) : 3;
   }
 
   /* persist saved_keys across provider switches */

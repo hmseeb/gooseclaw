@@ -318,6 +318,22 @@ def is_configured():
     return setup is not None and setup.get("provider_type")
 
 
+def _is_first_boot():
+    """Return True when no setup has been completed AND no env-var provider is configured.
+
+    During first boot, only setup-related endpoints should be accessible. All other
+    API endpoints (notify, telegram, etc.) make no sense before configuration and must
+    return 403 to prevent unauthenticated access to a partially-initialised system.
+    """
+    if os.environ.get("CLAUDE_SETUP_TOKEN"):
+        return False
+    if os.environ.get("GOOSE_API_KEY"):
+        return False
+    if os.environ.get("CUSTOM_PROVIDER_URL"):
+        return False
+    return load_setup() is None
+
+
 def get_auth_token():
     """Get the active auth token. Returns (token_or_hash, is_hashed) tuple.
 
@@ -882,7 +898,24 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         self.proxy_to_goose()
 
     def do_OPTIONS(self):
-        self.proxy_to_goose()
+        # Handle CORS preflight for /api/* paths without proxying to goose.
+        # Only echo Origin back if it is same-host; otherwise omit CORS headers
+        # so the browser blocks the cross-origin request.
+        if self.path.startswith("/api/"):
+            origin = self.headers.get("Origin", "")
+            host = self.headers.get("Host", "")
+            self.send_response(200)
+            if origin and host and (
+                origin == f"http://{host}" or origin == f"https://{host}"
+            ):
+                self.send_header("Access-Control-Allow-Origin", origin)
+                self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS")
+                self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+                self.send_header("Access-Control-Max-Age", "86400")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        else:
+            self.proxy_to_goose()
 
     def do_PATCH(self):
         self.proxy_to_goose()
@@ -995,6 +1028,14 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
 
     def handle_notify(self):
         """POST /api/notify — send a message to all paired telegram users."""
+        if _is_first_boot():
+            self.send_json(403, {"error": "agent not configured yet"})
+            return
+        if not check_auth(self):
+            self.send_response(401)
+            self.send_header("WWW-Authenticate", 'Basic realm="gooseclaw"')
+            self.end_headers()
+            return
         body = self._read_body()
         try:
             data = json.loads(body)
@@ -1012,6 +1053,9 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
 
     def handle_notify_status(self):
         """GET /api/notify/status — check if notification delivery is available."""
+        if _is_first_boot():
+            self.send_json(403, {"error": "agent not configured yet"})
+            return
         token = get_bot_token()
         chat_ids = get_paired_chat_ids()
         self.send_json(200, {
@@ -1024,6 +1068,9 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
 
     def handle_telegram_status(self):
         """GET /api/telegram/status — telegram gateway status, paired users, pairing code."""
+        if _is_first_boot():
+            self.send_json(403, {"error": "agent not configured yet"})
+            return
         token = get_bot_token()
         running = False
         if telegram_process and telegram_process.poll() is None:
@@ -1046,8 +1093,12 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
 
     def handle_telegram_pair(self):
         """POST /api/telegram/pair — generate a new pairing code."""
-        if load_setup() and not check_auth(self):
+        if _is_first_boot():
+            self.send_json(403, {"error": "agent not configured yet"})
+            return
+        if not check_auth(self):
             self.send_response(401)
+            self.send_header("WWW-Authenticate", 'Basic realm="gooseclaw"')
             self.end_headers()
             return
 
@@ -1183,7 +1234,16 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
+        # Origin-aware CORS: only allow same-host origins, never wildcard.
+        # Same-host means the Origin header matches the request Host header
+        # (accounting for http/https scheme). Requests with no Origin header
+        # (same-origin or server-to-server) need no CORS header at all.
+        origin = self.headers.get("Origin", "")
+        host = self.headers.get("Host", "")
+        if origin and host and (
+            origin == f"http://{host}" or origin == f"https://{host}"
+        ):
+            self.send_header("Access-Control-Allow-Origin", origin)
         self.end_headers()
         self.wfile.write(body)
 

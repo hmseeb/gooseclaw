@@ -16,6 +16,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 2: Validation and Env Plumbing** - Every provider validates credentials, maps env vars correctly, rehydrates on restart, and pre-fills on reconfigure
 - [ ] **Phase 3: Gateway Resilience and Live Feedback** - goose web is monitored, auto-restarted, errors surfaced to user, real-time startup status, and auth recovery
 - [ ] **Phase 4: Advanced Multi-Model Settings** - Lead/worker multi-model configuration for power users
+- [ ] **Phase 5: Production Hardening** - Security, reliability, and deployment quality across gateway, entrypoint, and Dockerfile
 
 ## Phase Details
 
@@ -81,11 +82,37 @@ Plans:
 Plans:
 - [ ] 04-01: TBD
 
+### Phase 5: Production Hardening
+**Goal**: GooseClaw production endpoints are hardened against common attack vectors, gateway processes recover from failures automatically, and the Docker image builds efficiently
+**Depends on**: Phase 4
+**Requirements**: SEC-01, SEC-02, SEC-03, SEC-04, SEC-05, SEC-06, SEC-07, REL-01, REL-02, REL-03, REL-04, REL-05, REL-06, REL-07, QUA-01, QUA-02, QUA-03, QUA-04, QUA-05, QUA-06, QUA-07, QUA-08, QUA-09, POL-01, POL-02, POL-03, POL-06, POL-07, POL-08, POL-09
+**Success Criteria** (what must be TRUE):
+  1. No API endpoint accepts requests from arbitrary cross-origin websites (CORS locked down)
+  2. Rate limiting prevents DoS and brute-force attacks on all endpoints
+  3. First-boot window is locked (only setup endpoints accessible before configuration)
+  4. API keys are never returned in API responses (boolean indicators only)
+  5. Auth tokens stored as hashes, not plaintext
+  6. entrypoint.sh has no eval injection vectors
+  7. goose web auto-restarts on crash with exponential backoff
+  8. Config writes are atomic (no corruption on power loss)
+  9. All responses include security headers (CSP, X-Frame-Options, etc.)
+  10. Structured request logging with timestamps and duration
+**Plans:** 6 plans
+
+Plans:
+- [ ] 05-01-PLAN.md -- CORS lockdown, first-boot API lockdown, credential masking, notify auth
+- [ ] 05-02-PLAN.md -- Dockerfile optimization, .dockerignore, labels, healthcheck
+- [ ] 05-03-PLAN.md -- Eval injection fix in entrypoint.sh, auth token hashing
+- [ ] 05-04-PLAN.md -- Rate limiting, config schema validation, deep health check
+- [ ] 05-05-PLAN.md -- Crash recovery, thread safety, graceful shutdown, atomic writes, timeouts
+- [ ] 05-06-PLAN.md -- Security headers, structured logging, error sanitization, version endpoint
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 -> 2 -> 3 -> 4
+Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 (Phase 4 depends on Phase 2, not Phase 3, so it could run in parallel with Phase 3 if desired)
+(Phase 5 depends on Phase 4 for roadmap ordering, but technically only modifies gateway.py/entrypoint.sh/Dockerfile)
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -93,3 +120,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4
 | 2. Validation and Env Plumbing | 0/3 | Not started | - |
 | 3. Gateway Resilience and Live Feedback | 0/2 | Not started | - |
 | 4. Advanced Multi-Model Settings | 0/1 | Not started | - |
+| 5. Production Hardening | 0/6 | Not started | - |

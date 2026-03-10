@@ -125,7 +125,7 @@ body::after {
 .progress-step {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 .progress-num {
   width: 28px;
@@ -156,7 +156,7 @@ body::after {
 }
 .progress-num.done::after { content: none; }
 .progress-label {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-tertiary);
   font-weight: 500;
   transition: color 0.3s;
@@ -168,9 +168,9 @@ body::after {
   flex: 1;
   height: 1px;
   background: var(--border-subtle);
-  margin: 0 12px;
+  margin: 0 6px;
   position: relative;
-  min-width: 20px;
+  min-width: 12px;
 }
 .progress-line::after {
   content: '';
@@ -399,6 +399,98 @@ body::after {
 }
 .field-hint a:hover { text-decoration: underline; }
 
+/* ── model note (provider-specific info banner) ── */
+.model-note {
+  border-left: 3px solid var(--accent);
+  background: rgba(124, 58, 237, 0.06);
+  padding: 12px 16px;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin-top: 16px;
+}
+.model-note code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--text-accent);
+  background: rgba(124, 58, 237, 0.08);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.model-note a {
+  color: var(--text-accent);
+  text-decoration: none;
+}
+.model-note a:hover { text-decoration: underline; }
+
+/* ── BotFather instructions ── */
+.botfather-instructions {
+  border-left: 3px solid rgba(124, 58, 237, 0.4);
+  background: rgba(18, 18, 30, 0.5);
+  padding: 12px 16px;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  margin-top: 12px;
+}
+.botfather-instructions .bf-title {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-tertiary);
+  margin-bottom: 8px;
+}
+.botfather-instructions ol {
+  margin: 0;
+  padding-left: 16px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.8;
+}
+.botfather-instructions ol li { padding-left: 4px; }
+.botfather-instructions code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--text-accent);
+  background: rgba(124, 58, 237, 0.08);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+/* ── confirmation summary ── */
+.summary-container {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 4px 16px;
+  backdrop-filter: blur(12px);
+  margin-bottom: 8px;
+}
+.summary-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.summary-row:last-child { border-bottom: none; }
+.summary-key {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.summary-val {
+  font-size: 13px;
+  color: var(--text-primary);
+  font-weight: 500;
+  font-family: 'JetBrains Mono', monospace;
+  text-align: right;
+  max-width: 65%;
+  word-break: break-all;
+}
+.summary-val.muted { color: var(--text-tertiary); font-style: italic; font-family: 'DM Sans', sans-serif; }
+.summary-val.ok { color: var(--success); font-family: 'DM Sans', sans-serif; }
+
 /* ── buttons ── */
 .btn-row {
   display: flex;
@@ -601,7 +693,17 @@ body::after {
     <div class="progress-line" id="pline-1"></div>
     <div class="progress-step" id="pstep-2">
       <div class="progress-num" id="pnum-2">3</div>
-      <span class="progress-label">Options</span>
+      <span class="progress-label">Model</span>
+    </div>
+    <div class="progress-line" id="pline-2"></div>
+    <div class="progress-step" id="pstep-3">
+      <div class="progress-num" id="pnum-3">4</div>
+      <span class="progress-label">Settings</span>
+    </div>
+    <div class="progress-line" id="pline-3"></div>
+    <div class="progress-step" id="pstep-4">
+      <div class="progress-num" id="pnum-4">5</div>
+      <span class="progress-label">Confirm</span>
     </div>
   </div>
 
@@ -643,14 +745,32 @@ body::after {
     </div>
   </div>
 
-  <!-- step 2: options -->
+  <!-- step 2: model selection -->
   <div class="step" id="step-2">
-    <div class="step-title">Optional Settings</div>
+    <div class="step-title">Choose Model</div>
+    <div id="model-info"></div>
     <div class="field">
-      <label>Model Override</label>
-      <input type="text" id="model" placeholder="leave blank for provider default">
-      <div class="field-hint">e.g. <code>claude-sonnet-4-20250514</code>, <code>gpt-4o</code>, <code>gemini-pro</code></div>
+      <label>Model</label>
+      <input type="text" id="model" list="modelSuggestions" placeholder="loading...">
+      <datalist id="modelSuggestions"></datalist>
+      <div class="field-hint" id="modelHint"></div>
     </div>
+    <div id="modelNotes"></div>
+    <div class="btn-row">
+      <button class="btn btn-ghost" onclick="goToStep(1)">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M8.5 3L4.5 7L8.5 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Back
+      </button>
+      <button class="btn btn-primary" onclick="goToStep(3)">
+        Continue
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5.5 3L9.5 7L5.5 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- step 3: settings -->
+  <div class="step" id="step-3">
+    <div class="step-title">Optional Settings</div>
     <div class="field">
       <label>Timezone</label>
       <select id="timezone"></select>
@@ -659,6 +779,15 @@ body::after {
       <label>Telegram Bot Token</label>
       <input type="text" id="telegramToken" placeholder="paste token from @BotFather">
       <div class="field-hint">skip if you only want the web UI</div>
+      <div class="botfather-instructions">
+        <div class="bf-title">How to create a Telegram bot</div>
+        <ol>
+          <li>Open Telegram and search for <code>@BotFather</code></li>
+          <li>Send <code>/newbot</code> and follow the prompts</li>
+          <li>Copy the bot token (format: <code>123456:ABC-DEF...</code>)</li>
+          <li>Paste it above</li>
+        </ol>
+      </div>
     </div>
     <div class="field">
       <label>Web Auth Token</label>
@@ -666,7 +795,23 @@ body::after {
       <div class="field-hint">set a memorable token or leave blank for a random one</div>
     </div>
     <div class="btn-row">
-      <button class="btn btn-ghost" onclick="goToStep(1)">
+      <button class="btn btn-ghost" onclick="goToStep(2)">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M8.5 3L4.5 7L8.5 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Back
+      </button>
+      <button class="btn btn-primary" onclick="goToStep(4)">
+        Continue
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5.5 3L9.5 7L5.5 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- step 4: confirmation summary -->
+  <div class="step" id="step-4">
+    <div class="step-title">Review Configuration</div>
+    <div id="configSummary"></div>
+    <div class="btn-row">
+      <button class="btn btn-ghost" onclick="goToStep(3)">
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M8.5 3L4.5 7L8.5 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
         Back
       </button>
@@ -1078,16 +1223,152 @@ function buildCredFields() {
   container.innerHTML = html;
 }
 
+/* ── build model step ── */
+function buildModelStep() {
+  const provider = PROVIDERS[selectedProvider];
+  if (!provider) return;
+
+  const modelInput = document.getElementById('model');
+  const datalist = document.getElementById('modelSuggestions');
+  const hintEl = document.getElementById('modelHint');
+  const notesEl = document.getElementById('modelNotes');
+
+  /* pre-fill default if user hasn't typed anything yet */
+  if (!modelInput.value && provider.defaultModel) {
+    modelInput.value = provider.defaultModel;
+  }
+
+  /* populate datalist */
+  datalist.innerHTML = '';
+  (provider.models || []).forEach(m => {
+    const opt = document.createElement('option');
+    opt.value = m;
+    datalist.appendChild(opt);
+  });
+
+  /* set hint */
+  if (selectedProvider === 'claude-code') {
+    hintEl.innerHTML = 'Uses your subscription default model';
+    modelInput.placeholder = 'subscription default';
+    modelInput.value = '';
+    modelInput.disabled = true;
+  } else if (provider.defaultModel) {
+    hintEl.innerHTML = `Default: <code>${provider.defaultModel}</code> &mdash; change only if you know what you want`;
+    modelInput.disabled = false;
+    modelInput.placeholder = provider.defaultModel;
+  } else {
+    hintEl.innerHTML = 'Enter the model name you want to use';
+    modelInput.disabled = false;
+    modelInput.placeholder = 'model name';
+  }
+
+  /* provider-specific notes */
+  let noteHtml = '';
+  if (selectedProvider === 'ollama') {
+    noteHtml = `<div class="model-note">
+      Models must be pre-pulled on your Ollama host before they can be used here.<br>
+      Run <code>ollama pull modelname</code> in your terminal first, then enter the model name above.
+    </div>`;
+  } else if (selectedProvider === 'openrouter') {
+    noteHtml = `<div class="model-note">
+      OpenRouter routes to many providers. Model names use <code>provider/model</code> format.<br>
+      See <a href="https://openrouter.ai/models" target="_blank" rel="noopener">available models</a> for the full list.
+    </div>`;
+  } else if (selectedProvider === 'claude-code') {
+    noteHtml = `<div class="model-note">
+      Claude Code uses your subscription's default model. Model selection is not applicable.
+    </div>`;
+  } else if (selectedProvider === 'custom') {
+    noteHtml = `<div class="model-note">
+      Enter the exact model name your endpoint expects.
+    </div>`;
+  } else if (selectedProvider === 'azure-openai') {
+    noteHtml = `<div class="model-note">
+      Enter your Azure deployment name (not the base model name).
+    </div>`;
+  }
+  notesEl.innerHTML = noteHtml;
+}
+
+/* ── build confirmation summary ── */
+function buildSummary() {
+  const provider = PROVIDERS[selectedProvider];
+  const providerName = provider ? provider.name : selectedProvider;
+  const providerIcon = provider ? provider.icon : '';
+
+  const modelVal = document.getElementById('model')?.value;
+  const modelDisplay = selectedProvider === 'claude-code'
+    ? 'subscription default'
+    : (modelVal || (provider && provider.defaultModel) || 'not set');
+
+  const timezone = document.getElementById('timezone')?.value || 'UTC';
+  const telegram = document.getElementById('telegramToken')?.value;
+  const webAuth = document.getElementById('webAuthToken')?.value;
+
+  const rows = [
+    {
+      key: 'Provider',
+      val: `${providerIcon} ${providerName}`,
+      cls: ''
+    },
+    {
+      key: 'Model',
+      val: modelDisplay,
+      cls: ''
+    },
+    {
+      key: 'Timezone',
+      val: timezone,
+      cls: ''
+    },
+    {
+      key: 'Telegram',
+      val: telegram ? 'Configured' : 'Not configured',
+      cls: telegram ? 'ok' : 'muted'
+    },
+    {
+      key: 'Auth Token',
+      val: webAuth ? 'Custom' : 'Auto-generated',
+      cls: webAuth ? '' : 'muted'
+    },
+  ];
+
+  const html = `<div class="summary-container">
+    ${rows.map(r => `
+      <div class="summary-row">
+        <span class="summary-key">${r.key}</span>
+        <span class="summary-val ${r.cls}">${r.val}</span>
+      </div>`).join('')}
+  </div>`;
+
+  document.getElementById('configSummary').innerHTML = html;
+}
+
 /* ── step navigation ── */
 function goToStep(n) {
   document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
   document.getElementById(`step-${n}`).classList.add('active');
 
-  // update progress bar
-  for (let i = 0; i < 3; i++) {
+  if (n === 'success') {
+    /* hide progress bar on success */
+    document.getElementById('progressBar').style.display = 'none';
+    hideAlert();
+    return;
+  }
+
+  /* show progress bar (in case we navigated to success before) */
+  document.getElementById('progressBar').style.display = '';
+
+  /* populate dynamic content for specific steps */
+  if (n === 2) buildModelStep();
+  if (n === 4) buildSummary();
+
+  /* update progress indicators for steps 0-4 */
+  for (let i = 0; i <= 4; i++) {
     const num = document.getElementById(`pnum-${i}`);
     const step = document.getElementById(`pstep-${i}`);
     const line = document.getElementById(`pline-${i}`);
+    if (!num || !step) continue;
     num.className = 'progress-num';
     step.className = 'progress-step';
     if (i < n) {

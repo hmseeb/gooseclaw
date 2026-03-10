@@ -333,6 +333,50 @@ def notify_all(text):
 
 # ── setup config management ─────────────────────────────────────────────────
 
+def validate_setup_config(config):
+    """Validate setup config schema. Returns (valid, errors) tuple."""
+    errors = []
+    if not isinstance(config, dict):
+        return False, ["config must be a JSON object"]
+
+    provider = config.get("provider_type", "")
+    if not provider:
+        errors.append("provider_type is required")
+    elif provider not in env_map:
+        errors.append(f"unknown provider_type: {provider!r}")
+
+    # provider-specific credential validation (skip local/no-key providers)
+    local_providers = ("ollama", "lm-studio", "docker-model-runner", "ramalama")
+    if provider in env_map and provider not in local_providers:
+        if provider != "custom" and not config.get("api_key") and not config.get("claude_setup_token"):
+            # check if any provider-specific env var key is provided in config
+            has_cred = False
+            for env_var in env_map.get(provider, []):
+                if config.get(env_var.lower()):
+                    has_cred = True
+                    break
+            if not has_cred:
+                errors.append(f"api_key or provider credentials required for {provider}")
+
+    # telegram token format check (if provided)
+    tg = config.get("telegram_bot_token", "")
+    if tg and ":" not in tg:
+        errors.append("telegram_bot_token must be in format digits:alphanumeric")
+
+    # timezone format check (if provided)
+    tz = config.get("timezone", "")
+    if tz and "/" not in tz and tz != "UTC":
+        errors.append(f"timezone should be in Region/City format (got {tz!r})")
+
+    # string field max-length guard (prevent absurdly large values)
+    for field in ("api_key", "claude_setup_token", "custom_key", "custom_url", "model"):
+        val = config.get(field, "")
+        if isinstance(val, str) and len(val) > 2000:
+            errors.append(f"{field} exceeds maximum length (2000 chars)")
+
+    return len(errors) == 0, errors
+
+
 def load_setup():
     if os.path.exists(SETUP_FILE):
         with open(SETUP_FILE) as f:
@@ -974,6 +1018,52 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
     def do_PATCH(self):
         self.proxy_to_goose()
 
+    # ── health endpoints ──
+
+    def _ping_goose_web(self):
+        """Try to ping goose web subprocess. Returns 'healthy', 'unhealthy (HTTP N)', or 'unreachable'."""
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=2)
+            conn.request("GET", "/api/health")
+            resp = conn.getresponse()
+            conn.close()
+            return "healthy" if resp.status == 200 else f"unhealthy (HTTP {resp.status})"
+        except Exception:
+            return "unreachable"
+
+    def handle_health(self):
+        """GET /api/health — deep health check: liveness + goose web subprocess status."""
+        status = {"service": "gooseclaw", "configured": is_configured()}
+
+        if goose_process and goose_process.poll() is None:
+            # process is alive — probe it
+            status["goose_web"] = self._ping_goose_web()
+        else:
+            status["goose_web"] = "not running" if is_configured() else "not started (unconfigured)"
+
+        if not is_configured():
+            status["status"] = "setup_required"
+        elif status.get("goose_web") == "healthy":
+            status["status"] = "ok"
+        else:
+            status["status"] = "degraded"
+
+        # 200 for ok/setup_required (healthy enough to serve traffic), 503 for degraded
+        code = 200 if status["status"] in ("ok", "setup_required") else 503
+        self.send_json(code, status)
+
+    def handle_health_ready(self):
+        """GET /api/health/ready — readiness probe: 200 only when goose web is up and responding."""
+        if goose_process and goose_process.poll() is None:
+            result = self._ping_goose_web()
+            if result == "healthy":
+                self.send_json(200, {"ready": True, "goose_web": "healthy"})
+                return
+            self.send_json(503, {"ready": False, "goose_web": result})
+        else:
+            reason = "not started (unconfigured)" if not is_configured() else "not running"
+            self.send_json(503, {"ready": False, "goose_web": reason})
+
     # ── setup endpoints ──
 
     def handle_setup_page(self):
@@ -1070,6 +1160,12 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         body = self._read_body()
         try:
             config = json.loads(body)
+
+            # validate config schema before accepting
+            valid, errors = validate_setup_config(config)
+            if not valid:
+                self.send_json(400, {"success": False, "errors": errors})
+                return
 
             # auto-generate auth token if not provided
             plaintext_token = config.get("web_auth_token", "")

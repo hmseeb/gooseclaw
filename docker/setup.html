@@ -1079,7 +1079,7 @@ const PROVIDERS = {
     keyUrl: 'https://claude.ai/settings',
     envVar: 'CLAUDE_CODE_OAUTH_TOKEN',
     defaultModel: 'default',
-    models: [],
+    models: ['default', 'claude-sonnet-4-20250514', 'claude-opus-4-20250514', 'claude-haiku-4-5-20251001'],
     keyPlaceholder: 'sk-ant-oat01-...',
     keyPrefix: null,
   },
@@ -1407,7 +1407,7 @@ function buildModelStep() {
   });
 
   /* set hint */
-  if (selectedProvider === 'claude-code' || selectedProvider === 'github-copilot') {
+  if (selectedProvider === 'github-copilot') {
     hintEl.innerHTML = 'Uses your subscription default model';
     modelInput.placeholder = 'subscription default';
     modelInput.value = '';
@@ -1444,7 +1444,11 @@ function buildModelStep() {
       OpenRouter routes to many providers. Model names use <code>provider/model</code> format.<br>
       See <a href="https://openrouter.ai/models" target="_blank" rel="noopener">available models</a> for the full list.
     </div>`;
-  } else if (selectedProvider === 'claude-code' || selectedProvider === 'github-copilot') {
+  } else if (selectedProvider === 'claude-code') {
+    noteHtml = `<div class="model-note">
+      "default" uses your subscription's default model. You can also pick a specific model like Opus, Sonnet, or Haiku.
+    </div>`;
+  } else if (selectedProvider === 'github-copilot') {
     noteHtml = `<div class="model-note">
       Uses your subscription's default model. Model selection is not applicable.
     </div>`;
@@ -1472,7 +1476,7 @@ function buildSummary() {
   const providerIcon = provider ? provider.icon : '';
 
   const modelVal = document.getElementById('model')?.value;
-  const modelDisplay = (selectedProvider === 'claude-code' || selectedProvider === 'github-copilot')
+  const modelDisplay = (selectedProvider === 'github-copilot')
     ? 'subscription default'
     : (modelVal || (provider && provider.defaultModel) || 'not set');
 

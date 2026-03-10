@@ -1055,21 +1055,31 @@ def goose_health_monitor():
 class GatewayHandler(http.server.BaseHTTPRequestHandler):
 
     def log_message(self, format, *args):
-        # quiet unless error
-        if args and str(args[0]).startswith("5"):
-            print(f"[gateway] {format % args}")
+        """Structured request logging with timestamp and format string."""
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        if args:
+            print(f"[gateway] {timestamp} {format % args}")
+        else:
+            print(f"[gateway] {timestamp} {format}")
+
+    def log_request(self, code="-", size="-"):
+        """Override to log request with duration."""
+        duration_ms = int((time.time() - getattr(self, "_request_start", time.time())) * 1000)
+        timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
+        print(f"[gateway] {timestamp} {self.command} {self.path} {code} {duration_ms}ms")
 
     def _check_rate_limit(self, limiter):
         """Return True if request is allowed; send 429 and return False if over limit."""
         ip = self.client_address[0]
         if not limiter.is_allowed(ip):
-            self.send_json(429, {"error": "Too many requests. Try again later."})
+            self.send_json(429, {"error": "Too many requests. Try again later.", "code": "RATE_LIMITED"})
             return False
         return True
 
     # ── routing ──
 
     def do_GET(self):
+        self._request_start = time.time()
         path = urllib.parse.urlparse(self.path).path
         # rate-limit all /api/* requests; skip static /setup pages and proxy
         if path.startswith("/api/") and not self._check_rate_limit(api_limiter):
@@ -1096,6 +1106,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.proxy_to_goose()
 
     def do_POST(self):
+        self._request_start = time.time()
         path = urllib.parse.urlparse(self.path).path
         if path == "/api/setup/save":
             self.handle_save()
@@ -1351,9 +1362,10 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(200, resp)
 
         except json.JSONDecodeError:
-            self.send_json(400, {"success": False, "error": "invalid JSON"})
+            self.send_json(400, {"success": False, "error": "invalid JSON", "code": "INVALID_CONFIG"})
         except Exception as e:
-            self.send_json(500, {"success": False, "error": str(e)})
+            print(f"[gateway] ERROR (handle_save): {e}", file=sys.stderr)
+            self.send_json(500, {"success": False, "error": "Internal server error. Check server logs.", "code": "INTERNAL_ERROR"})
 
     def handle_validate(self):
         if not self._check_rate_limit(auth_limiter):
@@ -1366,7 +1378,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             result = dispatch_validation(provider, credentials)
             self.send_json(200, result)
         except Exception as e:
-            self.send_json(500, {"valid": False, "error": str(e)})
+            print(f"[gateway] ERROR (handle_validate): {e}", file=sys.stderr)
+            self.send_json(500, {"valid": False, "error": "Internal server error. Check server logs.", "code": "INTERNAL_ERROR"})
 
     # ── notify endpoints ──
 
@@ -1393,9 +1406,10 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             status_code = 200 if result["sent"] else 502
             self.send_json(status_code, result)
         except json.JSONDecodeError:
-            self.send_json(400, {"sent": False, "error": "invalid JSON"})
+            self.send_json(400, {"sent": False, "error": "invalid JSON", "code": "INVALID_CONFIG"})
         except Exception as e:
-            self.send_json(500, {"sent": False, "error": str(e)})
+            print(f"[gateway] ERROR (handle_notify): {e}", file=sys.stderr)
+            self.send_json(500, {"sent": False, "error": "Internal server error. Check server logs.", "code": "INTERNAL_ERROR"})
 
     def handle_notify_status(self):
         """GET /api/notify/status — check if notification delivery is available."""
@@ -1585,12 +1599,18 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             except Exception:
                 pass  # client disconnected
         except Exception as e:
+            print(f"[gateway] proxy error: {e}", file=sys.stderr)
             try:
-                self.send_error(502, f"Proxy error: {e}")
+                self.send_error(502, "Gateway error")
             except Exception:
                 pass
 
     # ── helpers ──
+
+    def _internal_error(self, e, context=""):
+        """Log real error to stderr, return sanitized response to client."""
+        print(f"[gateway] ERROR ({context}): {e}", file=sys.stderr)
+        self.send_json(500, {"error": "Internal server error. Check server logs.", "code": "INTERNAL_ERROR"})
 
     def _read_body(self):
         length = int(self.headers.get("Content-Length", 0))

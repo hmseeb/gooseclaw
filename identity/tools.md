@@ -7,6 +7,13 @@
 - Interface: Telegram
 - Persistence: Railway volume at /data
 
+## Notifications
+
+- `notify` is on PATH. pipe text to send it to the user's telegram.
+- usage: `echo "your message" | notify`
+- this is how scheduled recipes deliver output. without it, headless session output vanishes.
+- the gateway also exposes POST /api/notify for programmatic use.
+
 ## Identity Files
 
 All identity and memory files live at /data/identity/:

@@ -56,9 +56,20 @@ If it does NOT contain "ONBOARDING_NEEDED":
         version: 1.0.0
         title: "<task title>"
         description: "<what this task does>"
-        instructions:
-          - content: "<detailed instruction for what the agent should do>"
+        instructions: |
+          <detailed instruction for what the agent should do>
+
+          DELIVERY: After composing your output, you MUST deliver it to the user.
+          Run this command with your full output (pipe your text into it):
+
+          echo "YOUR_OUTPUT_HERE" | notify
+
+          Format as plain text with bullet points (use - not *).
+          Keep under 4000 chars. No markdown headers.
+          Prefix with the task title and date.
         ```
+        IMPORTANT: Every recipe MUST include the DELIVERY section above.
+        Without it, the output goes nowhere — scheduled tasks run headless.
       - Register each recipe with the scheduler by running:
         `goose schedule add --schedule-id "<task-name>" --cron "<cron expression>" --recipe-source /data/recipes/<task-name>.yaml`
       - Use the user's timezone (from question c) when setting cron times
@@ -82,7 +93,17 @@ If it does NOT contain "ONBOARDING_NEEDED":
 ## Scheduling (anytime)
 
 When the user asks to add, remove, or change scheduled tasks:
-- Create/update recipe files in /data/recipes/
+- Create/update recipe YAML files in /data/recipes/
+- EVERY recipe MUST include a DELIVERY section that pipes output through `notify`
+  Without this, scheduled output goes to sessions.db and the user never sees it.
+  Example delivery block for recipe instructions:
+  ```
+  DELIVERY: After composing your output, you MUST deliver it to the user.
+  Run: echo "YOUR_OUTPUT_HERE" | notify
+  Format as plain text. Keep under 4000 chars. Prefix with task title and date.
+  ```
 - Use `goose schedule add`, `goose schedule remove`, or `goose schedule list` as needed
+- If updating an existing recipe, you MUST remove and re-add the schedule
+  (goose copies recipes at registration time, editing the source file alone does nothing)
 - Update heartbeat.md to reflect the current schedule
 - Always confirm what was changed

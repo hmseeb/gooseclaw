@@ -1217,6 +1217,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.handle_notify()
         elif path == "/api/telegram/pair":
             self.handle_telegram_pair()
+        elif path == "/api/auth/recover":
+            self.handle_auth_recover()
         else:
             self.proxy_to_goose()
 
@@ -1608,6 +1610,47 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(200, {"code": code, "message": "send this code to your telegram bot"})
         else:
             self.send_json(500, {"error": "could not generate pairing code. check logs.", "code": None})
+
+    # ── auth recovery endpoint ──
+
+    def handle_auth_recover(self):
+        """POST /api/auth/recover — reset auth token using recovery secret."""
+        if not self._check_rate_limit(auth_limiter):
+            return
+        recovery_secret = os.environ.get("GOOSECLAW_RECOVERY_SECRET", "")
+        if not recovery_secret:
+            self.send_json(404, {"error": "auth recovery not configured. Set GOOSECLAW_RECOVERY_SECRET env var."})
+            return
+        body = self._read_body()
+        try:
+            data = json.loads(body)
+            provided = _sanitize_string(data.get("secret", ""))
+            if not provided:
+                self.send_json(400, {"error": "secret field is required"})
+                return
+            if not secrets.compare_digest(provided, recovery_secret):
+                self.send_json(403, {"error": "invalid recovery secret"})
+                return
+            # generate new auth token
+            new_token = secrets.token_urlsafe(24)
+            new_hash = hash_token(new_token)
+            # update setup.json
+            setup = load_setup()
+            if not setup:
+                self.send_json(400, {"error": "no setup configuration found"})
+                return
+            setup["web_auth_token_hash"] = new_hash
+            setup.pop("web_auth_token", None)  # remove legacy plaintext
+            save_setup(setup)
+            self.send_json(200, {
+                "success": True,
+                "auth_token": new_token,
+                "message": "Auth token reset. Save this token — it won't be shown again."
+            })
+        except json.JSONDecodeError:
+            self.send_json(400, {"error": "invalid JSON"})
+        except Exception as e:
+            self._internal_error(e, "handle_auth_recover")
 
     # ── reverse proxy to goose web ──
 

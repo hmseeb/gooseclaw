@@ -29,12 +29,11 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. After selecting a provider, user sees model selection with a sensible default pre-filled and a suggestions dropdown
   4. User progresses through provider -> credentials -> model -> optional settings -> confirmation summary, with all five steps visible
   5. Telegram step shows BotFather instructions for creating a bot
-**Plans**: TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] 01-01: TBD
-- [ ] 01-02: TBD
-- [ ] 01-03: TBD
+- [ ] 01-01-PLAN.md -- Provider data registry, categorized card grid, and dynamic credential fields for all 15+ providers
+- [ ] 01-02-PLAN.md -- Expand to 5-step flow with model selection, BotFather instructions, and confirmation summary
 
 ### Phase 2: Validation and Env Plumbing
 **Goal**: Every provider configuration is validated before save, persisted correctly, and restored on container restart without data loss
@@ -90,7 +89,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Provider UI Expansion | 0/3 | Not started | - |
+| 1. Provider UI Expansion | 0/2 | Planning complete | - |
 | 2. Validation and Env Plumbing | 0/3 | Not started | - |
 | 3. Gateway Resilience and Live Feedback | 0/2 | Not started | - |
 | 4. Advanced Multi-Model Settings | 0/1 | Not started | - |

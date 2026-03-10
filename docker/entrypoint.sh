@@ -126,8 +126,9 @@ elif [ -f "$CONFIG_DIR/setup.json" ]; then
 
     # re-hydrate env vars from setup.json (needed after container restart)
     # env vars set via Railway/Docker take priority over stored values
-    eval "$(python3 -c "
-import json, os
+    REHYDRATE_FILE=$(mktemp /tmp/rehydrate.XXXXXX)
+    python3 -c "
+import json, os, shlex
 c = json.load(open('$CONFIG_DIR/setup.json'))
 pt = c.get('provider_type', '')
 ak = c.get('api_key', '')
@@ -137,20 +138,32 @@ env_map = {
     'google': 'GOOGLE_API_KEY',
     'groq': 'GROQ_API_KEY',
     'openrouter': 'OPENROUTER_API_KEY',
+    'mistral': 'MISTRAL_API_KEY',
+    'xai': 'XAI_API_KEY',
+    'deepseek': 'DEEPSEEK_API_KEY',
+    'together': 'TOGETHER_API_KEY',
+    'cerebras': 'CEREBRAS_API_KEY',
+    'perplexity': 'PERPLEXITY_API_KEY',
+    'avian': 'AVIAN_API_KEY',
+    'venice': 'VENICE_API_KEY',
+    'ovhcloud': 'OVH_AI_ENDPOINTS_ACCESS_TOKEN',
 }
 if pt == 'claude-code' and c.get('claude_setup_token'):
     if not os.environ.get('CLAUDE_CODE_OAUTH_TOKEN'):
-        print(f'export CLAUDE_CODE_OAUTH_TOKEN=\"{c[\"claude_setup_token\"]}\"')
+        print(f'export CLAUDE_CODE_OAUTH_TOKEN={shlex.quote(c[\"claude_setup_token\"])}')
 elif pt in env_map and ak:
     if not os.environ.get(env_map[pt]):
-        print(f'export {env_map[pt]}=\"{ak}\"')
+        print(f'export {env_map[pt]}={shlex.quote(ak)}')
 tg = c.get('telegram_bot_token', '')
 if tg and not os.environ.get('TELEGRAM_BOT_TOKEN'):
-    print(f'export TELEGRAM_BOT_TOKEN=\"{tg}\"')
+    print(f'export TELEGRAM_BOT_TOKEN={shlex.quote(tg)}')
 tz = c.get('timezone', '')
 if tz and not os.environ.get('TZ'):
-    print(f'export TZ=\"{tz}\"')
-" 2>/dev/null)" || echo "[provider] WARN: could not parse setup.json"
+    print(f'export TZ={shlex.quote(tz)}')
+" > "$REHYDRATE_FILE" 2>/dev/null
+    # source is safe because values are shlex.quote'd by the Python script
+    . "$REHYDRATE_FILE"
+    rm -f "$REHYDRATE_FILE"
 fi
 
 if [ "$PROVIDER_CONFIGURED" = false ]; then
@@ -167,8 +180,9 @@ fi
 VAULT_FILE="$DATA_DIR/secrets/vault.yaml"
 if [ -f "$VAULT_FILE" ] && [ -s "$VAULT_FILE" ]; then
     echo "[vault] hydrating credentials from vault..."
-    eval "$(python3 -c "
-import yaml, sys
+    VAULT_REHYDRATE_FILE=$(mktemp /tmp/vault_rehydrate.XXXXXX)
+    python3 -c "
+import yaml, sys, os, re, shlex
 try:
     with open('$VAULT_FILE') as f:
         data = yaml.safe_load(f) or {}
@@ -194,11 +208,8 @@ try:
             for k in keys:
                 val = val[k]
             # only export if not already set (env vars take priority)
-            import os
             if not os.environ.get(env_var):
-                # escape single quotes in value
-                safe_val = str(val).replace(\"'\", \"'\\\\''\")
-                print(f\"export {env_var}='{safe_val}'\")
+                print(f'export {env_var}={shlex.quote(str(val))}')
         except (KeyError, TypeError):
             pass
     # also export any custom keys as GOOSECLAW_<SERVICE>_<KEY>
@@ -206,13 +217,16 @@ try:
         if isinstance(values, dict):
             for key, val in values.items():
                 env_name = f'GOOSECLAW_{service.upper()}_{key.upper()}'
-                import os
+                # sanitize: replace any non-alphanumeric/underscore with underscore
+                env_name = re.sub(r'[^A-Z0-9_]', '_', env_name)
                 if not os.environ.get(env_name):
-                    safe_val = str(val).replace(\"'\", \"'\\\\''\")
-                    print(f\"export {env_name}='{safe_val}'\")
+                    print(f'export {env_name}={shlex.quote(str(val))}')
 except Exception as e:
     print(f'echo \"[vault] WARN: {e}\"', file=sys.stderr)
-" 2>/dev/null)" || echo "[vault] WARN: could not hydrate vault"
+" > "$VAULT_REHYDRATE_FILE" 2>/dev/null
+    # source is safe because values are shlex.quote'd by the Python script
+    . "$VAULT_REHYDRATE_FILE"
+    rm -f "$VAULT_REHYDRATE_FILE"
     echo "[vault] done"
 else
     echo "[vault] no credentials stored yet"

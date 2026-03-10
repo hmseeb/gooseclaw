@@ -2479,14 +2479,92 @@ function switchToWizard() {
   /* show wizard chrome */
   document.getElementById('progressBar').style.display = '';
   document.getElementById('reconfigBanner').classList.add('show');
-  /* activate wizard from step 0 */
-  document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
-  document.getElementById('step-0').classList.add('active');
-  /* pre-select current provider */
-  if (dashboardConfig.provider_type) {
-    selectProvider(dashboardConfig.provider_type);
-  }
+  /* pre-fill wizard with existing config */
+  prefillWizard(dashboardConfig);
   goToStep(0);
+}
+
+/* ── reconfigure entry point (called from dashboard Reconfigure button) ── */
+function startReconfigure() {
+  document.getElementById('step-dashboard').classList.remove('active');
+  document.getElementById('progressBar').style.display = '';
+  document.getElementById('reconfigBanner').classList.add('show');
+  prefillWizard(dashboardConfig);
+  goToStep(0);
+}
+
+/* ── pre-fill wizard fields from existing config ── */
+function prefillWizard(config) {
+  if (!config || !config.provider_type) return;
+
+  /* select provider card and build cred fields */
+  selectProvider(config.provider_type);
+
+  /* pre-fill credential inputs after buildCredFields runs */
+  const pt = config.provider_type;
+  const localProviders = ['ollama', 'lm-studio', 'docker-model-runner', 'ramalama'];
+
+  if (localProviders.includes(pt)) {
+    const el = document.getElementById('ollamaHost');
+    if (el && config.ollama_host) el.value = config.ollama_host;
+  } else if (pt === 'claude-code') {
+    const el = document.getElementById('claudeToken');
+    if (el) {
+      if (config.claude_setup_token_set) {
+        el.value = '';
+        el.placeholder = 'Token already set (leave blank to keep)';
+      }
+    }
+  } else if (pt === 'azure-openai') {
+    const keyEl = document.getElementById('azureKey');
+    const endEl = document.getElementById('azureEndpoint');
+    if (keyEl && config.azure_key_set) {
+      keyEl.value = '';
+      keyEl.placeholder = 'Key already set (leave blank to keep)';
+    }
+    if (endEl && config.azure_endpoint) endEl.value = config.azure_endpoint;
+  } else if (pt === 'custom') {
+    const urlEl = document.getElementById('customUrl');
+    const keyEl = document.getElementById('customKey');
+    if (urlEl && config.custom_url) urlEl.value = config.custom_url;
+    if (keyEl && config.custom_key_set) {
+      keyEl.value = '';
+      keyEl.placeholder = 'Key already set (leave blank to keep)';
+    }
+  } else if (pt !== 'github-copilot') {
+    /* standard API key provider */
+    const el = document.getElementById('apiKey');
+    if (el && config.api_key_set) {
+      el.value = '';
+      el.placeholder = 'Key already set (leave blank to keep)';
+    }
+  }
+
+  /* pre-fill model */
+  const modelEl = document.getElementById('model');
+  if (modelEl) modelEl.value = config.model || '';
+
+  /* pre-fill timezone */
+  const tzEl = document.getElementById('timezone');
+  if (tzEl && config.timezone) {
+    for (let i = 0; i < tzEl.options.length; i++) {
+      if (tzEl.options[i].value === config.timezone) {
+        tzEl.selectedIndex = i;
+        break;
+      }
+    }
+  }
+
+  /* pre-fill telegram token placeholder */
+  const tgEl = document.getElementById('telegramToken');
+  if (tgEl && config.telegram_bot_token_set) {
+    tgEl.value = '';
+    tgEl.placeholder = 'Token already set (leave blank to keep)';
+  }
+
+  /* mark validation as passed since this config was previously validated */
+  validationPassed = true;
+  updateSaveBtn();
 }
 
 /* ── telegram pairing ── */
@@ -2685,16 +2763,29 @@ async function saveConfig() {
 
   if (selectedProvider === 'claude-code') {
     const token = document.getElementById('claudeToken')?.value || '';
-    config.claude_setup_token = token;
-    if (token) savedKeys[selectedProvider] = token;
+    if (token) {
+      config.claude_setup_token = token;
+      savedKeys[selectedProvider] = token;
+    } else if (isReconfigure && dashboardConfig.claude_setup_token_set) {
+      /* keep existing — omit field so backend preserves it */
+    } else {
+      config.claude_setup_token = token;
+    }
   } else if (selectedProvider === 'custom') {
     const url = document.getElementById('customUrl')?.value || '';
     const model = document.getElementById('customModel')?.value || 'gpt-4';
     const key = document.getElementById('customKey')?.value || '';
     config.custom_url = url;
     config.custom_model = model;
-    config.custom_key = key;
-    if (url) savedKeys[selectedProvider] = { url, model, key };
+    if (key) {
+      config.custom_key = key;
+      savedKeys[selectedProvider] = { url, model, key };
+    } else if (isReconfigure && dashboardConfig.custom_key_set) {
+      /* keep existing custom key — omit field */
+      if (url) savedKeys[selectedProvider] = { url, model, key: null };
+    } else {
+      config.custom_key = key;
+    }
   } else if (selectedProvider === 'ollama' || selectedProvider === 'ramalama' || selectedProvider === 'lm-studio' || selectedProvider === 'docker-model-runner') {
     const host = document.getElementById('ollamaHost')?.value || '';
     config.ollama_host = host;
@@ -2702,15 +2793,42 @@ async function saveConfig() {
   } else if (selectedProvider === 'azure-openai') {
     const key = document.getElementById('azureKey')?.value || '';
     const endpoint = document.getElementById('azureEndpoint')?.value || '';
-    config.azure_key = key;
+    if (key) {
+      config.azure_key = key;
+      if (!savedKeys[selectedProvider]) savedKeys[selectedProvider] = {};
+      savedKeys[selectedProvider].key = key;
+    } else if (isReconfigure && dashboardConfig.azure_key_set) {
+      /* keep existing azure key — omit field */
+    } else {
+      config.azure_key = key;
+    }
     config.azure_endpoint = endpoint;
-    if (key || endpoint) savedKeys[selectedProvider] = { key, endpoint };
+    if (endpoint) {
+      if (!savedKeys[selectedProvider]) savedKeys[selectedProvider] = {};
+      savedKeys[selectedProvider].endpoint = endpoint;
+    }
   } else if (selectedProvider === 'github-copilot') {
     /* no credentials needed, device flow at runtime */
   } else {
     const key = document.getElementById('apiKey')?.value || '';
-    config.api_key = key;
-    if (key) savedKeys[selectedProvider] = key;
+    if (key) {
+      config.api_key = key;
+      savedKeys[selectedProvider] = key;
+    } else if (isReconfigure && dashboardConfig.api_key_set) {
+      /* keep existing key — omit field so backend preserves it */
+    } else {
+      config.api_key = key;
+    }
+  }
+
+  /* handle telegram token: keep existing if blank during reconfigure */
+  if (!config.telegram_bot_token && isReconfigure && dashboardConfig.telegram_bot_token_set) {
+    delete config.telegram_bot_token;
+  }
+
+  /* handle web_auth_token: keep existing if blank during reconfigure */
+  if (!config.web_auth_token && isReconfigure) {
+    delete config.web_auth_token;
   }
 
   /* persist saved_keys across provider switches */

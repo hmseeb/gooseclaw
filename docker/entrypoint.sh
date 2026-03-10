@@ -21,7 +21,10 @@ export PATH="$HOME_DIR/.local/bin:$PATH"
 
 if [ ! -f "$DATA_DIR/.initialized" ]; then
     echo "[init] first boot detected. setting up /data..."
-    mkdir -p "$IDENTITY_DIR/journal" "$CONFIG_DIR" "$DATA_DIR/sessions" "$DATA_DIR/recipes"
+    mkdir -p "$IDENTITY_DIR/journal" "$CONFIG_DIR" "$DATA_DIR/sessions" "$DATA_DIR/recipes" "$DATA_DIR/secrets"
+    chmod 700 "$DATA_DIR/secrets"
+    touch "$DATA_DIR/secrets/vault.yaml"
+    chmod 600 "$DATA_DIR/secrets/vault.yaml"
 
     # copy template identity files
     cp -r "$APP_DIR/identity/"* "$IDENTITY_DIR/"
@@ -156,6 +159,150 @@ if [ -n "${GOOSE_MODEL:-}" ]; then
     echo "GOOSE_MODEL: $GOOSE_MODEL" >> "$CONFIG_DIR/config.yaml"
 fi
 
+# ─── vault hydration (export stored credentials as env vars) ─────────────
+
+VAULT_FILE="$DATA_DIR/secrets/vault.yaml"
+if [ -f "$VAULT_FILE" ] && [ -s "$VAULT_FILE" ]; then
+    echo "[vault] hydrating credentials from vault..."
+    eval "$(python3 -c "
+import yaml, sys
+try:
+    with open('$VAULT_FILE') as f:
+        data = yaml.safe_load(f) or {}
+    # known env var mappings for common integrations
+    env_map = {
+        'anthropic.api_key': 'ANTHROPIC_API_KEY',
+        'openai.api_key': 'OPENAI_API_KEY',
+        'google.api_key': 'GOOGLE_API_KEY',
+        'groq.api_key': 'GROQ_API_KEY',
+        'openrouter.api_key': 'OPENROUTER_API_KEY',
+        'fireflies.api_key': 'FIREFLIES_API_KEY',
+        'browserbase.api_key': 'BROWSERBASE_API_KEY',
+        'exa.api_key': 'EXA_API_KEY',
+        'brave.api_key': 'BRAVE_API_KEY',
+        'supabase.url': 'SUPABASE_URL',
+        'supabase.key': 'SUPABASE_KEY',
+        'github.pat': 'GITHUB_PAT',
+    }
+    for dotpath, env_var in env_map.items():
+        keys = dotpath.split('.')
+        val = data
+        try:
+            for k in keys:
+                val = val[k]
+            # only export if not already set (env vars take priority)
+            import os
+            if not os.environ.get(env_var):
+                # escape single quotes in value
+                safe_val = str(val).replace(\"'\", \"'\\\\''\")
+                print(f\"export {env_var}='{safe_val}'\")
+        except (KeyError, TypeError):
+            pass
+    # also export any custom keys as GOOSECLAW_<SERVICE>_<KEY>
+    for service, values in data.items():
+        if isinstance(values, dict):
+            for key, val in values.items():
+                env_name = f'GOOSECLAW_{service.upper()}_{key.upper()}'
+                import os
+                if not os.environ.get(env_name):
+                    safe_val = str(val).replace(\"'\", \"'\\\\''\")
+                    print(f\"export {env_name}='{safe_val}'\")
+except Exception as e:
+    print(f'echo \"[vault] WARN: {e}\"', file=sys.stderr)
+" 2>/dev/null)" || echo "[vault] WARN: could not hydrate vault"
+    echo "[vault] done"
+else
+    echo "[vault] no credentials stored yet"
+fi
+
+# ─── default MCP extensions (Context7 + Exa, no API keys needed) ─────────
+
+echo "[mcp] configuring default extensions (Context7, Exa)..."
+cat >> "$CONFIG_DIR/config.yaml" << 'EXTENSIONS'
+extensions:
+  developer:
+    enabled: true
+    type: platform
+    name: developer
+    description: Write and edit files, and execute shell commands
+    display_name: Developer
+    bundled: true
+    available_tools: []
+  tom:
+    enabled: true
+    type: platform
+    name: tom
+    description: Inject custom context into every turn via GOOSE_MOIM_MESSAGE_TEXT and GOOSE_MOIM_MESSAGE_FILE environment variables
+    display_name: Top Of Mind
+    bundled: true
+    available_tools: []
+  todo:
+    enabled: true
+    type: platform
+    name: todo
+    description: Enable a todo list for goose so it can keep track of what it is doing
+    display_name: Todo
+    bundled: true
+    available_tools: []
+  memory:
+    enabled: true
+    type: builtin
+    name: memory
+    description: Teach goose your preferences as you go.
+    display_name: Memory
+    timeout: 300
+    bundled: true
+    available_tools: []
+  context7:
+    enabled: true
+    type: stdio
+    name: Context7
+    description: Up-to-date code documentation for LLMs and AI code editors
+    cmd: npx
+    args:
+      - -y
+      - '@upstash/context7-mcp'
+    envs: {}
+    env_keys: []
+    timeout: 300
+    bundled: null
+    available_tools: []
+  exa:
+    enabled: true
+    type: streamable_http
+    name: Exa
+    description: Exa MCP for web search and web crawling
+    uri: https://mcp.exa.ai/mcp
+    envs: {}
+    env_keys: []
+    headers: {}
+    timeout: 300
+    bundled: null
+    available_tools: []
+EXTENSIONS
+
+# ─── template version tracking ────────────────────────────────────────────
+
+TEMPLATE_VERSION_FILE="$APP_DIR/VERSION"
+DATA_VERSION_FILE="$DATA_DIR/VERSION"
+if [ -f "$TEMPLATE_VERSION_FILE" ]; then
+    TEMPLATE_VER=$(cat "$TEMPLATE_VERSION_FILE")
+    DATA_VER=$(cat "$DATA_VERSION_FILE" 2>/dev/null || echo "0.0.0")
+    if [ "$TEMPLATE_VER" != "$DATA_VER" ]; then
+        echo "[upgrade] template updated: $DATA_VER -> $TEMPLATE_VER"
+        # update system files (tools.md, persistent-instructions.md)
+        # but NEVER overwrite user files (soul.md, user.md, memory.md, heartbeat.md)
+        for f in tools.md persistent-instructions.md; do
+            if [ -f "$APP_DIR/identity/$f" ]; then
+                cp "$APP_DIR/identity/$f" "$IDENTITY_DIR/$f"
+                echo "[upgrade] updated $f"
+            fi
+        done
+        echo "$TEMPLATE_VER" > "$DATA_VERSION_FILE"
+        echo "[upgrade] done"
+    fi
+fi
+
 # ─── MOIM (persistent instructions injected every turn) ────────────────────
 
 export GOOSE_MOIM_MESSAGE_FILE="$IDENTITY_DIR/persistent-instructions.md"
@@ -238,6 +385,32 @@ if [ -n "${GITHUB_PAT:-}" ] && [ -n "${GITHUB_REPO:-}" ]; then
     PERSIST_PID=$!
 fi
 
+# ─── watchdog (restart crashed processes) ──────────────────────────────────
+
+(
+    sleep 30  # initial grace period
+    while true; do
+        sleep 60
+
+        # check gateway
+        if ! kill -0 "$GATEWAY_PY_PID" 2>/dev/null; then
+            echo "[watchdog] gateway crashed, restarting..."
+            python3 "$APP_DIR/docker/gateway.py" &
+            GATEWAY_PY_PID=$!
+            echo "[watchdog] gateway restarted (pid $GATEWAY_PY_PID)"
+        fi
+
+        # check telegram
+        if [ -n "${TELEGRAM_PID:-}" ] && ! kill -0 "$TELEGRAM_PID" 2>/dev/null; then
+            echo "[watchdog] telegram gateway crashed, restarting..."
+            goose gateway start --bot-token "$TELEGRAM_BOT_TOKEN" telegram &
+            TELEGRAM_PID=$!
+            echo "[watchdog] telegram restarted (pid $TELEGRAM_PID)"
+        fi
+    done
+) &
+WATCHDOG_PID=$!
+
 # ─── SIGTERM handler (graceful shutdown) ────────────────────────────────────
 
 shutdown() {
@@ -251,6 +424,7 @@ shutdown() {
     kill "$GATEWAY_PY_PID" 2>/dev/null || true
     [ -n "${TELEGRAM_PID:-}" ] && kill "$TELEGRAM_PID" 2>/dev/null || true
     [ -n "${PERSIST_PID:-}" ] && kill "$PERSIST_PID" 2>/dev/null || true
+    [ -n "${WATCHDOG_PID:-}" ] && kill "$WATCHDOG_PID" 2>/dev/null || true
 
     echo "[shutdown] done"
     exit 0

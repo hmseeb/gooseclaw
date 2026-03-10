@@ -694,6 +694,128 @@ body::after {
   .progress-label { display: none; }
   .btn-row { flex-wrap: wrap; }
 }
+
+/* ── settings dashboard ── */
+.dashboard-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-subtle);
+  gap: 12px;
+}
+.dashboard-field:last-child { border-bottom: none; }
+.dashboard-field-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  min-width: 90px;
+}
+.dashboard-field-value {
+  font-size: 13px;
+  color: var(--text-primary);
+  font-weight: 500;
+  font-family: 'JetBrains Mono', monospace;
+  flex: 1;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dashboard-field-value.muted { color: var(--text-tertiary); font-style: italic; font-family: 'DM Sans', sans-serif; }
+.dashboard-field-value.ok { color: var(--success); font-family: 'DM Sans', sans-serif; }
+.dashboard-field-edit {
+  display: none;
+  flex: 1;
+}
+.dashboard-field-edit input,
+.dashboard-field-edit select {
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-accent);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13px;
+  outline: none;
+  transition: all 0.2s ease;
+}
+.dashboard-field-edit select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%239ca3af' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 28px;
+  cursor: pointer;
+}
+.dashboard-field-edit select option { background: var(--bg-elevated); }
+.dashboard-field-edit input:focus,
+.dashboard-field-edit select:focus {
+  border-color: var(--border-accent);
+  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.1);
+}
+.dashboard-field.editing .dashboard-field-value { display: none; }
+.dashboard-field.editing .dashboard-field-edit { display: block; }
+.dashboard-field.editing .dashboard-edit-btn { display: none; }
+.dashboard-edit-btn {
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+.dashboard-edit-btn:hover {
+  border-color: var(--border-mid);
+  color: var(--text-secondary);
+  background: var(--bg-card);
+}
+.dashboard-success {
+  background: var(--success-bg);
+  border: 1px solid rgba(52, 211, 153, 0.2);
+  color: var(--success);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  font-size: 13px;
+  margin-bottom: 16px;
+  display: none;
+}
+.dashboard-success.show { display: block; }
+.dashboard-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 28px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border-subtle);
+  flex-wrap: wrap;
+}
+.dashboard-links {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.dashboard-link {
+  font-size: 13px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: 'DM Sans', sans-serif;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  transition: color 0.2s;
+}
+.dashboard-link:hover { color: var(--text-secondary); }
 </style>
 </head>
 <body>
@@ -876,11 +998,79 @@ body::after {
     </div>
   </div>
 
+  <!-- settings dashboard (shown when already configured) -->
+  <div class="step" id="step-dashboard">
+    <div class="step-title">Settings</div>
+    <div class="dashboard-success" id="dashboardSuccess">Changes saved. Agent is restarting...</div>
+    <div class="summary-container">
+      <div class="dashboard-field" id="df-provider">
+        <span class="dashboard-field-label">Provider</span>
+        <span class="dashboard-field-value" id="dfv-provider"></span>
+        <div class="dashboard-field-edit" id="dfe-provider">
+          <select id="dfi-provider" onchange="onDashboardProviderChange(this.value)"></select>
+        </div>
+        <button class="dashboard-edit-btn" onclick="startDashboardEdit('provider')">edit</button>
+      </div>
+      <div class="dashboard-field" id="df-cred">
+        <span class="dashboard-field-label">Credentials</span>
+        <span class="dashboard-field-value" id="dfv-cred"></span>
+        <div class="dashboard-field-edit" id="dfe-cred">
+          <input type="password" id="dfi-cred" placeholder="enter new key (leave blank to keep current)">
+        </div>
+        <button class="dashboard-edit-btn" onclick="startDashboardEdit('cred')">edit</button>
+      </div>
+      <div class="dashboard-field" id="df-model">
+        <span class="dashboard-field-label">Model</span>
+        <span class="dashboard-field-value" id="dfv-model"></span>
+        <div class="dashboard-field-edit" id="dfe-model">
+          <input type="text" id="dfi-model" list="dbModelSuggestions" placeholder="model name">
+          <datalist id="dbModelSuggestions"></datalist>
+        </div>
+        <button class="dashboard-edit-btn" onclick="startDashboardEdit('model')">edit</button>
+      </div>
+      <div class="dashboard-field" id="df-timezone">
+        <span class="dashboard-field-label">Timezone</span>
+        <span class="dashboard-field-value" id="dfv-timezone"></span>
+        <div class="dashboard-field-edit" id="dfe-timezone">
+          <select id="dfi-timezone"></select>
+        </div>
+        <button class="dashboard-edit-btn" onclick="startDashboardEdit('timezone')">edit</button>
+      </div>
+      <div class="dashboard-field" id="df-telegram">
+        <span class="dashboard-field-label">Telegram</span>
+        <span class="dashboard-field-value" id="dfv-telegram"></span>
+        <div class="dashboard-field-edit" id="dfe-telegram">
+          <input type="text" id="dfi-telegram" placeholder="bot token from @BotFather">
+        </div>
+        <button class="dashboard-edit-btn" onclick="startDashboardEdit('telegram')">edit</button>
+      </div>
+      <div class="dashboard-field" id="df-authtoken">
+        <span class="dashboard-field-label">Auth Token</span>
+        <span class="dashboard-field-value" id="dfv-authtoken"></span>
+        <div class="dashboard-field-edit" id="dfe-authtoken">
+          <input type="text" id="dfi-authtoken" placeholder="leave blank to keep current">
+        </div>
+        <button class="dashboard-edit-btn" onclick="startDashboardEdit('authtoken')">edit</button>
+      </div>
+    </div>
+    <div class="dashboard-actions">
+      <div class="dashboard-links">
+        <button class="dashboard-link" onclick="switchToWizard()">Re-run Setup Wizard</button>
+        <a class="dashboard-link" href="/" style="color:var(--text-tertiary)">Back to Chat</a>
+      </div>
+      <button class="btn btn-primary" onclick="saveDashboardChanges()">
+        Save Changes
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5.5 3L9.5 7L5.5 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+  </div>
+
 </div>
 
 <script>
 let selectedProvider = '';
 let isReconfigure = false;
+let savedKeys = {};
 
 /* ── provider data registry ── */
 const PROVIDERS = {
@@ -1267,9 +1457,12 @@ try {
 fetch('/api/setup/config').then(r => r.json()).then(data => {
   if (data.configured) {
     isReconfigure = true;
-    document.getElementById('reconfigBanner').classList.add('show');
-    const p = data.config.provider_type;
-    if (p) selectProvider(p);
+    /* load previously saved keys for provider switching persistence */
+    if (data.config.saved_keys && typeof data.config.saved_keys === 'object') {
+      savedKeys = data.config.saved_keys;
+    }
+    /* show settings dashboard instead of wizard */
+    showDashboard(data.config);
   }
 }).catch(() => {});
 
@@ -1390,6 +1583,39 @@ function buildCredFields() {
   }
 
   container.innerHTML = html;
+
+  /* auto-fill saved key for this provider if available */
+  const savedKey = savedKeys[selectedProvider];
+  if (savedKey) {
+    if (selectedProvider === 'claude-code') {
+      const el = document.getElementById('claudeToken');
+      if (el) el.value = savedKey;
+    } else if (selectedProvider === 'ollama' || selectedProvider === 'ramalama' ||
+               selectedProvider === 'lm-studio' || selectedProvider === 'docker-model-runner') {
+      const el = document.getElementById('ollamaHost');
+      if (el && typeof savedKey === 'string') el.value = savedKey;
+    } else if (selectedProvider === 'azure-openai') {
+      if (typeof savedKey === 'object' && savedKey !== null) {
+        const keyEl = document.getElementById('azureKey');
+        const endEl = document.getElementById('azureEndpoint');
+        if (keyEl && savedKey.key) keyEl.value = savedKey.key;
+        if (endEl && savedKey.endpoint) endEl.value = savedKey.endpoint;
+      }
+    } else if (selectedProvider === 'custom') {
+      if (typeof savedKey === 'object' && savedKey !== null) {
+        const urlEl = document.getElementById('customUrl');
+        const modelEl = document.getElementById('customModel');
+        const keyEl = document.getElementById('customKey');
+        if (urlEl && savedKey.url) urlEl.value = savedKey.url;
+        if (modelEl && savedKey.model) modelEl.value = savedKey.model;
+        if (keyEl && savedKey.key) keyEl.value = savedKey.key;
+      }
+    } else {
+      /* standard API key provider */
+      const el = document.getElementById('apiKey');
+      if (el) el.value = savedKey;
+    }
+  }
 }
 
 /* ── build model step ── */
@@ -1633,6 +1859,311 @@ async function validateKey() {
   btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 7.5L5.5 11L12 3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg> Test';
 }
 
+/* ── settings dashboard ── */
+
+let dashboardConfig = {};
+
+function showDashboard(config) {
+  dashboardConfig = config || {};
+
+  /* hide wizard chrome */
+  document.getElementById('progressBar').style.display = 'none';
+  document.getElementById('reconfigBanner').classList.remove('show');
+
+  /* show dashboard step */
+  document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
+  document.getElementById('step-dashboard').classList.add('active');
+
+  /* populate provider dropdown */
+  const providerSel = document.getElementById('dfi-provider');
+  providerSel.innerHTML = '';
+  const categoryOrder = ['cloud', 'subscription', 'local', 'enterprise', 'custom'];
+  categoryOrder.forEach(cat => {
+    const providers = Object.entries(PROVIDERS).filter(([, p]) => p.category === cat);
+    if (!providers.length) return;
+    const group = document.createElement('optgroup');
+    group.label = CATEGORIES[cat].label;
+    providers.forEach(([id, p]) => {
+      const opt = document.createElement('option');
+      opt.value = id;
+      opt.textContent = p.name;
+      if (id === config.provider_type) opt.selected = true;
+      group.appendChild(opt);
+    });
+    providerSel.appendChild(group);
+  });
+
+  /* populate timezone dropdown for dashboard */
+  const tzSel = document.getElementById('dfi-timezone');
+  tzSel.innerHTML = '';
+  const commonTZdb = [
+    'UTC','America/New_York','America/Chicago','America/Denver','America/Los_Angeles',
+    'Europe/London','Europe/Paris','Europe/Berlin','Asia/Tokyo','Asia/Shanghai',
+    'Asia/Kolkata','Asia/Karachi','Australia/Sydney','Pacific/Auckland'
+  ];
+  try {
+    const all = Intl.supportedValuesOf('timeZone');
+    const saved = config.timezone || 'UTC';
+    const opts = [saved, ...commonTZdb.filter(t => t !== saved), '---', ...all.filter(t => !commonTZdb.includes(t) && t !== saved)];
+    opts.forEach(tz => {
+      if (tz === '---') { const o = document.createElement('option'); o.disabled = true; o.textContent = '\u2500\u2500\u2500'; tzSel.appendChild(o); return; }
+      const o = document.createElement('option');
+      o.value = tz; o.textContent = tz;
+      if (tz === (config.timezone || 'UTC')) o.selected = true;
+      tzSel.appendChild(o);
+    });
+  } catch(e) {
+    commonTZdb.forEach(tz => { const o = document.createElement('option'); o.value = tz; o.textContent = tz; if (tz === (config.timezone || 'UTC')) o.selected = true; tzSel.appendChild(o); });
+  }
+
+  /* populate model datalist for dashboard */
+  const pt = config.provider_type;
+  const provider = PROVIDERS[pt];
+  const dbDatalist = document.getElementById('dbModelSuggestions');
+  dbDatalist.innerHTML = '';
+  if (provider && provider.models) {
+    provider.models.forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m;
+      dbDatalist.appendChild(opt);
+    });
+  }
+  const modelInput = document.getElementById('dfi-model');
+  if (modelInput) modelInput.value = config.model || (provider && provider.defaultModel) || '';
+
+  /* set credential field label and placeholder based on provider type */
+  updateDashboardCredField(pt);
+
+  /* render current values */
+  renderDashboardValues(config);
+}
+
+function renderDashboardValues(config) {
+  const pt = config.provider_type;
+  const provider = PROVIDERS[pt];
+
+  /* provider */
+  const pfv = document.getElementById('dfv-provider');
+  if (pfv) pfv.textContent = provider ? `${provider.icon} ${provider.name}` : pt;
+
+  /* credentials */
+  const cfv = document.getElementById('dfv-cred');
+  if (cfv) {
+    if (pt === 'github-copilot') {
+      cfv.textContent = 'Device flow (no key)';
+      cfv.className = 'dashboard-field-value muted';
+      /* hide cred edit for github-copilot */
+      const editBtn = document.querySelector('#df-cred .dashboard-edit-btn');
+      if (editBtn) editBtn.style.display = 'none';
+    } else if (pt === 'claude-code') {
+      const tok = config.claude_setup_token;
+      cfv.textContent = tok ? tok : 'Not set';
+      cfv.className = 'dashboard-field-value' + (tok ? '' : ' muted');
+    } else if (pt === 'azure-openai') {
+      const k = config.azure_key;
+      cfv.textContent = k ? k : 'Not set';
+      cfv.className = 'dashboard-field-value' + (k ? '' : ' muted');
+    } else if (pt === 'custom') {
+      const u = config.custom_url;
+      cfv.textContent = u ? u : 'Not set';
+      cfv.className = 'dashboard-field-value' + (u ? '' : ' muted');
+    } else {
+      const k = config.api_key;
+      cfv.textContent = k ? k : 'Not set';
+      cfv.className = 'dashboard-field-value' + (k ? '' : ' muted');
+    }
+  }
+
+  /* model */
+  const mfv = document.getElementById('dfv-model');
+  if (mfv) mfv.textContent = config.model || (provider && provider.defaultModel) || 'default';
+
+  /* timezone */
+  const tfv = document.getElementById('dfv-timezone');
+  if (tfv) tfv.textContent = config.timezone || 'UTC';
+
+  /* telegram */
+  const tgfv = document.getElementById('dfv-telegram');
+  if (tgfv) {
+    const tg = config.telegram_bot_token;
+    if (tg) {
+      tgfv.textContent = 'Configured';
+      tgfv.className = 'dashboard-field-value ok';
+    } else {
+      tgfv.textContent = 'Not configured';
+      tgfv.className = 'dashboard-field-value muted';
+    }
+  }
+
+  /* auth token */
+  const afv = document.getElementById('dfv-authtoken');
+  if (afv) {
+    const at = config.web_auth_token;
+    afv.textContent = at ? at : 'Auto-generated';
+    afv.className = 'dashboard-field-value' + (at ? '' : ' muted');
+  }
+}
+
+function updateDashboardCredField(pt) {
+  const credInput = document.getElementById('dfi-cred');
+  if (!credInput) return;
+  if (pt === 'claude-code') {
+    credInput.placeholder = 'new Claude setup token (sk-ant-oat01-...)';
+    credInput.type = 'password';
+  } else if (pt === 'azure-openai') {
+    credInput.placeholder = 'new Azure API key (leave blank to keep current)';
+    credInput.type = 'password';
+  } else if (pt === 'custom') {
+    credInput.placeholder = 'new endpoint URL (leave blank to keep current)';
+    credInput.type = 'text';
+  } else if (pt === 'ollama' || pt === 'ramalama' || pt === 'lm-studio' || pt === 'docker-model-runner') {
+    credInput.placeholder = 'host URL (e.g. http://host.docker.internal:11434)';
+    credInput.type = 'text';
+  } else if (pt === 'github-copilot') {
+    credInput.placeholder = 'no credentials needed';
+    credInput.disabled = true;
+  } else {
+    const provider = PROVIDERS[pt];
+    credInput.placeholder = `new API key${provider && provider.keyPlaceholder ? ' (' + provider.keyPlaceholder + ')' : ''} — leave blank to keep current`;
+    credInput.type = 'password';
+    credInput.disabled = false;
+  }
+  /* auto-fill from savedKeys if available */
+  const saved = savedKeys[pt];
+  if (saved && typeof saved === 'string') {
+    credInput.value = '';  /* don't pre-fill masked value, let user enter new one */
+  }
+}
+
+function onDashboardProviderChange(newPt) {
+  updateDashboardCredField(newPt);
+  /* update model datalist */
+  const provider = PROVIDERS[newPt];
+  const dbDatalist = document.getElementById('dbModelSuggestions');
+  dbDatalist.innerHTML = '';
+  if (provider && provider.models) {
+    provider.models.forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m;
+      dbDatalist.appendChild(opt);
+    });
+  }
+  const modelInput = document.getElementById('dfi-model');
+  if (modelInput && provider) modelInput.value = provider.defaultModel || '';
+}
+
+function startDashboardEdit(field) {
+  const fieldEl = document.getElementById(`df-${field}`);
+  if (fieldEl) fieldEl.classList.add('editing');
+}
+
+async function saveDashboardChanges() {
+  const successEl = document.getElementById('dashboardSuccess');
+  if (successEl) successEl.classList.remove('show');
+
+  /* collect all current config, overriding with edited values */
+  const config = { ...dashboardConfig };
+
+  /* provider */
+  const providerField = document.getElementById('df-provider');
+  const newPt = document.getElementById('dfi-provider')?.value;
+  if (providerField && providerField.classList.contains('editing') && newPt) {
+    config.provider_type = newPt;
+  }
+
+  /* credentials */
+  const credField = document.getElementById('df-cred');
+  const newCred = document.getElementById('dfi-cred')?.value?.trim();
+  const pt = config.provider_type;
+  if (credField && credField.classList.contains('editing') && newCred) {
+    if (pt === 'claude-code') {
+      config.claude_setup_token = newCred;
+      savedKeys[pt] = newCred;
+    } else if (pt === 'ollama' || pt === 'ramalama' || pt === 'lm-studio' || pt === 'docker-model-runner') {
+      config.ollama_host = newCred;
+      savedKeys[pt] = newCred;
+    } else if (pt === 'azure-openai') {
+      config.azure_key = newCred;
+      if (!savedKeys[pt]) savedKeys[pt] = {};
+      savedKeys[pt].key = newCred;
+    } else if (pt === 'custom') {
+      config.custom_url = newCred;
+      if (!savedKeys[pt]) savedKeys[pt] = {};
+      savedKeys[pt].url = newCred;
+    } else {
+      config.api_key = newCred;
+      savedKeys[pt] = newCred;
+    }
+  }
+
+  /* model */
+  const modelField = document.getElementById('df-model');
+  const newModel = document.getElementById('dfi-model')?.value?.trim();
+  if (modelField && modelField.classList.contains('editing') && newModel) {
+    config.model = newModel;
+  }
+
+  /* timezone */
+  const tzField = document.getElementById('df-timezone');
+  const newTz = document.getElementById('dfi-timezone')?.value;
+  if (tzField && tzField.classList.contains('editing') && newTz) {
+    config.timezone = newTz;
+  }
+
+  /* telegram */
+  const tgField = document.getElementById('df-telegram');
+  const newTg = document.getElementById('dfi-telegram')?.value?.trim();
+  if (tgField && tgField.classList.contains('editing')) {
+    config.telegram_bot_token = newTg || config.telegram_bot_token || '';
+  }
+
+  /* auth token */
+  const atField = document.getElementById('df-authtoken');
+  const newAt = document.getElementById('dfi-authtoken')?.value?.trim();
+  if (atField && atField.classList.contains('editing') && newAt) {
+    config.web_auth_token = newAt;
+  }
+
+  /* persist saved keys */
+  config.saved_keys = savedKeys;
+
+  try {
+    const resp = await fetch('/api/setup/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    });
+    const data = await resp.json();
+    if (data.success) {
+      dashboardConfig = config;
+      /* collapse all editing fields */
+      document.querySelectorAll('.dashboard-field.editing').forEach(f => f.classList.remove('editing'));
+      /* update displayed values */
+      renderDashboardValues(config);
+      if (successEl) successEl.classList.add('show');
+      setTimeout(() => { if (successEl) successEl.classList.remove('show'); }, 4000);
+    } else {
+      alert('Save failed: ' + (data.error || 'unknown error'));
+    }
+  } catch(e) {
+    alert('Could not save configuration');
+  }
+}
+
+function switchToWizard() {
+  /* show wizard chrome */
+  document.getElementById('progressBar').style.display = '';
+  document.getElementById('reconfigBanner').classList.add('show');
+  /* activate wizard from step 0 */
+  document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
+  document.getElementById('step-0').classList.add('active');
+  /* pre-select current provider */
+  if (dashboardConfig.provider_type) {
+    selectProvider(dashboardConfig.provider_type);
+  }
+  goToStep(0);
+}
+
 /* ── save config ── */
 async function saveConfig() {
   const btn = document.getElementById('saveBtn');
@@ -1649,21 +2180,37 @@ async function saveConfig() {
   };
 
   if (selectedProvider === 'claude-code') {
-    config.claude_setup_token = document.getElementById('claudeToken')?.value || '';
+    const token = document.getElementById('claudeToken')?.value || '';
+    config.claude_setup_token = token;
+    if (token) savedKeys[selectedProvider] = token;
   } else if (selectedProvider === 'custom') {
-    config.custom_url = document.getElementById('customUrl')?.value || '';
-    config.custom_model = document.getElementById('customModel')?.value || 'gpt-4';
-    config.custom_key = document.getElementById('customKey')?.value || '';
+    const url = document.getElementById('customUrl')?.value || '';
+    const model = document.getElementById('customModel')?.value || 'gpt-4';
+    const key = document.getElementById('customKey')?.value || '';
+    config.custom_url = url;
+    config.custom_model = model;
+    config.custom_key = key;
+    if (url) savedKeys[selectedProvider] = { url, model, key };
   } else if (selectedProvider === 'ollama' || selectedProvider === 'ramalama' || selectedProvider === 'lm-studio' || selectedProvider === 'docker-model-runner') {
-    config.ollama_host = document.getElementById('ollamaHost')?.value || '';
+    const host = document.getElementById('ollamaHost')?.value || '';
+    config.ollama_host = host;
+    if (host) savedKeys[selectedProvider] = host;
   } else if (selectedProvider === 'azure-openai') {
-    config.azure_key = document.getElementById('azureKey')?.value || '';
-    config.azure_endpoint = document.getElementById('azureEndpoint')?.value || '';
+    const key = document.getElementById('azureKey')?.value || '';
+    const endpoint = document.getElementById('azureEndpoint')?.value || '';
+    config.azure_key = key;
+    config.azure_endpoint = endpoint;
+    if (key || endpoint) savedKeys[selectedProvider] = { key, endpoint };
   } else if (selectedProvider === 'github-copilot') {
     /* no credentials needed, device flow at runtime */
   } else {
-    config.api_key = document.getElementById('apiKey')?.value || '';
+    const key = document.getElementById('apiKey')?.value || '';
+    config.api_key = key;
+    if (key) savedKeys[selectedProvider] = key;
   }
+
+  /* persist saved_keys across provider switches */
+  config.saved_keys = savedKeys;
 
   try {
     const resp = await fetch('/api/setup/save', {

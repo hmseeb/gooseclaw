@@ -851,13 +851,24 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         setup = load_setup()
         if setup:
             safe = {**setup}
-            # mask secrets
+            # mask top-level secrets
             for key in ("api_key", "claude_setup_token", "custom_key", "web_auth_token"):
                 val = safe.get(key, "")
                 if val and len(val) > 12:
                     safe[key] = val[:6] + "..." + val[-4:]
                 elif val:
                     safe[key] = "***"
+            # mask values inside saved_keys dict
+            if "saved_keys" in safe and isinstance(safe["saved_keys"], dict):
+                masked_keys = {}
+                for provider_id, val in safe["saved_keys"].items():
+                    if isinstance(val, str) and len(val) > 12:
+                        masked_keys[provider_id] = val[:6] + "..." + val[-4:]
+                    elif isinstance(val, str) and val:
+                        masked_keys[provider_id] = "***"
+                    else:
+                        masked_keys[provider_id] = val
+                safe["saved_keys"] = masked_keys
             self.send_json(200, {"configured": True, "config": safe})
         else:
             self.send_json(200, {"configured": False})

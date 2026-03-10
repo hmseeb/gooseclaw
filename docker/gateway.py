@@ -87,11 +87,45 @@ GOOSE_WEB_PORT = 3001
 goose_process = None
 goose_lock = threading.Lock()
 telegram_process = None
+telegram_lock = threading.Lock()
 telegram_pair_code = None
 telegram_pair_lock = threading.Lock()
 
 # internal token used for gateway -> goose web communication (never exposed to users)
 _INTERNAL_GOOSE_TOKEN = None
+
+
+# ── PID file management ──────────────────────────────────────────────────────
+
+def _write_pid(name, pid):
+    """Write a PID file for a managed subprocess."""
+    try:
+        with open(os.path.join(CONFIG_DIR, f"{name}.pid"), "w") as f:
+            f.write(str(pid))
+    except Exception:
+        pass
+
+
+def _remove_pid(name):
+    """Remove a PID file for a managed subprocess."""
+    try:
+        os.unlink(os.path.join(CONFIG_DIR, f"{name}.pid"))
+    except OSError:
+        pass
+
+
+def _check_stale_pid(name):
+    """Check if a PID file exists for a dead process and clean it up."""
+    pid_file = os.path.join(CONFIG_DIR, f"{name}.pid")
+    if os.path.exists(pid_file):
+        try:
+            with open(pid_file) as f:
+                pid = int(f.read().strip())
+            os.kill(pid, 0)  # check if process exists (raises if not)
+        except (ProcessLookupError, ValueError):
+            _remove_pid(name)
+        except PermissionError:
+            pass  # process exists but we can't signal it
 
 
 # ── auth token hashing ───────────────────────────────────────────────────────
@@ -855,10 +889,11 @@ def start_telegram_gateway(bot_token):
     """Start the telegram gateway process if not already running."""
     global telegram_process
 
-    # check our tracked process first
-    if telegram_process and telegram_process.poll() is None:
-        print("[gateway] telegram gateway already running (tracked pid)")
-        return
+    with telegram_lock:
+        # check our tracked process first
+        if telegram_process and telegram_process.poll() is None:
+            print("[gateway] telegram gateway already running (tracked pid)")
+            return
 
     # check for any goose gateway process (may have been started by entrypoint or previous run)
     running, pids = _is_goose_gateway_running()
@@ -866,12 +901,16 @@ def start_telegram_gateway(bot_token):
         print(f"[gateway] telegram gateway already running (external pids: {pids})")
         return
 
+    _check_stale_pid("telegram")
     print("[gateway] starting telegram gateway...")
     try:
-        telegram_process = subprocess.Popen(
+        proc = subprocess.Popen(
             ["goose", "gateway", "start", "--bot-token", bot_token, "telegram"],
             stdout=sys.stdout, stderr=sys.stderr
         )
+        with telegram_lock:
+            telegram_process = proc
+        _write_pid("telegram", proc.pid)
         # generate pairing code after gateway has time to initialize
         def _delayed_pair():
             time.sleep(8)
@@ -883,6 +922,7 @@ def start_telegram_gateway(bot_token):
 
 def start_goose_web():
     global goose_process, _INTERNAL_GOOSE_TOKEN
+    _check_stale_pid("goose_web")
     with goose_lock:
         if goose_process and goose_process.poll() is None:
             goose_process.terminate()
@@ -902,6 +942,7 @@ def start_goose_web():
         print(f"[gateway] starting goose web on 127.0.0.1:{GOOSE_WEB_PORT}")
         print(f"[gateway] cmd: goose web --host 127.0.0.1 --port {GOOSE_WEB_PORT} --auth-token [internal]")
         goose_process = subprocess.Popen(cmd, stdout=sys.stdout, stderr=sys.stderr)
+        _write_pid("goose_web", goose_process.pid)
 
         # wait for it to listen
         for _ in range(30):
@@ -931,6 +972,52 @@ def stop_goose_web():
             except subprocess.TimeoutExpired:
                 goose_process.kill()
         goose_process = None
+    _remove_pid("goose_web")
+
+
+def goose_health_monitor():
+    """Monitor goose web subprocess and auto-restart on crash with backoff."""
+    backoff = 5  # initial backoff seconds
+    max_backoff = 120
+    consecutive_failures = 0
+
+    while True:
+        time.sleep(15)  # check every 15 seconds
+        if not is_configured():
+            continue
+
+        with goose_lock:
+            proc = goose_process
+        if proc is None:
+            continue
+
+        if proc.poll() is not None:
+            # process has exited
+            exit_code = proc.returncode
+            consecutive_failures += 1
+            wait_time = min(backoff * (2 ** (consecutive_failures - 1)), max_backoff)
+            print(f"[health] goose web exited (code {exit_code}). "
+                  f"Restart #{consecutive_failures} in {wait_time}s...")
+            _remove_pid("goose_web")
+            time.sleep(wait_time)
+            try:
+                start_goose_web()
+                print(f"[health] goose web restarted after failure #{consecutive_failures}")
+            except Exception as e:
+                print(f"[health] restart failed: {e}")
+        else:
+            # process is running, reset backoff on sustained health
+            if consecutive_failures > 0:
+                # verify it's actually responding
+                try:
+                    conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=3)
+                    conn.request("GET", "/api/health")
+                    resp = conn.getresponse()
+                    conn.close()
+                    if resp.status == 200:
+                        consecutive_failures = 0
+                except Exception:
+                    pass  # will catch on next cycle if it dies
 
 
 # ── HTTP handler ────────────────────────────────────────────────────────────
@@ -1262,7 +1349,9 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             return
         token = get_bot_token()
         running = False
-        if telegram_process and telegram_process.poll() is None:
+        with telegram_lock:
+            tproc = telegram_process
+        if tproc and tproc.poll() is None:
             running = True
         else:
             ext_running, _ = _is_goose_gateway_running()
@@ -1293,7 +1382,9 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
 
         # check if telegram is running
         running = False
-        if telegram_process and telegram_process.poll() is None:
+        with telegram_lock:
+            tproc = telegram_process
+        if tproc and tproc.poll() is None:
             running = True
         else:
             ext_running, _ = _is_goose_gateway_running()
@@ -1326,7 +1417,9 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             return
 
-        if goose_process is None or goose_process.poll() is not None:
+        with goose_lock:
+            gproc = goose_process
+        if gproc is None or gproc.poll() is not None:
             self.send_response(503)
             self.send_header("Content-Type", "text/plain")
             body = b"Agent is starting up. Refresh in a few seconds."
@@ -1449,6 +1542,10 @@ def main():
             apply_config(setup)
         print("[gateway] provider configured. starting goose web...")
         start_goose_web()
+
+        # start health monitor to auto-restart goose web on crash
+        health_thread = threading.Thread(target=goose_health_monitor, daemon=True)
+        health_thread.start()
 
         # start telegram if token is available but apply_config didn't handle it
         # (env-var-only deployments without setup.json)

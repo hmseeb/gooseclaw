@@ -10,9 +10,9 @@ See: .planning/PROJECT.md (updated 2026-03-10)
 ## Current Position
 
 Phase: 5 of 5 (Production Hardening -- Security, Reliability, Deployment Quality)
-Plan: 4 of 6 in current phase (05-01 complete)
+Plan: 5 of 6 in current phase (05-01, 05-04 complete)
 Status: In progress
-Last activity: 2026-03-11 -- Completed 05-01 (CORS hardening, first-boot lockdown, credential masking, notify auth)
+Last activity: 2026-03-11 -- Completed 05-04 (rate limiting, config validation, deep health check)
 
 Progress: [#########.] 90%
 
@@ -63,6 +63,9 @@ Recent decisions affecting current work:
 - 05-01: Dual credential masking -- "********" placeholder (typeof still string) plus boolean _set fields for frontend
 - 05-01: _is_first_boot() guards all non-setup API endpoints before configuration is complete
 - 05-01: telegram_bot_token removed from config response; only boolean telegram_bot_token_set exposed
+- 05-04: Three rate limiter tiers: api (60/min), auth (5/min), notify (10/min); sliding window, stdlib only
+- 05-04: /api/health returns 200 for setup_required (unconfigured) to avoid Railway restart loops; only 503 when goose web dies after config
+- 05-04: validate_setup_config skips credential check for local providers (ollama, lm-studio, docker-model-runner, ramalama)
 
 ### Pending Todos
 
@@ -86,5 +89,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-03-11
-Stopped at: Completed 05-01 -- CORS hardening, first-boot lockdown, credential masking, notify auth
+Stopped at: Completed 05-04 -- rate limiting, config schema validation, deep health check
 Resume file: None

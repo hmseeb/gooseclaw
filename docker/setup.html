@@ -964,7 +964,7 @@ body::after {
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 7.5L5.5 11L12 3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
           Test
         </button>
-        <button class="btn btn-primary" onclick="goToStep(2)">
+        <button class="btn btn-primary" onclick="advanceFromCredentials()">
           Continue
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5.5 3L9.5 7L5.5 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
@@ -1004,8 +1004,9 @@ body::after {
     </div>
     <div class="field">
       <label>Telegram Bot Token</label>
-      <input type="text" id="telegramToken" placeholder="paste token from @BotFather">
+      <input type="text" id="telegramToken" placeholder="paste token from @BotFather" onblur="validateTelegramFormat(this)">
       <div class="field-hint">skip if you only want the web UI</div>
+      <div id="telegramFormatError" style="display:none;font-size:12px;color:var(--error);margin-top:4px"></div>
       <div class="botfather-instructions">
         <div class="bf-title">How to create a Telegram bot</div>
         <ol>
@@ -1037,12 +1038,15 @@ body::after {
   <div class="step" id="step-4">
     <div class="step-title">Review Configuration</div>
     <div id="configSummary"></div>
+    <div id="validationGateNote" style="font-size:12px;color:var(--text-tertiary);margin-top:8px;text-align:right;display:none">
+      Test your credentials before saving (go back to step 2).
+    </div>
     <div class="btn-row">
       <button class="btn btn-ghost" onclick="goToStep(3)">
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M8.5 3L4.5 7L8.5 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
         Back
       </button>
-      <button class="btn btn-primary" id="saveBtn" onclick="saveConfig()">
+      <button class="btn btn-primary" id="saveBtn" onclick="saveConfig()" disabled>
         Save &amp; Start Agent
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5.5 3L9.5 7L5.5 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
@@ -1157,6 +1161,71 @@ let selectedProvider = '';
 let isReconfigure = false;
 let savedKeys = {};
 let savedKeysSet = {};
+let validationPassed = false;
+
+/* ── per-provider format hints ── */
+function getFormatHint(providerId) {
+  const hints = {
+    'anthropic':           "Starts with 'sk-ant-'",
+    'openai':              "Starts with 'sk-'",
+    'google':              "Starts with 'AI'",
+    'groq':                "Starts with 'gsk_'",
+    'openrouter':          "Starts with 'sk-or-'",
+    'mistral':             "No specific format",
+    'xai':                 "Starts with 'xai-'",
+    'deepseek':            "Starts with 'sk-'",
+    'together':            "No specific format",
+    'cerebras':            "Starts with 'csk-'",
+    'perplexity':          "Starts with 'pplx-'",
+    'avian':               "Starts with 'avian-'",
+    'venice':              "No specific format",
+    'ovhcloud':            "Token from OVH AI Endpoints dashboard",
+    'litellm':             "Optional — depends on your proxy config",
+    'claude-code':         "Run `claude setup-token` locally",
+    'github-copilot':      "No key needed",
+    'ollama':              "URL format (http://...)",
+    'lm-studio':           "URL format (http://...)",
+    'docker-model-runner': "URL format (http://...)",
+    'ramalama':            "URL format (http://...)",
+  };
+  return hints[providerId] || "No specific format";
+}
+
+/* ── client-side format validation ── */
+function validateFormat(providerId, value) {
+  const localProviders = ['ollama', 'lm-studio', 'docker-model-runner', 'ramalama'];
+  if (localProviders.includes(providerId)) {
+    if (!value || (!value.startsWith('http://') && !value.startsWith('https://'))) {
+      return { valid: false, error: 'Host URL must start with http:// or https://' };
+    }
+    return { valid: true };
+  }
+  if (providerId === 'claude-code') {
+    if (!value) return { valid: false, error: 'Setup token is required' };
+    return { valid: true };
+  }
+  if (providerId === 'github-copilot') {
+    return { valid: true };
+  }
+  if (providerId === 'azure-openai') {
+    if (!value) return { valid: false, error: 'API key is required' };
+    return { valid: true };
+  }
+  /* telegram token special-case */
+  if (providerId === 'telegram') {
+    const re = /^\d+:[A-Za-z0-9_-]+$/;
+    if (!re.test(value)) return { valid: false, error: "Token must match format: digits:alphanumeric (e.g. 123456:ABC-DEF)" };
+    return { valid: true };
+  }
+  /* standard API key providers with known prefixes */
+  const provider = PROVIDERS[providerId];
+  if (provider && provider.keyPrefix && value) {
+    if (!value.startsWith(provider.keyPrefix)) {
+      return { valid: true, warning: `Key doesn't match expected format (should start with '${provider.keyPrefix}')` };
+    }
+  }
+  return { valid: true };
+}
 
 /* ── provider data registry ── */
 const PROVIDERS = {
@@ -1562,7 +1631,9 @@ function selectProvider(id) {
   const card = document.querySelector(`[data-provider="${id}"]`);
   if (card) card.classList.add('selected');
   selectedProvider = id;
+  validationPassed = false;
   buildCredFields();
+  updateSaveBtn();
 }
 
 /* ── build credential fields ── */
@@ -1586,6 +1657,7 @@ function buildCredFields() {
           Requires an active Claude Pro/Team subscription.
           <br><a href="https://claude.ai/settings" target="_blank" rel="noopener">claude.ai/settings</a>
         </div>
+        <div class="field-hint format-hint">${getFormatHint('claude-code')}</div>
       </div>`;
 
   } else if (selectedProvider === 'github-copilot') {
@@ -1596,6 +1668,7 @@ function buildCredFields() {
           When goose starts, it will prompt you to authenticate via browser.<br><br>
           Requires an active <a href="https://github.com/settings/copilot" target="_blank" rel="noopener">GitHub Copilot subscription</a>.
         </div>
+        <div class="field-hint format-hint">${getFormatHint('github-copilot')}</div>
       </div>`;
 
   } else if (selectedProvider === 'ollama' || selectedProvider === 'ramalama') {
@@ -1610,6 +1683,7 @@ function buildCredFields() {
           If running on the Docker host, use <code>host.docker.internal</code>.
           <br>Models must be pre-pulled locally with <code>ollama pull &lt;model&gt;</code>
         </div>
+        <div class="field-hint format-hint">${getFormatHint(selectedProvider)}</div>
       </div>`;
 
   } else if (selectedProvider === 'lm-studio' || selectedProvider === 'docker-model-runner') {
@@ -1625,6 +1699,7 @@ function buildCredFields() {
           ${name} must be running and accessible from this container.
           If running on the Docker host, use <code>host.docker.internal</code>.
         </div>
+        <div class="field-hint format-hint">${getFormatHint(selectedProvider)}</div>
       </div>`;
 
   } else if (selectedProvider === 'azure-openai') {
@@ -1669,6 +1744,7 @@ function buildCredFields() {
         <div class="field-hint">
           Get your API key at <a href="${provider.keyUrl}" target="_blank" rel="noopener">${provider.keyUrl}</a>${prefixHint}
         </div>
+        <div class="field-hint format-hint">${getFormatHint(selectedProvider)}</div>
       </div>`;
   }
 
@@ -1865,7 +1941,7 @@ function goToStep(n) {
 
   /* populate dynamic content for specific steps */
   if (n === 2) buildModelStep();
-  if (n === 4) buildSummary();
+  if (n === 4) { buildSummary(); updateSaveBtn(); }
 
   /* update progress indicators for steps 0-4 */
   for (let i = 0; i <= 4; i++) {
@@ -1937,7 +2013,13 @@ async function validateKey() {
     });
     const data = await resp.json();
     if (data.valid) {
+      validationPassed = true;
+      updateSaveBtn();
       showAlert('success', data.note || '\u2713 connection successful');
+    } else if (data.skip_validation) {
+      validationPassed = true;
+      updateSaveBtn();
+      showAlert('info', data.note || '\u2713 no validation needed for this provider');
     } else {
       showAlert('error', data.error || 'validation failed');
     }
@@ -1947,6 +2029,127 @@ async function validateKey() {
 
   btn.disabled = false;
   btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 7.5L5.5 11L12 3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg> Test';
+}
+
+/* ── update save button state based on validationPassed ── */
+function updateSaveBtn() {
+  const btn = document.getElementById('saveBtn');
+  const note = document.getElementById('validationGateNote');
+  if (!btn) return;
+  btn.disabled = !validationPassed;
+  if (note) note.style.display = validationPassed ? 'none' : '';
+}
+
+/* ── advance from credentials step with empty-field check ── */
+function advanceFromCredentials() {
+  const localProviders = ['ollama', 'lm-studio', 'docker-model-runner', 'ramalama'];
+
+  /* github-copilot needs no key — auto-pass validation */
+  if (selectedProvider === 'github-copilot') {
+    validationPassed = true;
+    updateSaveBtn();
+    goToStep(2);
+    return;
+  }
+
+  /* local providers: validate host URL format */
+  if (localProviders.includes(selectedProvider)) {
+    const host = document.getElementById('ollamaHost')?.value?.trim() || '';
+    const fmt = validateFormat(selectedProvider, host);
+    if (!fmt.valid) {
+      showAlert('error', fmt.error);
+      return;
+    }
+    /* local providers with a valid host: auto-pass validation */
+    validationPassed = true;
+    updateSaveBtn();
+    goToStep(2);
+    return;
+  }
+
+  /* claude-code: token is required */
+  if (selectedProvider === 'claude-code') {
+    const token = document.getElementById('claudeToken')?.value?.trim() || '';
+    if (!token) {
+      showAlert('error', 'Claude setup token is required');
+      return;
+    }
+    goToStep(2);
+    return;
+  }
+
+  /* azure-openai: both key and endpoint required */
+  if (selectedProvider === 'azure-openai') {
+    const key = document.getElementById('azureKey')?.value?.trim() || '';
+    const endpoint = document.getElementById('azureEndpoint')?.value?.trim() || '';
+    if (!key) {
+      showAlert('error', 'Azure OpenAI API key is required');
+      return;
+    }
+    if (!endpoint) {
+      showAlert('error', 'Azure OpenAI endpoint is required');
+      return;
+    }
+    if (!endpoint.startsWith('https://')) {
+      showAlert('error', 'Azure endpoint must start with https://');
+      return;
+    }
+    goToStep(2);
+    return;
+  }
+
+  /* custom endpoint: URL required */
+  if (selectedProvider === 'custom') {
+    const url = document.getElementById('customUrl')?.value?.trim() || '';
+    if (!url) {
+      showAlert('error', 'API endpoint URL is required');
+      return;
+    }
+    goToStep(2);
+    return;
+  }
+
+  /* standard API key provider */
+  const apiKey = document.getElementById('apiKey')?.value?.trim() || '';
+  if (!apiKey) {
+    /* allow skipping if reconfiguring and key is already set */
+    if (isReconfigure && savedKeysSet[selectedProvider]) {
+      validationPassed = true;
+      updateSaveBtn();
+      goToStep(2);
+      return;
+    }
+    showAlert('error', 'API key is required');
+    return;
+  }
+
+  /* warn about prefix mismatch but don't block */
+  const fmt = validateFormat(selectedProvider, apiKey);
+  if (fmt.warning) {
+    showAlert('info', fmt.warning);
+  }
+
+  goToStep(2);
+}
+
+/* ── telegram token format validation on blur ── */
+function validateTelegramFormat(input) {
+  const errEl = document.getElementById('telegramFormatError');
+  if (!errEl) return;
+  const val = input.value.trim();
+  if (!val) {
+    errEl.style.display = 'none';
+    errEl.textContent = '';
+    return;
+  }
+  const re = /^\d+:[A-Za-z0-9_-]+$/;
+  if (!re.test(val)) {
+    errEl.textContent = 'Invalid format. Expected: digits:alphanumeric (e.g. 123456:ABC-DEF1234)';
+    errEl.style.display = '';
+  } else {
+    errEl.style.display = 'none';
+    errEl.textContent = '';
+  }
 }
 
 /* ── clipboard helpers ── */

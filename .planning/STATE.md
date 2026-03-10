@@ -10,9 +10,9 @@ See: .planning/PROJECT.md (updated 2026-03-10)
 ## Current Position
 
 Phase: 5 of 5 (Production Hardening -- Security, Reliability, Deployment Quality)
-Plan: 5 of 6 in current phase (05-01, 05-04 complete)
+Plan: 6 of 6 in current phase (05-01, 05-04, 05-05 complete)
 Status: In progress
-Last activity: 2026-03-11 -- Completed 05-04 (rate limiting, config validation, deep health check)
+Last activity: 2026-03-11 -- Completed 05-05 (crash recovery, thread safety, atomic writes, proxy timeout, graceful shutdown)
 
 Progress: [#########.] 90%
 
@@ -35,6 +35,7 @@ Progress: [#########.] 90%
 
 *Updated after each plan completion*
 | Phase 05 P02 | 6 | 2 tasks | 3 files |
+| Phase 05 P05 | 3 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -66,6 +67,9 @@ Recent decisions affecting current work:
 - 05-04: Three rate limiter tiers: api (60/min), auth (5/min), notify (10/min); sliding window, stdlib only
 - 05-04: /api/health returns 200 for setup_required (unconfigured) to avoid Railway restart loops; only 503 when goose web dies after config
 - 05-04: validate_setup_config skips credential check for local providers (ollama, lm-studio, docker-model-runner, ramalama)
+- [Phase 05]: goose_health_monitor runs as daemon thread checking every 15s; backoff doubles per failure capped at 120s
+- [Phase 05]: os.replace() atomic write for setup.json; .tmp + rename prevents corruption; .bak backup before overwrite
+- [Phase 05]: PROXY_TIMEOUT defaults 60s (was 300s); SSE connections exempt from timeout; entrypoint waits for gateway on SIGTERM
 
 ### Pending Todos
 
@@ -89,5 +93,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-03-11
-Stopped at: Completed 05-04 -- rate limiting, config schema validation, deep health check
+Stopped at: Completed 05-05 -- crash recovery, thread safety, atomic writes, proxy timeout, graceful shutdown
 Resume file: None

@@ -97,7 +97,7 @@ Plans:
   8. Config writes are atomic (no corruption on power loss)
   9. All responses include security headers (CSP, X-Frame-Options, etc.)
   10. Structured request logging with timestamps and duration
-**Plans:** 2/6 plans executed
+**Plans:** 3/6 plans executed
 
 Plans:
 - [ ] 05-01-PLAN.md -- CORS lockdown, first-boot API lockdown, credential masking, notify auth
@@ -120,4 +120,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 2. Validation and Env Plumbing | 0/3 | Not started | - |
 | 3. Gateway Resilience and Live Feedback | 0/2 | Not started | - |
 | 4. Advanced Multi-Model Settings | 0/1 | Not started | - |
-| 5. Production Hardening | 2/6 | In Progress|  |
+| 5. Production Hardening | 3/6 | In Progress|  |

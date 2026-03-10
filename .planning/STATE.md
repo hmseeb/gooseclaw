@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-03-10)
 ## Current Position
 
 Phase: 5 of 5 (Production Hardening -- Security, Reliability, Deployment Quality)
-Plan: 3 of 6 in current phase (05-02 complete, resuming from 05-04)
+Plan: 4 of 6 in current phase (05-01 complete)
 Status: In progress
-Last activity: 2026-03-11 -- Completed 05-02 (Docker build optimization: .dockerignore, labels, healthcheck, non-root user, requirements.txt)
+Last activity: 2026-03-11 -- Completed 05-01 (CORS hardening, first-boot lockdown, credential masking, notify auth)
 
-Progress: [#########.] 87%
+Progress: [#########.] 90%
 
 ## Performance Metrics
 
@@ -59,6 +59,10 @@ Recent decisions affecting current work:
 - 05-03: gateway-owns-all-auth: goose web subprocess gets random internal token; gateway verifies users against hash, proxies with internal token
 - [Phase 05-02]: Keep apt-based python3-yaml; requirements.txt as version documentation and pip alternative
 - [Phase 05-02]: Container runs root by default; non-root gooseclaw user created for optional --user override
+- 05-01: Origin-aware CORS echoes same-host origin only; cross-origin requests receive no CORS header (browser blocks)
+- 05-01: Dual credential masking -- "********" placeholder (typeof still string) plus boolean _set fields for frontend
+- 05-01: _is_first_boot() guards all non-setup API endpoints before configuration is complete
+- 05-01: telegram_bot_token removed from config response; only boolean telegram_bot_token_set exposed
 
 ### Pending Todos
 
@@ -82,5 +86,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-03-11
-Stopped at: Completed 05-02 -- .dockerignore, Dockerfile labels/healthcheck/user, docker/requirements.txt
+Stopped at: Completed 05-01 -- CORS hardening, first-boot lockdown, credential masking, notify auth
 Resume file: None

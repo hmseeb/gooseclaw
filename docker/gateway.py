@@ -174,6 +174,11 @@ def _setup_claude_cli():
     """Install claude CLI and create config if needed (for claude-code provider)."""
     home = os.environ.get("HOME", "/root")
 
+    # ensure ~/.local/bin is in PATH
+    local_bin = os.path.join(home, ".local", "bin")
+    if local_bin not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = f"{local_bin}:{os.environ.get('PATH', '')}"
+
     # check if already installed
     if subprocess.run(["which", "claude"], capture_output=True).returncode == 0:
         print("[gateway] claude CLI already installed")
@@ -255,6 +260,17 @@ def apply_config(config):
         }
         os.environ[env_map[provider_type]] = api_key
         lines.append(f"GOOSE_PROVIDER: {provider_type}")
+
+    # default models per provider if none specified
+    if not model:
+        default_models = {
+            "anthropic": "claude-sonnet-4-20250514",
+            "openrouter": "anthropic/claude-sonnet-4-20250514",
+            "openai": "gpt-4o",
+            "google": "gemini-2.0-flash",
+            "groq": "llama-3.3-70b-versatile",
+        }
+        model = default_models.get(provider_type, "")
 
     if model:
         lines.append(f"GOOSE_MODEL: {model}")

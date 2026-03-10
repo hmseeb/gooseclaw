@@ -14,6 +14,9 @@ HOME_DIR="${HOME:-/root}"
 
 export APP_DIR DATA_DIR CONFIG_DIR IDENTITY_DIR
 
+# ensure ~/.local/bin is in PATH (claude CLI installs there)
+export PATH="$HOME_DIR/.local/bin:$PATH"
+
 # ─── first boot: copy template files to volume ─────────────────────────────
 
 if [ ! -f "$DATA_DIR/.initialized" ]; then

@@ -42,6 +42,7 @@ GOOSE_WEB_PORT = 3001
 
 goose_process = None
 goose_lock = threading.Lock()
+telegram_process = None
 
 
 # ── provider registry ────────────────────────────────────────────────────────
@@ -673,10 +674,48 @@ def apply_config(config):
     with open(config_path, "w") as f:
         f.write("\n".join(lines) + "\n")
 
-    # telegram
+    # telegram — set env var AND start gateway if not already running
     tg_token = config.get("telegram_bot_token", "")
     if tg_token:
         os.environ["TELEGRAM_BOT_TOKEN"] = tg_token
+        start_telegram_gateway(tg_token)
+
+
+def start_telegram_gateway(bot_token):
+    """Start the telegram gateway process if not already running."""
+    global telegram_process
+    if telegram_process and telegram_process.poll() is None:
+        print("[gateway] telegram gateway already running")
+        return
+
+    print("[gateway] starting telegram gateway...")
+    try:
+        telegram_process = subprocess.Popen(
+            ["goose", "gateway", "start", "--bot-token", bot_token, "telegram"],
+            stdout=sys.stdout, stderr=sys.stderr
+        )
+        # generate pairing code after a short delay
+        def generate_pair_code():
+            import time
+            time.sleep(8)
+            try:
+                result = subprocess.run(
+                    ["goose", "gateway", "pair", "telegram"],
+                    capture_output=True, text=True, timeout=10
+                )
+                output = result.stdout + result.stderr
+                import re
+                match = re.search(r'[A-Z0-9]{6}', output)
+                if match:
+                    print(f"[gateway] telegram pairing code: {match.group()}")
+                else:
+                    print(f"[gateway] telegram pair output: {output.strip()}")
+            except Exception as e:
+                print(f"[gateway] could not generate pair code: {e}")
+
+        threading.Thread(target=generate_pair_code, daemon=True).start()
+    except Exception as e:
+        print(f"[gateway] failed to start telegram: {e}")
 
 
 def start_goose_web():
@@ -1018,6 +1057,8 @@ def main():
     def shutdown(_sig, _frame):
         print("[gateway] shutting down...")
         stop_goose_web()
+        if telegram_process and telegram_process.poll() is None:
+            telegram_process.terminate()
         threading.Thread(target=server.shutdown, daemon=True).start()
 
     signal.signal(signal.SIGTERM, shutdown)

@@ -12,6 +12,8 @@ API:
   POST /api/setup/save       -> save provider config and restart
   POST /api/notify           -> send message to all paired telegram users
   GET  /api/notify/status    -> check if telegram delivery is available
+  GET  /api/telegram/status  -> telegram gateway status, paired users, pairing code
+  POST /api/telegram/pair    -> generate a new telegram pairing code
 """
 
 import base64
@@ -43,6 +45,8 @@ GOOSE_WEB_PORT = 3001
 goose_process = None
 goose_lock = threading.Lock()
 telegram_process = None
+telegram_pair_code = None
+telegram_pair_lock = threading.Lock()
 
 
 # ── provider registry ────────────────────────────────────────────────────────
@@ -681,11 +685,56 @@ def apply_config(config):
         start_telegram_gateway(tg_token)
 
 
+def _is_goose_gateway_running():
+    """Check if a goose gateway process is already running (from entrypoint or previous start)."""
+    try:
+        result = subprocess.run(
+            ["pgrep", "-f", "goose gateway start.*telegram"],
+            capture_output=True, text=True, timeout=5
+        )
+        pids = [p.strip() for p in result.stdout.strip().split("\n") if p.strip()]
+        return len(pids) > 0, pids
+    except Exception:
+        return False, []
+
+
+def _generate_and_store_pair_code():
+    """Generate a telegram pairing code and store it in the global."""
+    global telegram_pair_code
+    try:
+        result = subprocess.run(
+            ["goose", "gateway", "pair", "telegram"],
+            capture_output=True, text=True, timeout=10
+        )
+        output = result.stdout + result.stderr
+        import re
+        match = re.search(r'[A-Z0-9]{6}', output)
+        if match:
+            code = match.group()
+            with telegram_pair_lock:
+                telegram_pair_code = code
+            print(f"[gateway] telegram pairing code: {code}")
+            return code
+        else:
+            print(f"[gateway] telegram pair output: {output.strip()}")
+    except Exception as e:
+        print(f"[gateway] could not generate pair code: {e}")
+    return None
+
+
 def start_telegram_gateway(bot_token):
     """Start the telegram gateway process if not already running."""
     global telegram_process
+
+    # check our tracked process first
     if telegram_process and telegram_process.poll() is None:
-        print("[gateway] telegram gateway already running")
+        print("[gateway] telegram gateway already running (tracked pid)")
+        return
+
+    # check for any goose gateway process (may have been started by entrypoint or previous run)
+    running, pids = _is_goose_gateway_running()
+    if running:
+        print(f"[gateway] telegram gateway already running (external pids: {pids})")
         return
 
     print("[gateway] starting telegram gateway...")
@@ -694,26 +743,11 @@ def start_telegram_gateway(bot_token):
             ["goose", "gateway", "start", "--bot-token", bot_token, "telegram"],
             stdout=sys.stdout, stderr=sys.stderr
         )
-        # generate pairing code after a short delay
-        def generate_pair_code():
-            import time
+        # generate pairing code after gateway has time to initialize
+        def _delayed_pair():
             time.sleep(8)
-            try:
-                result = subprocess.run(
-                    ["goose", "gateway", "pair", "telegram"],
-                    capture_output=True, text=True, timeout=10
-                )
-                output = result.stdout + result.stderr
-                import re
-                match = re.search(r'[A-Z0-9]{6}', output)
-                if match:
-                    print(f"[gateway] telegram pairing code: {match.group()}")
-                else:
-                    print(f"[gateway] telegram pair output: {output.strip()}")
-            except Exception as e:
-                print(f"[gateway] could not generate pair code: {e}")
-
-        threading.Thread(target=generate_pair_code, daemon=True).start()
+            _generate_and_store_pair_code()
+        threading.Thread(target=_delayed_pair, daemon=True).start()
     except Exception as e:
         print(f"[gateway] failed to start telegram: {e}")
 
@@ -790,6 +824,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.handle_get_config()
         elif path == "/api/notify/status":
             self.handle_notify_status()
+        elif path == "/api/telegram/status":
+            self.handle_telegram_status()
         elif not is_configured():
             self.send_response(302)
             self.send_header("Location", "/setup")
@@ -805,6 +841,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.handle_validate()
         elif path == "/api/notify":
             self.handle_notify()
+        elif path == "/api/telegram/pair":
+            self.handle_telegram_pair()
         else:
             self.proxy_to_goose()
 
@@ -945,6 +983,63 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             "paired_users": len(chat_ids),
         })
 
+    # ── telegram pairing endpoints ──
+
+    def handle_telegram_status(self):
+        """GET /api/telegram/status — telegram gateway status, paired users, pairing code."""
+        token = get_bot_token()
+        running = False
+        if telegram_process and telegram_process.poll() is None:
+            running = True
+        else:
+            ext_running, _ = _is_goose_gateway_running()
+            running = ext_running
+
+        chat_ids = get_paired_chat_ids()
+        with telegram_pair_lock:
+            code = telegram_pair_code
+
+        self.send_json(200, {
+            "running": running,
+            "bot_configured": bool(token),
+            "paired_users": len(chat_ids),
+            "paired_chat_ids": chat_ids,
+            "pairing_code": code,
+        })
+
+    def handle_telegram_pair(self):
+        """POST /api/telegram/pair — generate a new pairing code."""
+        if load_setup() and not check_auth(self):
+            self.send_response(401)
+            self.end_headers()
+            return
+
+        # check if telegram is running
+        running = False
+        if telegram_process and telegram_process.poll() is None:
+            running = True
+        else:
+            ext_running, _ = _is_goose_gateway_running()
+            running = ext_running
+
+        if not running:
+            # try to start telegram first
+            token = get_bot_token()
+            if token:
+                start_telegram_gateway(token)
+                # wait for it to initialize
+                time.sleep(10)
+            else:
+                self.send_json(400, {"error": "no telegram bot token configured", "code": None})
+                return
+
+        # generate new code
+        code = _generate_and_store_pair_code()
+        if code:
+            self.send_json(200, {"code": code, "message": "send this code to your telegram bot"})
+        else:
+            self.send_json(500, {"error": "could not generate pairing code. check logs.", "code": None})
+
     # ── reverse proxy to goose web ──
 
     def proxy_to_goose(self):
@@ -1060,6 +1155,12 @@ def main():
             apply_config(setup)
         print("[gateway] provider configured. starting goose web...")
         start_goose_web()
+
+        # start telegram if token is available but apply_config didn't handle it
+        # (env-var-only deployments without setup.json)
+        tg_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+        if tg_token:
+            start_telegram_gateway(tg_token)
     else:
         print("[gateway] no provider configured. serving setup wizard.")
 

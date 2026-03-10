@@ -771,6 +771,18 @@ body::after {
   transition: all 0.2s;
   flex-shrink: 0;
 }
+.pair-code-display {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 18px;
+  letter-spacing: 3px;
+  color: var(--accent-bright);
+  background: rgba(124, 58, 237, 0.08);
+  padding: 4px 12px;
+  border-radius: var(--radius-sm);
+  display: inline-block;
+}
+.pair-status-ok { color: var(--success); }
+.pair-status-waiting { color: var(--text-accent); }
 .dashboard-edit-btn:hover {
   border-color: var(--border-mid);
   color: var(--text-secondary);
@@ -991,6 +1003,14 @@ body::after {
         <div class="token-label">Web UI Auth Token &mdash; save this</div>
         <code id="savedToken"></code>
       </div>
+      <div class="token-box" id="pairBox" style="display:none">
+        <div class="token-label">Telegram Pairing Code &mdash; send this to your bot</div>
+        <code id="pairCode" style="font-size:28px; letter-spacing:4px"></code>
+        <div class="field-hint" style="margin-top:8px; font-size:12px">
+          Open your bot in Telegram, send this code, and you're paired.
+          <br>One-time only. Persists across restarts.
+        </div>
+      </div>
       <button class="btn btn-primary" onclick="window.location.href='/'">
         Open Chat
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5.5 3L9.5 7L5.5 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -1043,6 +1063,11 @@ body::after {
           <input type="text" id="dfi-telegram" placeholder="bot token from @BotFather">
         </div>
         <button class="dashboard-edit-btn" onclick="startDashboardEdit('telegram')">edit</button>
+      </div>
+      <div class="dashboard-field" id="df-tg-pairing" style="display:none">
+        <span class="dashboard-field-label">Pairing</span>
+        <span class="dashboard-field-value" id="dfv-tg-pairing"></span>
+        <button class="dashboard-edit-btn" id="btn-new-pair" onclick="requestNewPairCode()" style="display:none">new code</button>
       </div>
       <div class="dashboard-field" id="df-authtoken">
         <span class="dashboard-field-label">Auth Token</span>
@@ -1936,6 +1961,9 @@ function showDashboard(config) {
 
   /* render current values */
   renderDashboardValues(config);
+
+  /* fetch live telegram pairing status */
+  updateTelegramPairingUI();
 }
 
 function renderDashboardValues(config) {
@@ -2142,6 +2170,8 @@ async function saveDashboardChanges() {
       renderDashboardValues(config);
       if (successEl) successEl.classList.add('show');
       setTimeout(() => { if (successEl) successEl.classList.remove('show'); }, 4000);
+      /* refresh telegram pairing status after config change */
+      setTimeout(() => updateTelegramPairingUI(), 2000);
     } else {
       alert('Save failed: ' + (data.error || 'unknown error'));
     }
@@ -2162,6 +2192,106 @@ function switchToWizard() {
     selectProvider(dashboardConfig.provider_type);
   }
   goToStep(0);
+}
+
+/* ── telegram pairing ── */
+
+async function fetchTelegramStatus() {
+  try {
+    const resp = await fetch('/api/telegram/status');
+    const data = await resp.json();
+    return data;
+  } catch(e) {
+    return null;
+  }
+}
+
+async function updateTelegramPairingUI() {
+  const field = document.getElementById('df-tg-pairing');
+  const val = document.getElementById('dfv-tg-pairing');
+  const btn = document.getElementById('btn-new-pair');
+  if (!field || !val) return;
+
+  const status = await fetchTelegramStatus();
+  if (!status || !status.bot_configured) {
+    field.style.display = 'none';
+    return;
+  }
+
+  field.style.display = '';
+
+  if (status.paired_users > 0) {
+    val.innerHTML = `<span class="pair-status-ok">Paired (${status.paired_users} user${status.paired_users > 1 ? 's' : ''})</span>`;
+    btn.style.display = '';
+    btn.textContent = 'new code';
+  } else if (status.pairing_code) {
+    val.innerHTML = `<span class="pair-status-waiting">Waiting for pairing</span> <span class="pair-code-display">${status.pairing_code}</span>`;
+    btn.style.display = '';
+    btn.textContent = 'regenerate';
+  } else if (status.running) {
+    val.innerHTML = '<span class="pair-status-waiting">Bot running, generating code...</span>';
+    btn.style.display = '';
+    btn.textContent = 'get code';
+  } else {
+    val.innerHTML = '<span style="color:var(--text-tertiary)">Bot not running</span>';
+    btn.style.display = 'none';
+  }
+}
+
+async function requestNewPairCode() {
+  const btn = document.getElementById('btn-new-pair');
+  const val = document.getElementById('dfv-tg-pairing');
+  if (btn) { btn.disabled = true; btn.textContent = 'generating...'; }
+
+  try {
+    const resp = await fetch('/api/telegram/pair', { method: 'POST' });
+    const data = await resp.json();
+    if (data.code) {
+      if (val) val.innerHTML = `<span class="pair-status-waiting">Send to bot:</span> <span class="pair-code-display">${data.code}</span>`;
+    } else {
+      if (val) val.innerHTML = `<span style="color:var(--error)">${data.error || 'failed to generate code'}</span>`;
+    }
+  } catch(e) {
+    if (val) val.innerHTML = '<span style="color:var(--error)">could not reach server</span>';
+  }
+
+  if (btn) { btn.disabled = false; btn.textContent = 'regenerate'; }
+}
+
+async function fetchPairCodeForSuccess() {
+  /* called after wizard save if telegram was configured. polls for pair code. */
+  const pairBox = document.getElementById('pairBox');
+  const pairCodeEl = document.getElementById('pairCode');
+  if (!pairBox || !pairCodeEl) return;
+
+  /* wait a bit for telegram to start */
+  await new Promise(r => setTimeout(r, 3000));
+
+  for (let i = 0; i < 5; i++) {
+    try {
+      const status = await fetchTelegramStatus();
+      if (status && status.pairing_code) {
+        pairCodeEl.textContent = status.pairing_code;
+        pairBox.style.display = 'block';
+        return;
+      }
+      if (status && status.paired_users > 0) {
+        /* already paired, no need to show code */
+        return;
+      }
+    } catch(e) {}
+    await new Promise(r => setTimeout(r, 3000));
+  }
+
+  /* last resort: request a code */
+  try {
+    const resp = await fetch('/api/telegram/pair', { method: 'POST' });
+    const data = await resp.json();
+    if (data.code) {
+      pairCodeEl.textContent = data.code;
+      pairBox.style.display = 'block';
+    }
+  } catch(e) {}
 }
 
 /* ── save config ── */
@@ -2225,6 +2355,10 @@ async function saveConfig() {
         document.getElementById('tokenBox').style.display = 'block';
       }
       goToStep('success');
+      /* fetch pairing code if telegram was configured */
+      if (document.getElementById('telegramToken')?.value) {
+        fetchPairCodeForSuccess();
+      }
     } else {
       showAlert('error', data.error || 'save failed');
       btn.disabled = false;

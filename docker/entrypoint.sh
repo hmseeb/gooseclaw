@@ -331,47 +331,18 @@ echo "[gateway] starting gateway on port ${PORT:-8080}..."
 python3 "$APP_DIR/docker/gateway.py" &
 GATEWAY_PY_PID=$!
 
-# ─── start telegram gateway ────────────────────────────────────────────────
+# ─── telegram gateway ─────────────────────────────────────────────────────
+# NOTE: telegram lifecycle is managed by gateway.py (start_telegram_gateway).
+# entrypoint does NOT start telegram directly to avoid duplicate processes
+# (two goose gateway instances = pairing loop bug).
+# gateway.py reads TELEGRAM_BOT_TOKEN from env or setup.json on boot.
 
 if [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then
-    echo "[telegram] starting telegram gateway..."
-
-    goose gateway start --bot-token "$TELEGRAM_BOT_TOKEN" telegram &
-    TELEGRAM_PID=$!
-
-    sleep 8
-
-    echo ""
-    echo "========================================"
-    echo "  TELEGRAM PAIRING"
-    echo "========================================"
-    echo ""
-    echo "  your bot is running! to pair:"
-    echo ""
-    echo "  1. open Telegram, find your bot"
-    echo "  2. send /start or any message"
-    echo "  3. it will ask for a pairing code"
-    echo ""
-
-    PAIR_OUTPUT=$(goose gateway pair telegram 2>&1) || true
-    if echo "$PAIR_OUTPUT" | grep -qE '[A-Z0-9]{6}'; then
-        PAIR_CODE=$(echo "$PAIR_OUTPUT" | grep -oE '[A-Z0-9]{6}' | head -1)
-        echo "  >>> PAIRING CODE: $PAIR_CODE <<<"
-        echo ""
-        echo "  send this code to your bot."
-        echo "  pairing is one-time. persists across restarts."
-    else
-        echo "  could not auto-generate code."
-        echo "  check logs after gateway is fully started."
-        echo "  output: $PAIR_OUTPUT"
-    fi
-    echo ""
-    echo "========================================"
-    echo ""
+    echo "[telegram] TELEGRAM_BOT_TOKEN set. gateway.py will start the bot."
 else
-    echo "[telegram] TELEGRAM_BOT_TOKEN not set, skipping telegram"
-    TELEGRAM_PID=""
+    echo "[telegram] TELEGRAM_BOT_TOKEN not set. configure via setup wizard."
 fi
+TELEGRAM_PID=""
 
 # ─── start persist loop (if git enabled) ───────────────────────────────────
 
@@ -403,13 +374,7 @@ fi
             echo "[watchdog] gateway restarted (pid $GATEWAY_PY_PID)"
         fi
 
-        # check telegram
-        if [ -n "${TELEGRAM_PID:-}" ] && ! kill -0 "$TELEGRAM_PID" 2>/dev/null; then
-            echo "[watchdog] telegram gateway crashed, restarting..."
-            goose gateway start --bot-token "$TELEGRAM_BOT_TOKEN" telegram &
-            TELEGRAM_PID=$!
-            echo "[watchdog] telegram restarted (pid $TELEGRAM_PID)"
-        fi
+        # telegram lifecycle managed by gateway.py — no watchdog needed here
     done
 ) &
 WATCHDOG_PID=$!
@@ -425,7 +390,7 @@ shutdown() {
     fi
 
     kill "$GATEWAY_PY_PID" 2>/dev/null || true
-    [ -n "${TELEGRAM_PID:-}" ] && kill "$TELEGRAM_PID" 2>/dev/null || true
+    # telegram is a child of gateway.py — killed when gateway exits
     [ -n "${PERSIST_PID:-}" ] && kill "$PERSIST_PID" 2>/dev/null || true
     [ -n "${WATCHDOG_PID:-}" ] && kill "$WATCHDOG_PID" 2>/dev/null || true
 
@@ -438,6 +403,6 @@ echo "[gooseclaw] agent is live!"
 echo ""
 
 # wait for any process to exit
-wait -n "$GATEWAY_PY_PID" ${TELEGRAM_PID:+"$TELEGRAM_PID"}
+wait -n "$GATEWAY_PY_PID"
 echo "[gooseclaw] process exited unexpectedly, shutting down..."
 exit 1

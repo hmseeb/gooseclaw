@@ -7,9 +7,9 @@
 
 ### Provider Support
 
-- [ ] **PROV-01**: Wizard offers 15+ providers organized into categories (Cloud API, Subscription, Local, Custom)
-- [ ] **PROV-02**: Each provider card shows name, description, pricing hint, and "get API key" link
-- [ ] **PROV-03**: New providers added: mistral, xai, deepseek, together, cerebras, perplexity, ollama, azure-openai
+- [x] **PROV-01**: Wizard offers 15+ providers organized into categories (Cloud API, Subscription, Local, Custom)
+- [x] **PROV-02**: Each provider card shows name, description, pricing hint, and "get API key" link
+- [x] **PROV-03**: New providers added: mistral, xai, deepseek, together, cerebras, perplexity, ollama, azure-openai
 - [ ] **PROV-04**: Each provider has correct env var mapping in gateway.py and entrypoint.sh
 - [ ] **PROV-05**: Each provider has a sensible default model
 - [ ] **PROV-06**: Each provider has a working validation endpoint
@@ -46,8 +46,8 @@
 
 ### UX Flow
 
-- [ ] **UX-01**: Step 0 shows providers in categorized grid (Cloud API / Subscription / Local / Custom)
-- [ ] **UX-02**: Step 1 shows credentials with inline help link and format hints
+- [x] **UX-01**: Step 0 shows providers in categorized grid (Cloud API / Subscription / Local / Custom)
+- [x] **UX-02**: Step 1 shows credentials with inline help link and format hints
 - [ ] **UX-03**: Step 2 shows model selection with smart defaults and suggestions
 - [ ] **UX-04**: Step 3 shows optional settings (telegram, timezone, auth token)
 - [ ] **UX-05**: Step 4 shows confirmation summary of what was configured
@@ -99,9 +99,9 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| PROV-01 | Phase 1 | Pending |
-| PROV-02 | Phase 1 | Pending |
-| PROV-03 | Phase 1 | Pending |
+| PROV-01 | Phase 1 | Complete |
+| PROV-02 | Phase 1 | Complete |
+| PROV-03 | Phase 1 | Complete |
 | PROV-04 | Phase 2 | Pending |
 | PROV-05 | Phase 2 | Pending |
 | PROV-06 | Phase 2 | Pending |
@@ -123,8 +123,8 @@
 | ENV-02 | Phase 2 | Pending |
 | ENV-03 | Phase 2 | Pending |
 | ENV-04 | Phase 2 | Pending |
-| UX-01 | Phase 1 | Pending |
-| UX-02 | Phase 1 | Pending |
+| UX-01 | Phase 1 | Complete |
+| UX-02 | Phase 1 | Complete |
 | UX-03 | Phase 1 | Pending |
 | UX-04 | Phase 1 | Pending |
 | UX-05 | Phase 1 | Pending |

@@ -10,27 +10,27 @@ See: .planning/PROJECT.md (updated 2026-03-10)
 ## Current Position
 
 Phase: 1 of 4 (Provider UI Expansion)
-Plan: 0 of 3 in current phase
-Status: Ready to plan
-Last activity: 2026-03-10 -- Roadmap created
+Plan: 1 of 2 in current phase
+Status: In progress
+Last activity: 2026-03-10 -- Completed 01-01 (provider registry + grid)
 
-Progress: [..........] 0%
+Progress: [##........] 20%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 0
-- Average duration: -
-- Total execution time: 0 hours
+- Total plans completed: 1
+- Average duration: 4 min
+- Total execution time: 0.07 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| - | - | - | - |
+| 01-provider-ui-expansion | 1 | 4 min | 4 min |
 
 **Recent Trend:**
-- Last 5 plans: -
+- Last 5 plans: 4 min
 - Trend: -
 
 *Updated after each plan completion*
@@ -44,6 +44,9 @@ Recent decisions affecting current work:
 
 - Roadmap: 4 phases derived from 39 requirements at quick depth
 - Roadmap: Phase 4 (Advanced) depends on Phase 2, not Phase 3, allowing parallel execution
+- 01-01: PROVIDERS registry as single source of truth for all 15 provider metadata (name, icon, desc, category, pricing, keyUrl, envVar, defaultModel, models, keyPlaceholder)
+- 01-01: Data-driven renderProviderGrid() replaces static HTML -- scales to any provider count without markup changes
+- 01-01: buildCredFields() fully data-driven with special branches only for claude-code, ollama, azure-openai, custom
 
 ### Pending Todos
 
@@ -57,5 +60,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-03-10
-Stopped at: Roadmap created, ready to plan Phase 1
+Stopped at: Completed 01-01-PLAN.md -- provider registry, categorized grid, dynamic credential fields
 Resume file: None

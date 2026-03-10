@@ -46,12 +46,12 @@ Plans:
   3. Claude-code provider shows clear manual instructions since remote validation is impossible
   4. After container restart, all previously configured env vars are restored and goose starts with correct provider/model
   5. When reconfiguring, form fields are pre-filled with existing values (API keys masked)
-**Plans**: TBD
+**Plans:** 3 plans
 
 Plans:
-- [ ] 02-01: TBD
-- [ ] 02-02: TBD
-- [ ] 02-03: TBD
+- [ ] 02-01-PLAN.md -- Sync env var mapping and rehydration across gateway.py and entrypoint.sh for all 23 providers
+- [ ] 02-02-PLAN.md -- Frontend validation gating, per-provider format checks, and form pre-fill on reconfigure
+- [ ] 02-03-PLAN.md -- Harden dispatch_validation credential extraction and end-to-end verification
 
 ### Phase 3: Gateway Resilience and Live Feedback
 **Goal**: goose web crashes are handled automatically, users see real-time status and actual errors, and locked-out users can recover access

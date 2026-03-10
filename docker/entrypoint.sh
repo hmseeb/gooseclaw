@@ -117,6 +117,31 @@ CPJSON
 elif [ -f "$CONFIG_DIR/setup.json" ]; then
     echo "[provider] configured via setup wizard"
     PROVIDER_CONFIGURED=true
+
+    # re-hydrate env vars from setup.json (needed after container restart)
+    eval "$(python3 -c "
+import json, os
+c = json.load(open('$CONFIG_DIR/setup.json'))
+pt = c.get('provider_type', '')
+ak = c.get('api_key', '')
+env_map = {
+    'anthropic': 'ANTHROPIC_API_KEY',
+    'openai': 'OPENAI_API_KEY',
+    'google': 'GOOGLE_API_KEY',
+    'groq': 'GROQ_API_KEY',
+    'openrouter': 'OPENROUTER_API_KEY',
+}
+if pt == 'claude-code' and c.get('claude_setup_token'):
+    print(f'export CLAUDE_CODE_OAUTH_TOKEN=\"{c[\"claude_setup_token\"]}\"')
+elif pt in env_map and ak:
+    print(f'export {env_map[pt]}=\"{ak}\"')
+tg = c.get('telegram_bot_token', '')
+if tg:
+    print(f'export TELEGRAM_BOT_TOKEN=\"{tg}\"')
+tz = c.get('timezone', '')
+if tz:
+    print(f'export TZ=\"{tz}\"')
+" 2>/dev/null)" || echo "[provider] WARN: could not parse setup.json"
 fi
 
 if [ "$PROVIDER_CONFIGURED" = false ]; then

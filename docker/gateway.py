@@ -558,6 +558,10 @@ def main():
     print(f"[gateway] gooseclaw gateway starting on 0.0.0.0:{PORT}")
 
     if is_configured():
+        # re-apply config from setup.json (env vars lost on container restart)
+        setup = load_setup()
+        if setup:
+            apply_config(setup)
         print("[gateway] provider configured. starting goose web...")
         start_goose_web()
     else:

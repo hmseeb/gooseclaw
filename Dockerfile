@@ -17,7 +17,9 @@ WORKDIR /app
 COPY . /app/
 
 # make scripts executable
-RUN chmod +x /app/docker/entrypoint.sh /app/docker/gateway.py /app/scripts/persist.sh
+RUN chmod +x /app/docker/entrypoint.sh /app/docker/gateway.py /app/scripts/persist.sh /app/docker/scripts/notify.sh
+# put notify.sh on PATH so recipes can just call "notify.sh"
+RUN ln -sf /app/docker/scripts/notify.sh /usr/local/bin/notify
 
 # persistent data directory (Railway volume mounts at /data)
 RUN mkdir -p /data

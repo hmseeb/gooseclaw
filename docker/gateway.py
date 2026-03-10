@@ -1,9 +1,17 @@
 #!/usr/bin/env python3
 """
-gooseclaw gateway — setup wizard + reverse proxy to goose web.
+gooseclaw gateway — setup wizard + notification bus + reverse proxy to goose web.
 
 Runs on $PORT. Serves /setup directly, proxies everything else to goose web
 on an internal port. Manages the goose web subprocess lifecycle.
+
+API:
+  GET  /api/health           -> health check
+  GET  /api/setup/config     -> current provider config (masked)
+  POST /api/setup/validate   -> validate provider credentials
+  POST /api/setup/save       -> save provider config and restart
+  POST /api/notify           -> send message to all paired telegram users
+  GET  /api/notify/status    -> check if telegram delivery is available
 """
 
 import base64
@@ -133,6 +141,132 @@ key_urls = {
     "venice": "https://venice.ai/settings/api",
     "ovhcloud": "https://endpoints.ai.cloud.ovh.net/",
 }
+
+
+# ── telegram notification ────────────────────────────────────────────────────
+
+GOOSE_CONFIG_PATH = os.path.join(CONFIG_DIR, "config.yaml")
+
+
+def get_bot_token():
+    """Get telegram bot token from env, setup.json, or goose config."""
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    if token:
+        return token
+    setup = None
+    if os.path.exists(SETUP_FILE):
+        with open(SETUP_FILE) as f:
+            setup = json.load(f)
+    if setup and setup.get("telegram_bot_token"):
+        return setup["telegram_bot_token"]
+    return ""
+
+
+def get_paired_chat_ids():
+    """Read paired telegram chat IDs from goose config.yaml."""
+    chat_ids = []
+    if not os.path.exists(GOOSE_CONFIG_PATH):
+        return chat_ids
+    try:
+        with open(GOOSE_CONFIG_PATH) as f:
+            content = f.read()
+        # lightweight yaml parse: find gateway_pairings entries with platform: telegram
+        # goose config uses simple yaml, so we can parse with basic string matching
+        in_pairings = False
+        current_entry = {}
+        for line in content.split("\n"):
+            stripped = line.strip()
+            if line.startswith("gateway_pairings:"):
+                in_pairings = True
+                continue
+            if in_pairings:
+                if line and not line[0].isspace() and not stripped.startswith("-"):
+                    break  # left the pairings block
+                if stripped.startswith("- platform:"):
+                    if current_entry.get("platform") == "telegram" and current_entry.get("user_id"):
+                        chat_ids.append(current_entry["user_id"])
+                    current_entry = {"platform": stripped.split(":", 1)[1].strip()}
+                elif stripped.startswith("user_id:"):
+                    val = stripped.split(":", 1)[1].strip().strip("'\"")
+                    current_entry["user_id"] = val
+                elif stripped.startswith("state:") and "paired" in stripped:
+                    current_entry["paired"] = True
+        # catch last entry
+        if current_entry.get("platform") == "telegram" and current_entry.get("user_id"):
+            chat_ids.append(current_entry["user_id"])
+    except Exception as e:
+        print(f"[gateway] warn: could not read pairings: {e}")
+    return chat_ids
+
+
+def send_telegram_message(bot_token, chat_id, text):
+    """Send a message via telegram bot API. Returns (ok, error)."""
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    # split long messages (telegram limit: 4096 chars)
+    chunks = []
+    if len(text) <= 4000:
+        chunks = [text]
+    else:
+        current = ""
+        for line in text.split("\n"):
+            if len(current) + len(line) + 1 > 4000:
+                chunks.append(current)
+                current = line
+            else:
+                current = f"{current}\n{line}" if current else line
+        if current:
+            chunks.append(current)
+
+    for chunk in chunks:
+        try:
+            payload = urllib.parse.urlencode({
+                "chat_id": chat_id,
+                "text": chunk,
+                "parse_mode": "Markdown",
+                "disable_web_page_preview": "true",
+            }).encode()
+            req = urllib.request.Request(url, data=payload)
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                result = json.loads(resp.read())
+                if not result.get("ok"):
+                    # retry without markdown
+                    payload = urllib.parse.urlencode({
+                        "chat_id": chat_id,
+                        "text": chunk,
+                        "disable_web_page_preview": "true",
+                    }).encode()
+                    req = urllib.request.Request(url, data=payload)
+                    urllib.request.urlopen(req, timeout=10)
+        except urllib.error.HTTPError:
+            # markdown parse failed, retry plain
+            try:
+                payload = urllib.parse.urlencode({
+                    "chat_id": chat_id,
+                    "text": chunk,
+                    "disable_web_page_preview": "true",
+                }).encode()
+                req = urllib.request.Request(url, data=payload)
+                urllib.request.urlopen(req, timeout=10)
+            except Exception as e:
+                return False, str(e)
+        except Exception as e:
+            return False, str(e)
+    return True, ""
+
+
+def notify_all(text):
+    """Send a message to all paired telegram users. Returns summary dict."""
+    token = get_bot_token()
+    if not token:
+        return {"sent": False, "error": "no bot token configured"}
+    chat_ids = get_paired_chat_ids()
+    if not chat_ids:
+        return {"sent": False, "error": "no paired telegram users found"}
+    results = []
+    for cid in chat_ids:
+        ok, err = send_telegram_message(token, cid, text)
+        results.append({"chat_id": cid, "sent": ok, "error": err})
+    return {"sent": all(r["sent"] for r in results), "recipients": results}
 
 
 # ── setup config management ─────────────────────────────────────────────────
@@ -615,6 +749,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.handle_setup_page()
         elif path == "/api/setup/config":
             self.handle_get_config()
+        elif path == "/api/notify/status":
+            self.handle_notify_status()
         elif not is_configured():
             self.send_response(302)
             self.send_header("Location", "/setup")
@@ -628,6 +764,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.handle_save()
         elif path == "/api/setup/validate":
             self.handle_validate()
+        elif path == "/api/notify":
+            self.handle_notify()
         else:
             self.proxy_to_goose()
 
@@ -727,6 +865,35 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(200, result)
         except Exception as e:
             self.send_json(500, {"valid": False, "error": str(e)})
+
+    # ── notify endpoints ──
+
+    def handle_notify(self):
+        """POST /api/notify — send a message to all paired telegram users."""
+        body = self._read_body()
+        try:
+            data = json.loads(body)
+            text = data.get("text", "")
+            if not text:
+                self.send_json(400, {"sent": False, "error": "text field is required"})
+                return
+            result = notify_all(text)
+            status_code = 200 if result["sent"] else 502
+            self.send_json(status_code, result)
+        except json.JSONDecodeError:
+            self.send_json(400, {"sent": False, "error": "invalid JSON"})
+        except Exception as e:
+            self.send_json(500, {"sent": False, "error": str(e)})
+
+    def handle_notify_status(self):
+        """GET /api/notify/status — check if notification delivery is available."""
+        token = get_bot_token()
+        chat_ids = get_paired_chat_ids()
+        self.send_json(200, {
+            "available": bool(token and chat_ids),
+            "bot_configured": bool(token),
+            "paired_users": len(chat_ids),
+        })
 
     # ── reverse proxy to goose web ──
 

@@ -341,11 +341,22 @@ body::after {
   text-overflow: ellipsis;
 }
 .provider-card .card-meta {
-  display: none;
+  font-size: 10px;
+  color: var(--text-tertiary);
+  opacity: 0.6;
+  position: relative;
 }
 .provider-card .card-link {
   display: none;
+  font-size: 10px;
+  color: var(--text-accent);
+  text-decoration: none;
+  position: relative;
+  opacity: 0.7;
 }
+.provider-card:hover .card-link,
+.provider-card.selected .card-link { display: inline; }
+.provider-card .card-link:hover { text-decoration: underline; opacity: 1; }
 .provider-card.selected .card-name { color: var(--accent-bright); }
 .provider-card.selected .card-icon {
   background: var(--accent-glow);
@@ -1196,12 +1207,19 @@ function renderProviderGrid() {
     providers.forEach(([id, p]) => {
       const delay = (globalIndex * 0.03).toFixed(2);
       globalIndex++;
+      let linkHtml = '';
+      if (id === 'ollama') {
+        linkHtml = `<a class="card-link" href="${p.keyUrl}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Download</a>`;
+      } else if (id !== 'custom' && id !== 'github-copilot' && p.keyUrl) {
+        linkHtml = `<a class="card-link" href="${p.keyUrl}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Get key</a>`;
+      }
       html += `
         <div class="provider-card" data-provider="${id}" onclick="selectProvider('${id}')" style="animation-delay:${delay}s">
           <div class="card-icon">${p.icon}</div>
           <div class="card-text">
             <div class="card-name">${p.name}</div>
             <div class="card-desc">${p.desc}</div>
+            <div class="card-meta">${p.pricing} ${linkHtml}</div>
           </div>
         </div>`;
     });

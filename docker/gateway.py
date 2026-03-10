@@ -1050,6 +1050,21 @@ def goose_health_monitor():
                     pass  # will catch on next cycle if it dies
 
 
+# ── input sanitization ───────────────────────────────────────────────────────
+
+def _sanitize_string(value, max_length=2000):
+    """Sanitize a string value: strip whitespace, truncate, remove control characters."""
+    if not isinstance(value, str):
+        return value
+    # strip leading/trailing whitespace
+    value = value.strip()
+    # truncate to max length
+    value = value[:max_length]
+    # remove control characters (except newline \n=0x0a and tab \t=0x09)
+    value = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', value)
+    return value
+
+
 # ── HTTP handler ────────────────────────────────────────────────────────────
 
 class GatewayHandler(http.server.BaseHTTPRequestHandler):
@@ -1329,6 +1344,11 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         try:
             config = json.loads(body)
 
+            # sanitize all string fields before validation
+            for key, val in list(config.items()):
+                if isinstance(val, str):
+                    config[key] = _sanitize_string(val)
+
             # validate config schema before accepting
             valid, errors = validate_setup_config(config)
             if not valid:
@@ -1373,8 +1393,11 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         body = self._read_body()
         try:
             data = json.loads(body)
-            provider = data.get("provider_type") or data.get("provider", "")
+            provider = _sanitize_string(data.get("provider_type") or data.get("provider", ""))
             credentials = data.get("credentials", data)
+            # sanitize credential string values
+            if isinstance(credentials, dict):
+                credentials = {k: _sanitize_string(v) for k, v in credentials.items()}
             result = dispatch_validation(provider, credentials)
             self.send_json(200, result)
         except Exception as e:
@@ -1398,7 +1421,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         body = self._read_body()
         try:
             data = json.loads(body)
-            text = data.get("text", "")
+            text = _sanitize_string(data.get("text", ""), max_length=4000)
             if not text:
                 self.send_json(400, {"sent": False, "error": "text field is required"})
                 return

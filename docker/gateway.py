@@ -23,6 +23,7 @@ import http.client
 import http.server
 import json
 import os
+import re
 import secrets
 import signal
 import subprocess
@@ -73,6 +74,16 @@ api_limiter = RateLimiter(max_requests=60, window_seconds=60)    # 1 req/sec sus
 auth_limiter = RateLimiter(max_requests=5, window_seconds=60)    # auth-sensitive endpoints
 notify_limiter = RateLimiter(max_requests=10, window_seconds=60)  # notify endpoint
 
+
+# ── security headers ─────────────────────────────────────────────────────────
+
+SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "X-XSS-Protection": "1; mode=block",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+}
 
 # ── config ──────────────────────────────────────────────────────────────────
 
@@ -1067,6 +1078,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.handle_health()
         elif path == "/api/health/ready":
             self.handle_health_ready()
+        elif path == "/api/version":
+            self.handle_version()
         elif path.rstrip("/") == "/setup" or path.startswith("/setup/"):
             self.handle_setup_page()
         elif path == "/api/setup/config":
@@ -1170,6 +1183,18 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             reason = "not started (unconfigured)" if not is_configured() else "not running"
             self.send_json(503, {"ready": False, "goose_web": reason})
 
+    def handle_version(self):
+        """GET /api/version — return the deployed version from VERSION file."""
+        version = "unknown"
+        version_file = os.path.join(APP_DIR, "VERSION")
+        if os.path.exists(version_file):
+            try:
+                with open(version_file) as f:
+                    version = f.read().strip()
+            except Exception:
+                pass
+        self.send_json(200, {"version": version, "service": "gooseclaw"})
+
     # ── setup endpoints ──
 
     def handle_setup_page(self):
@@ -1184,10 +1209,36 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         try:
             with open(SETUP_HTML, "rb") as f:
                 content = f.read()
+            mtime = os.path.getmtime(SETUP_HTML)
+            etag = f'"{int(mtime)}"'
+            # conditional request support
+            if self.headers.get("If-None-Match") == etag:
+                self.send_response(304)
+                self.end_headers()
+                return
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(content)))
             self.send_header("Cache-Control", "no-cache")
+            self.send_header("ETag", etag)
+            # security headers for HTML response
+            for header, value in SECURITY_HEADERS.items():
+                self.send_header(header, value)
+            # override X-Frame-Options already covered by CSP frame-ancestors
+            # Content-Security-Policy for setup.html
+            # unsafe-inline for script-src is required because setup.html has inline JS
+            csp = (
+                "default-src 'self'; "
+                "script-src 'self' 'unsafe-inline'; "
+                "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+                "font-src https://fonts.gstatic.com; "
+                "img-src 'self' data:; "
+                "connect-src 'self'; "
+                "frame-ancestors 'none'"
+            )
+            self.send_header("Content-Security-Policy", csp)
+            if os.environ.get("RAILWAY_ENVIRONMENT"):
+                self.send_header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
             self.end_headers()
             self.wfile.write(content)
         except FileNotFoundError:
@@ -1477,6 +1528,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             # send response status and headers
             self.send_response(resp.status)
             is_sse = False
+            proxied_headers = set()
             for key, val in resp.getheaders():
                 lower = key.lower()
                 if lower in ("transfer-encoding", "connection"):
@@ -1485,8 +1537,16 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                 if lower == "location":
                     val = val.replace(f"http://127.0.0.1:{GOOSE_WEB_PORT}", "")
                 self.send_header(key, val)
+                proxied_headers.add(lower)
                 if lower == "content-type" and "text/event-stream" in val:
                     is_sse = True
+            # inject security headers into proxied responses (don't overwrite if already set)
+            for header, value in SECURITY_HEADERS.items():
+                if header.lower() not in proxied_headers:
+                    self.send_header(header, value)
+            if os.environ.get("RAILWAY_ENVIRONMENT"):
+                if "strict-transport-security" not in proxied_headers:
+                    self.send_header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
             self.end_headers()
 
             # stream the response body
@@ -1541,6 +1601,12 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        # security headers on every JSON response
+        for header, value in SECURITY_HEADERS.items():
+            self.send_header(header, value)
+        # add HSTS only when running on Railway (which terminates TLS)
+        if os.environ.get("RAILWAY_ENVIRONMENT"):
+            self.send_header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
         # Origin-aware CORS: only allow same-host origins, never wildcard.
         # Same-host means the Origin header matches the request Host header
         # (accounting for http/https scheme). Requests with no Origin header

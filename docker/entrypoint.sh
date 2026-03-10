@@ -132,6 +132,7 @@ import json, os, shlex
 c = json.load(open('$CONFIG_DIR/setup.json'))
 pt = c.get('provider_type', '')
 ak = c.get('api_key', '')
+# single-key providers: provider -> env var name
 env_map = {
     'anthropic': 'ANTHROPIC_API_KEY',
     'openai': 'OPENAI_API_KEY',
@@ -147,10 +148,35 @@ env_map = {
     'avian': 'AVIAN_API_KEY',
     'venice': 'VENICE_API_KEY',
     'ovhcloud': 'OVH_AI_ENDPOINTS_ACCESS_TOKEN',
+    'litellm': 'LITELLM_API_KEY',
 }
 if pt == 'claude-code' and c.get('claude_setup_token'):
     if not os.environ.get('CLAUDE_CODE_OAUTH_TOKEN'):
         print(f'export CLAUDE_CODE_OAUTH_TOKEN={shlex.quote(c[\"claude_setup_token\"])}')
+elif pt == 'azure-openai':
+    # setup.json stores azure_key and azure_endpoint (not api_key)
+    azure_key = c.get('azure_key', '')
+    azure_endpoint = c.get('azure_endpoint', '')
+    if azure_key and not os.environ.get('AZURE_OPENAI_API_KEY'):
+        print(f'export AZURE_OPENAI_API_KEY={shlex.quote(azure_key)}')
+    if azure_endpoint and not os.environ.get('AZURE_OPENAI_ENDPOINT'):
+        print(f'export AZURE_OPENAI_ENDPOINT={shlex.quote(azure_endpoint)}')
+elif pt == 'litellm':
+    # export api_key as LITELLM_API_KEY (host is not stored via setup wizard)
+    if ak and not os.environ.get('LITELLM_API_KEY'):
+        print(f'export LITELLM_API_KEY={shlex.quote(ak)}')
+    litellm_host = c.get('litellm_host', '')
+    if litellm_host and not os.environ.get('LITELLM_HOST'):
+        print(f'export LITELLM_HOST={shlex.quote(litellm_host)}')
+elif pt == 'github-copilot':
+    # github-copilot: export GITHUB_TOKEN from api_key if stored
+    if ak and not os.environ.get('GITHUB_TOKEN'):
+        print(f'export GITHUB_TOKEN={shlex.quote(ak)}')
+elif pt in ('ollama', 'lm-studio', 'docker-model-runner', 'ramalama'):
+    # local providers: export OLLAMA_HOST if a host URL was stored
+    ollama_host = c.get('ollama_host', '')
+    if ollama_host and not os.environ.get('OLLAMA_HOST'):
+        print(f'export OLLAMA_HOST={shlex.quote(ollama_host)}')
 elif pt in env_map and ak:
     if not os.environ.get(env_map[pt]):
         print(f'export {env_map[pt]}={shlex.quote(ak)}')

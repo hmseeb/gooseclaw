@@ -686,9 +686,24 @@ def dispatch_validation(provider, credentials):
     """Route validation to the correct handler for the given provider."""
     # Special / skip-validation providers
     if provider == "claude-code":
-        return {"valid": True, "message": "Claude Code uses OAuth. Validation must be done manually.", "skip_validation": True}
+        return {
+            "valid": True,
+            "message": "Claude Code uses OAuth authentication. Run 'claude setup-token' in your local terminal to get the token. Validation must be done manually after saving.",
+            "skip_validation": True,
+        }
     if provider == "github-copilot":
-        return {"valid": True, "message": "GitHub Copilot token validation is not supported remotely.", "skip_validation": True}
+        token = credentials.get("GITHUB_TOKEN") or credentials.get("api_key", "")
+        if token:
+            headers = {"Authorization": f"Bearer {token}"}
+            try:
+                status, _ = http_get("https://api.github.com/copilot_internal/v2/token", headers=headers)
+                if status == 200:
+                    return {"valid": True, "message": "GitHub Copilot token is valid."}
+                elif status in (401, 403):
+                    return {"valid": False, "error": "Invalid GitHub token. Check your token or Copilot subscription."}
+            except ConnectionError:
+                pass
+        return {"valid": True, "message": "GitHub Copilot uses device flow authentication. No pre-validation needed.", "skip_validation": True}
 
     # Anthropic
     if provider == "anthropic":
@@ -726,7 +741,7 @@ def dispatch_validation(provider, credentials):
     # Azure OpenAI
     if provider == "azure-openai":
         key = credentials.get("AZURE_OPENAI_API_KEY") or credentials.get("api_key", "")
-        endpoint = credentials.get("AZURE_OPENAI_ENDPOINT") or credentials.get("endpoint", "")
+        endpoint = credentials.get("AZURE_OPENAI_ENDPOINT") or credentials.get("azure_endpoint") or credentials.get("endpoint", "")
         if not key or not endpoint:
             return {"valid": False, "error": "Both API key and endpoint are required."}
         return validate_azure_openai(key, endpoint)
@@ -734,12 +749,12 @@ def dispatch_validation(provider, credentials):
     # LiteLLM
     if provider == "litellm":
         key = credentials.get("LITELLM_API_KEY") or credentials.get("api_key", "")
-        host = credentials.get("LITELLM_HOST") or credentials.get("host", "")
+        host = credentials.get("LITELLM_HOST") or credentials.get("litellm_host") or credentials.get("host", "")
         return validate_litellm(key, host)
 
     # Local providers
     if provider in ("ollama", "lm-studio", "docker-model-runner", "ramalama"):
-        host = credentials.get("OLLAMA_HOST") or credentials.get("host") or credentials.get("url")
+        host = credentials.get("OLLAMA_HOST") or credentials.get("ollama_host") or credentials.get("host") or credentials.get("url")
         return validate_local_provider(provider, host)
 
     # Custom provider

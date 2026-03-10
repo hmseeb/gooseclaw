@@ -1005,7 +1005,10 @@ body::after {
       </div>
       <div class="token-box" id="pairBox" style="display:none">
         <div class="token-label">Telegram Pairing Code &mdash; send this to your bot</div>
-        <code id="pairCode" style="font-size:28px; letter-spacing:4px"></code>
+        <div style="display:flex; align-items:center; gap:12px; justify-content:center">
+          <code id="pairCode" style="font-size:28px; letter-spacing:4px"></code>
+          <button onclick="copyPairCode()" id="copyPairBtn" style="background:none; border:1px solid var(--border-mid); border-radius:6px; padding:4px 10px; color:var(--text-secondary); cursor:pointer; font-size:12px; font-family:'DM Sans',sans-serif">copy</button>
+        </div>
         <div class="field-hint" style="margin-top:8px; font-size:12px">
           Open your bot in Telegram, send this code, and you're paired.
           <br>One-time only. Persists across restarts.
@@ -1884,6 +1887,25 @@ async function validateKey() {
   btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 7.5L5.5 11L12 3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg> Test';
 }
 
+/* ── clipboard helpers ── */
+
+function copyPairCode() {
+  const code = document.getElementById('pairCode')?.textContent;
+  if (!code) return;
+  navigator.clipboard.writeText(code).then(() => {
+    const btn = document.getElementById('copyPairBtn');
+    if (btn) { btn.textContent = 'copied!'; setTimeout(() => { btn.textContent = 'copy'; }, 2000); }
+  }).catch(() => {});
+}
+
+function copyDashboardPairCode(el) {
+  const codeEl = document.querySelector('.pair-code-display');
+  if (!codeEl) return;
+  navigator.clipboard.writeText(codeEl.textContent).then(() => {
+    if (el) { el.textContent = 'copied!'; setTimeout(() => { el.textContent = 'copy'; }, 2000); }
+  }).catch(() => {});
+}
+
 /* ── settings dashboard ── */
 
 let dashboardConfig = {};
@@ -2225,7 +2247,7 @@ async function updateTelegramPairingUI() {
     btn.style.display = '';
     btn.textContent = 'new code';
   } else if (status.pairing_code) {
-    val.innerHTML = `<span class="pair-status-waiting">Waiting for pairing</span> <span class="pair-code-display">${status.pairing_code}</span>`;
+    val.innerHTML = `<span class="pair-status-waiting">Waiting for pairing</span> <span class="pair-code-display">${status.pairing_code}</span> <button onclick="copyDashboardPairCode(this)" style="background:none;border:1px solid var(--border-mid);border-radius:6px;padding:2px 8px;color:var(--text-secondary);cursor:pointer;font-size:11px;font-family:'DM Sans',sans-serif;vertical-align:middle">copy</button>`;
     btn.style.display = '';
     btn.textContent = 'regenerate';
   } else if (status.running) {
@@ -2247,7 +2269,7 @@ async function requestNewPairCode() {
     const resp = await fetch('/api/telegram/pair', { method: 'POST' });
     const data = await resp.json();
     if (data.code) {
-      if (val) val.innerHTML = `<span class="pair-status-waiting">Send to bot:</span> <span class="pair-code-display">${data.code}</span>`;
+      if (val) val.innerHTML = `<span class="pair-status-waiting">Send to bot:</span> <span class="pair-code-display">${data.code}</span> <button onclick="copyDashboardPairCode(this)" style="background:none;border:1px solid var(--border-mid);border-radius:6px;padding:2px 8px;color:var(--text-secondary);cursor:pointer;font-size:11px;font-family:'DM Sans',sans-serif;vertical-align:middle">copy</button>`;
     } else {
       if (val) val.innerHTML = `<span style="color:var(--error)">${data.error || 'failed to generate code'}</span>`;
     }

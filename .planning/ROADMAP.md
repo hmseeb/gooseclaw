@@ -14,7 +14,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Provider UI Expansion** - Redesign wizard with 15+ providers in categories, model selection, and full setup flow steps (completed 2026-03-10)
 - [x] **Phase 2: Validation and Env Plumbing** - Every provider validates credentials, maps env vars correctly, rehydrates on restart, and pre-fills on reconfigure (completed 2026-03-10)
-- [ ] **Phase 3: Gateway Resilience and Live Feedback** - goose web is monitored, auto-restarted, errors surfaced to user, real-time startup status, and auth recovery
+- [x] **Phase 3: Gateway Resilience and Live Feedback** - goose web is monitored, auto-restarted, errors surfaced to user, real-time startup status, and auth recovery (completed 2026-03-10)
 - [ ] **Phase 4: Advanced Multi-Model Settings** - Lead/worker multi-model configuration for power users
 - [x] **Phase 5: Production Hardening** - Security, reliability, and deployment quality across gateway, entrypoint, and Dockerfile (completed 2026-03-10)
 
@@ -63,7 +63,7 @@ Plans:
   3. When goose web fails to start, the actual error message from stderr is shown in the browser UI
   4. Telegram pairing code is displayed in the web UI after setup completes (not buried in logs)
   5. A user who lost their auth token can regain access without SSH into the container
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 
 Plans:
 - [ ] 03-01-PLAN.md -- Backend: goose web stderr capture, startup status state machine API, auth recovery endpoint
@@ -118,6 +118,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 |-------|----------------|--------|-----------|
 | 1. Provider UI Expansion | 2/2 | Complete   | 2026-03-10 |
 | 2. Validation and Env Plumbing | 3/3 | Complete   | 2026-03-10 |
-| 3. Gateway Resilience and Live Feedback | 0/2 | Not started | - |
+| 3. Gateway Resilience and Live Feedback | 2/2 | Complete   | 2026-03-10 |
 | 4. Advanced Multi-Model Settings | 0/1 | Not started | - |
 | 5. Production Hardening | 6/6 | Complete   | 2026-03-10 |

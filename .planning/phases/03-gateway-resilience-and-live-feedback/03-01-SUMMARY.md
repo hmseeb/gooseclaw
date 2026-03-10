@@ -73,7 +73,7 @@ Each task was committed atomically:
 1. **Task 1: Add goose web stderr capture and startup status state machine** - `845f4f3` (feat)
 2. **Task 2: Add auth recovery endpoint** - `fdd5356` (feat)
 
-**Plan metadata:** TBD (docs: complete plan)
+**Plan metadata:** `8634b54` (docs: complete plan)
 
 ## Files Created/Modified
 - `docker/gateway.py` - Added startup state machine, stderr capture, /api/setup/status, proxy error details, /api/auth/recover

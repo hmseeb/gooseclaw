@@ -51,14 +51,14 @@
 - [x] **UX-03**: Step 2 shows model selection with smart defaults and suggestions
 - [x] **UX-04**: Step 3 shows optional settings (telegram, timezone, auth token)
 - [x] **UX-05**: Step 4 shows confirmation summary of what was configured
-- [ ] **UX-06**: After save, shows real-time startup status (checking config, starting goose, ready/error)
+- [x] **UX-06**: After save, shows real-time startup status (checking config, starting goose, ready/error)
 - [x] **UX-07**: Reconfigure pre-fills form with existing values (secrets masked)
 
 ### Telegram
 
 - [x] **TG-01**: Wizard shows BotFather instructions for creating a bot
 - [x] **TG-02**: Telegram token format is validated (digits:alphanumeric)
-- [ ] **TG-03**: Pairing code is shown in the web UI after setup completes (not just logs)
+- [x] **TG-03**: Pairing code is shown in the web UI after setup completes (not just logs)
 
 ### Advanced Settings
 
@@ -128,11 +128,11 @@
 | UX-03 | Phase 1 | Complete |
 | UX-04 | Phase 1 | Complete |
 | UX-05 | Phase 1 | Complete |
-| UX-06 | Phase 3 | Pending |
+| UX-06 | Phase 3 | Complete |
 | UX-07 | Phase 2 | Complete |
 | TG-01 | Phase 1 | Complete |
 | TG-02 | Phase 2 | Complete |
-| TG-03 | Phase 3 | Pending |
+| TG-03 | Phase 3 | Complete |
 | ADV-01 | Phase 4 | Pending |
 | ADV-02 | Phase 4 | Pending |
 | ADV-03 | Phase 4 | Pending |

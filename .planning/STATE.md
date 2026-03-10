@@ -9,12 +9,12 @@ See: .planning/PROJECT.md (updated 2026-03-10)
 
 ## Current Position
 
-Phase: 3 of 5 (Gateway Resilience and Live Feedback)
-Plan: 1 of 2 in current phase (03-01 complete)
-Status: In progress
-Last activity: 2026-03-10 -- Completed 03-01 (startup state machine, stderr capture, proxy error details, auth recovery endpoint)
+Phase: 3 of 5 (Gateway Resilience and Live Feedback) -- COMPLETE
+Plan: 2 of 2 in current phase (03-02 complete)
+Status: Phase 3 complete
+Last activity: 2026-03-10 -- Completed 03-02 (real-time startup status UI, auth recovery form)
 
-Progress: [#####-----] 50%
+Progress: [######----] 60%
 
 ## Performance Metrics
 
@@ -41,6 +41,7 @@ Progress: [#####-----] 50%
 | Phase 02 P02 | 3 | 2 tasks | 1 file |
 | Phase 02 P03 | 2 | 2 tasks | 1 file |
 | Phase 03 P01 | 3 | 2 tasks | 1 file |
+| Phase 03 P02 | 5 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -95,6 +96,10 @@ Recent decisions affecting current work:
 - 03-01: proxy_to_goose() 503 returns JSON with state/message/error/retry_after instead of static text (GATE-05)
 - 03-01: Auth recovery gated by GOOSECLAW_RECOVERY_SECRET env var; returns 404 when not configured
 - 03-01: secrets.compare_digest for recovery secret comparison prevents timing attacks
+- 03-02: Open Chat button hidden until /api/setup/status returns state=ready
+- 03-02: Recovery page (/setup?recover) served without auth via query param bypass in gateway.py
+- 03-02: 401 response body includes /setup?recover hint for discoverability
+- 03-02: lastSavedConfig captured before fetch so retryStartup() can re-POST without re-entry
 
 ### Pending Todos
 
@@ -118,5 +123,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-03-10
-Stopped at: Completed 03-01-PLAN.md -- startup state machine, stderr capture, proxy error details, auth recovery endpoint
+Stopped at: Completed 03-02-PLAN.md -- real-time startup status UI, auth recovery form. Phase 3 complete.
 Resume file: None

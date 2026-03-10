@@ -77,10 +77,10 @@ Plans:
   1. An "Advanced" toggle on the settings step reveals lead/worker multi-model configuration fields
   2. User can set a separate lead provider, lead model, and turn count
   3. Advanced settings are correctly written to config.yaml (GOOSE_LEAD_PROVIDER, GOOSE_LEAD_MODEL, GOOSE_LEAD_TURN_COUNT)
-**Plans**: TBD
+**Plans:** 1 plan
 
 Plans:
-- [ ] 04-01: TBD
+- [ ] 04-01-PLAN.md -- Advanced multi-model UI toggle, lead provider/model/turn count fields, backend persistence, and entrypoint rehydration
 
 ### Phase 5: Production Hardening
 **Goal**: GooseClaw production endpoints are hardened against common attack vectors, gateway processes recover from failures automatically, and the Docker image builds efficiently

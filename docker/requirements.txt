@@ -1,0 +1,8 @@
+# Python runtime dependencies for GooseClaw
+# These are installed via apt-get (python3-yaml) in the Dockerfile for simplicity.
+# This file serves as the authoritative version-pinned reference.
+#
+# To install via pip instead:
+#   pip3 install --no-cache-dir --break-system-packages -r requirements.txt
+
+PyYAML==6.0.2

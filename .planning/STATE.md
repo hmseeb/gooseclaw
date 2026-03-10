@@ -9,7 +9,7 @@ See: .planning/PROJECT.md (updated 2026-03-10)
 
 ## Current Position
 
-Phase: 1 of 4 (Provider UI Expansion)
+Phase: 1 of 5 (Provider UI Expansion)
 Plan: 2 of 2 in current phase
 Status: Phase complete
 Last activity: 2026-03-10 -- Completed 01-02 (5-step wizard, model selection, 23 providers); Completed quick-1-01 (settings dashboard, env var priority, savedKeys persistence)
@@ -56,6 +56,10 @@ Recent decisions affecting current work:
 ### Pending Todos
 
 None yet.
+
+### Roadmap Evolution
+
+- Phase 5 added: Production hardening: security, reliability, and deployment quality
 
 ### Blockers/Concerns
 

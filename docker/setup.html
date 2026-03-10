@@ -639,6 +639,20 @@ body::after {
   margin-bottom: 28px;
   line-height: 1.6;
 }
+/* ── startup progress steps ── */
+.startup-progress { display: flex; flex-direction: column; gap: 12px; margin: 20px 0 24px; text-align: left; max-width: 300px; margin-left: auto; margin-right: auto; }
+.startup-step { display: flex; align-items: center; gap: 10px; color: var(--text-tertiary); font-size: 14px; transition: color 0.3s; }
+.startup-step.active { color: var(--text-accent); }
+.startup-step.done { color: var(--success); }
+.startup-step.error { color: var(--error); }
+.startup-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-tertiary); flex-shrink: 0; transition: background 0.3s; }
+.startup-step.active .startup-dot { background: var(--accent-bright); animation: pulse 1.5s infinite; }
+.startup-step.done .startup-dot { background: var(--success); }
+.startup-step.error .startup-dot { background: var(--error); }
+.startup-error { margin: 16px 0; padding: 16px; background: var(--error-bg); border: 1px solid rgba(248,113,113,0.2); border-radius: var(--radius-md); text-align: left; }
+.startup-error-title { color: var(--error); font-weight: 600; margin-bottom: 8px; font-size: 14px; }
+.startup-error-detail { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-secondary); white-space: pre-wrap; word-break: break-word; max-height: 200px; overflow-y: auto; margin: 0; padding: 8px; background: rgba(0,0,0,0.3); border-radius: 6px; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 .token-box {
   background: var(--bg-card);
   border: 1px solid var(--border-subtle);
@@ -1056,9 +1070,31 @@ body::after {
   <!-- success screen -->
   <div class="step" id="step-success">
     <div class="success-screen">
-      <div class="success-orb">&#129442;</div>
-      <h2>agent is starting</h2>
-      <p>give it a few seconds to boot up, then you're all set.</p>
+      <div class="success-orb" id="successOrb">&#129442;</div>
+      <h2 id="successTitle">Saving configuration...</h2>
+      <div id="startupStatusArea">
+        <div class="startup-progress" id="startupProgress">
+          <div class="startup-step active" id="ss-config">
+            <span class="startup-dot"></span>
+            <span>Checking configuration</span>
+          </div>
+          <div class="startup-step" id="ss-starting">
+            <span class="startup-dot"></span>
+            <span>Starting goose web</span>
+          </div>
+          <div class="startup-step" id="ss-ready">
+            <span class="startup-dot"></span>
+            <span>Ready</span>
+          </div>
+        </div>
+        <div class="startup-error" id="startupError" style="display:none">
+          <div class="startup-error-title">Failed to start</div>
+          <pre class="startup-error-detail" id="startupErrorDetail"></pre>
+          <button class="btn btn-ghost" onclick="retryStartup()" style="margin-top:12px">
+            Retry
+          </button>
+        </div>
+      </div>
       <div class="token-box" id="tokenBox" style="display:none">
         <div class="token-label">Web UI Auth Token &mdash; save this</div>
         <code id="savedToken"></code>
@@ -1079,7 +1115,7 @@ body::after {
           </div>
         </div>
       </div>
-      <button class="btn btn-primary" onclick="window.location.href='/'">
+      <button class="btn btn-primary" onclick="window.location.href='/'" id="openChatBtn" style="display:none">
         Open Chat
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5.5 3L9.5 7L5.5 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
@@ -1162,6 +1198,8 @@ let isReconfigure = false;
 let savedKeys = {};
 let savedKeysSet = {};
 let validationPassed = false;
+let lastSavedConfig = null;
+let _startupPollTimer = null;
 
 /* ── per-provider format hints ── */
 function getFormatHint(providerId) {
@@ -2464,7 +2502,8 @@ async function saveDashboardChanges() {
       /* update displayed values */
       renderDashboardValues(config);
       if (successEl) successEl.classList.add('show');
-      setTimeout(() => { if (successEl) successEl.classList.remove('show'); }, 4000);
+      /* poll for restart status instead of static timeout */
+      pollDashboardRestart();
       /* refresh telegram pairing status after config change */
       setTimeout(() => updateTelegramPairingUI(), 2000);
     } else {
@@ -2746,6 +2785,115 @@ async function fetchPairCodeForSuccess() {
   } catch(e) {}
 }
 
+/* ── startup status polling ── */
+function updateStartupStep(stepId, state) {
+  // state: 'pending' | 'active' | 'done' | 'error'
+  const el = document.getElementById(stepId);
+  if (!el) return;
+  el.className = 'startup-step' + (state !== 'pending' ? ' ' + state : '');
+}
+
+async function pollStartupStatus() {
+  const titleEl = document.getElementById('successTitle');
+  const errorArea = document.getElementById('startupError');
+  const errorDetail = document.getElementById('startupErrorDetail');
+  const openChatBtn = document.getElementById('openChatBtn');
+
+  if (openChatBtn) openChatBtn.style.display = 'none';
+
+  // initial state: config step active
+  updateStartupStep('ss-config', 'active');
+  updateStartupStep('ss-starting', 'pending');
+  updateStartupStep('ss-ready', 'pending');
+
+  let attempts = 0;
+  const maxAttempts = 60; // 2 min max
+
+  _startupPollTimer = setInterval(async () => {
+    attempts++;
+    if (attempts > maxAttempts) {
+      clearInterval(_startupPollTimer);
+      titleEl.textContent = 'Startup timed out';
+      updateStartupStep('ss-config', 'done');
+      updateStartupStep('ss-starting', 'error');
+      errorArea.style.display = 'block';
+      errorDetail.textContent = 'Timed out waiting for goose web to start. Check container logs.';
+      return;
+    }
+
+    try {
+      const resp = await fetch('/api/setup/status');
+      const status = await resp.json();
+
+      if (status.state === 'starting') {
+        titleEl.textContent = 'Starting agent...';
+        updateStartupStep('ss-config', 'done');
+        updateStartupStep('ss-starting', 'active');
+        updateStartupStep('ss-ready', 'pending');
+      } else if (status.state === 'ready') {
+        clearInterval(_startupPollTimer);
+        titleEl.textContent = 'Agent is ready!';
+        updateStartupStep('ss-config', 'done');
+        updateStartupStep('ss-starting', 'done');
+        updateStartupStep('ss-ready', 'done');
+        if (openChatBtn) openChatBtn.style.display = '';
+        document.getElementById('successOrb').textContent = '\u2705';
+      } else if (status.state === 'error') {
+        clearInterval(_startupPollTimer);
+        titleEl.textContent = 'Failed to start';
+        updateStartupStep('ss-config', 'done');
+        updateStartupStep('ss-starting', 'error');
+        updateStartupStep('ss-ready', 'pending');
+        errorArea.style.display = 'block';
+        errorDetail.textContent = status.error || status.message || 'Unknown error. Check container logs.';
+      }
+      // idle state means save hasn't triggered start yet — keep polling
+    } catch(e) {
+      // network error — keep polling (server might be restarting)
+    }
+  }, 2000);
+}
+
+async function retryStartup() {
+  document.getElementById('startupError').style.display = 'none';
+  document.getElementById('successTitle').textContent = 'Retrying...';
+  try {
+    await fetch('/api/setup/save', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(lastSavedConfig || {}),
+    });
+  } catch(e) {}
+  pollStartupStatus();
+}
+
+async function pollDashboardRestart() {
+  const el = document.getElementById('dashboardSuccess');
+  if (!el) return;
+  let attempts = 0;
+  const timer = setInterval(async () => {
+    attempts++;
+    if (attempts > 30) { clearInterval(timer); el.textContent = 'Restart is taking longer than expected. Refresh the page.'; return; }
+    try {
+      const resp = await fetch('/api/setup/status');
+      const status = await resp.json();
+      if (status.state === 'ready') {
+        clearInterval(timer);
+        el.textContent = 'Changes saved. Agent is ready!';
+        el.style.borderColor = 'var(--success)';
+        el.style.color = 'var(--success)';
+      } else if (status.state === 'error') {
+        clearInterval(timer);
+        el.textContent = 'Restart failed: ' + (status.error || status.message || 'unknown error');
+        el.style.borderColor = 'var(--error)';
+        el.style.color = 'var(--error)';
+      } else if (status.state === 'starting') {
+        el.textContent = 'Agent is restarting...';
+      }
+    } catch(e) {}
+  }, 2000);
+}
+
 /* ── save config ── */
 async function saveConfig() {
   const btn = document.getElementById('saveBtn');
@@ -2834,6 +2982,9 @@ async function saveConfig() {
   /* persist saved_keys across provider switches */
   config.saved_keys = savedKeys;
 
+  /* capture config for retryStartup() */
+  lastSavedConfig = config;
+
   try {
     const resp = await fetch('/api/setup/save', {
       method: 'POST',
@@ -2847,6 +2998,7 @@ async function saveConfig() {
         document.getElementById('tokenBox').style.display = 'block';
       }
       goToStep('success');
+      pollStartupStatus();
       /* fetch pairing code if telegram was configured */
       if (document.getElementById('telegramToken')?.value) {
         fetchPairCodeForSuccess();

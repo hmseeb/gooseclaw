@@ -10,27 +10,27 @@ See: .planning/PROJECT.md (updated 2026-03-10)
 ## Current Position
 
 Phase: 1 of 4 (Provider UI Expansion)
-Plan: 1 of 2 in current phase
-Status: In progress
-Last activity: 2026-03-10 -- Completed 01-01 (provider registry + grid)
+Plan: 2 of 2 in current phase
+Status: Phase complete
+Last activity: 2026-03-10 -- Completed 01-02 (5-step wizard, model selection, 23 providers)
 
-Progress: [##........] 20%
+Progress: [####......] 40%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 1
-- Average duration: 4 min
-- Total execution time: 0.07 hours
+- Total plans completed: 2
+- Average duration: ~10 min
+- Total execution time: ~0.33 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 01-provider-ui-expansion | 1 | 4 min | 4 min |
+| 01-provider-ui-expansion | 2 | ~19 min | ~10 min |
 
 **Recent Trend:**
-- Last 5 plans: 4 min
+- Last 5 plans: 4 min, ~15 min
 - Trend: -
 
 *Updated after each plan completion*
@@ -47,6 +47,9 @@ Recent decisions affecting current work:
 - 01-01: PROVIDERS registry as single source of truth for all 15 provider metadata (name, icon, desc, category, pricing, keyUrl, envVar, defaultModel, models, keyPlaceholder)
 - 01-01: Data-driven renderProviderGrid() replaces static HTML -- scales to any provider count without markup changes
 - 01-01: buildCredFields() fully data-driven with special branches only for claude-code, ollama, azure-openai, custom
+- 01-02: Model selection promoted to dedicated step-2 with datalist from PROVIDERS registry; Save button moved to Confirmation step (step-4)
+- 01-02: Provider registry expanded to 23 total (added avian, litellm, venice, ovhcloud, github-copilot, lm-studio, docker-model-runner, ramalama)
+- 01-02: Compact horizontal card layout with scrollable grid (max-height 420px) to keep Continue button visible
 
 ### Pending Todos
 
@@ -60,5 +63,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-03-10
-Stopped at: Completed 01-01-PLAN.md -- provider registry, categorized grid, dynamic credential fields
+Stopped at: Completed 01-02-PLAN.md -- 5-step wizard, model selection step, 23 providers, confirmation summary
 Resume file: None

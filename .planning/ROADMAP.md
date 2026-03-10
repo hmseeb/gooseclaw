@@ -12,7 +12,7 @@ Transform the existing GooseClaw setup wizard from a 7-provider basic setup into
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Provider UI Expansion** - Redesign wizard with 15+ providers in categories, model selection, and full setup flow steps
+- [x] **Phase 1: Provider UI Expansion** - Redesign wizard with 15+ providers in categories, model selection, and full setup flow steps (completed 2026-03-10)
 - [ ] **Phase 2: Validation and Env Plumbing** - Every provider validates credentials, maps env vars correctly, rehydrates on restart, and pre-fills on reconfigure
 - [ ] **Phase 3: Gateway Resilience and Live Feedback** - goose web is monitored, auto-restarted, errors surfaced to user, real-time startup status, and auth recovery
 - [ ] **Phase 4: Advanced Multi-Model Settings** - Lead/worker multi-model configuration for power users
@@ -29,7 +29,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. After selecting a provider, user sees model selection with a sensible default pre-filled and a suggestions dropdown
   4. User progresses through provider -> credentials -> model -> optional settings -> confirmation summary, with all five steps visible
   5. Telegram step shows BotFather instructions for creating a bot
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 
 Plans:
 - [x] 01-01-PLAN.md -- Provider data registry, categorized card grid, and dynamic credential fields for all 15+ providers
@@ -89,7 +89,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Provider UI Expansion | 1/2 | In progress | - |
+| 1. Provider UI Expansion | 2/2 | Complete   | 2026-03-10 |
 | 2. Validation and Env Plumbing | 0/3 | Not started | - |
 | 3. Gateway Resilience and Live Feedback | 0/2 | Not started | - |
 | 4. Advanced Multi-Model Settings | 0/1 | Not started | - |

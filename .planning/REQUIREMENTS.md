@@ -24,10 +24,10 @@
 
 ### Model Selection
 
-- [ ] **MODL-01**: Each provider shows its recommended default model prominently
-- [ ] **MODL-02**: Model field uses datalist/suggestions with valid models per provider
-- [ ] **MODL-03**: Ollama shows note that models must be pre-pulled locally
-- [ ] **MODL-04**: OpenRouter shows note about multi-model routing
+- [x] **MODL-01**: Each provider shows its recommended default model prominently
+- [x] **MODL-02**: Model field uses datalist/suggestions with valid models per provider
+- [x] **MODL-03**: Ollama shows note that models must be pre-pulled locally
+- [x] **MODL-04**: OpenRouter shows note about multi-model routing
 
 ### Gateway Resilience
 
@@ -48,15 +48,15 @@
 
 - [x] **UX-01**: Step 0 shows providers in categorized grid (Cloud API / Subscription / Local / Custom)
 - [x] **UX-02**: Step 1 shows credentials with inline help link and format hints
-- [ ] **UX-03**: Step 2 shows model selection with smart defaults and suggestions
-- [ ] **UX-04**: Step 3 shows optional settings (telegram, timezone, auth token)
-- [ ] **UX-05**: Step 4 shows confirmation summary of what was configured
+- [x] **UX-03**: Step 2 shows model selection with smart defaults and suggestions
+- [x] **UX-04**: Step 3 shows optional settings (telegram, timezone, auth token)
+- [x] **UX-05**: Step 4 shows confirmation summary of what was configured
 - [ ] **UX-06**: After save, shows real-time startup status (checking config, starting goose, ready/error)
 - [ ] **UX-07**: Reconfigure pre-fills form with existing values (secrets masked)
 
 ### Telegram
 
-- [ ] **TG-01**: Wizard shows BotFather instructions for creating a bot
+- [x] **TG-01**: Wizard shows BotFather instructions for creating a bot
 - [ ] **TG-02**: Telegram token format is validated (digits:alphanumeric)
 - [ ] **TG-03**: Pairing code is shown in the web UI after setup completes (not just logs)
 
@@ -110,10 +110,10 @@
 | CRED-03 | Phase 2 | Pending |
 | CRED-04 | Phase 2 | Pending |
 | CRED-05 | Phase 2 | Pending |
-| MODL-01 | Phase 1 | Pending |
-| MODL-02 | Phase 1 | Pending |
-| MODL-03 | Phase 1 | Pending |
-| MODL-04 | Phase 1 | Pending |
+| MODL-01 | Phase 1 | Complete |
+| MODL-02 | Phase 1 | Complete |
+| MODL-03 | Phase 1 | Complete |
+| MODL-04 | Phase 1 | Complete |
 | GATE-01 | Phase 3 | Pending |
 | GATE-02 | Phase 3 | Pending |
 | GATE-03 | Phase 3 | Pending |
@@ -125,12 +125,12 @@
 | ENV-04 | Phase 2 | Pending |
 | UX-01 | Phase 1 | Complete |
 | UX-02 | Phase 1 | Complete |
-| UX-03 | Phase 1 | Pending |
-| UX-04 | Phase 1 | Pending |
-| UX-05 | Phase 1 | Pending |
+| UX-03 | Phase 1 | Complete |
+| UX-04 | Phase 1 | Complete |
+| UX-05 | Phase 1 | Complete |
 | UX-06 | Phase 3 | Pending |
 | UX-07 | Phase 2 | Pending |
-| TG-01 | Phase 1 | Pending |
+| TG-01 | Phase 1 | Complete |
 | TG-02 | Phase 2 | Pending |
 | TG-03 | Phase 3 | Pending |
 | ADV-01 | Phase 4 | Pending |

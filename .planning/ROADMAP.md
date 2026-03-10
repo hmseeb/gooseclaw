@@ -102,7 +102,7 @@ Plans:
 Plans:
 - [ ] 05-01-PLAN.md -- CORS lockdown, first-boot API lockdown, credential masking, notify auth
 - [ ] 05-02-PLAN.md -- Dockerfile optimization, .dockerignore, labels, healthcheck
-- [ ] 05-03-PLAN.md -- Eval injection fix in entrypoint.sh, auth token hashing
+- [x] 05-03-PLAN.md -- Eval injection fix in entrypoint.sh, auth token hashing (completed 2026-03-11)
 - [ ] 05-04-PLAN.md -- Rate limiting, config schema validation, deep health check
 - [ ] 05-05-PLAN.md -- Crash recovery, thread safety, graceful shutdown, atomic writes, timeouts
 - [ ] 05-06-PLAN.md -- Security headers, structured logging, error sanitization, version endpoint
@@ -120,4 +120,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 2. Validation and Env Plumbing | 0/3 | Not started | - |
 | 3. Gateway Resilience and Live Feedback | 0/2 | Not started | - |
 | 4. Advanced Multi-Model Settings | 0/1 | Not started | - |
-| 5. Production Hardening | 0/6 | Not started | - |
+| 5. Production Hardening | 1/6 | In progress | - |

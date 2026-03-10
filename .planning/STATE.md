@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-03-10)
 
 **Core value:** A user with zero DevOps knowledge can deploy and configure GooseClaw correctly on the first try
-**Current focus:** Phase 1: Provider UI Expansion
+**Current focus:** Phase 5: Production Hardening
 
 ## Current Position
 
-Phase: 1 of 5 (Provider UI Expansion)
-Plan: 2 of 2 in current phase
-Status: Phase complete
-Last activity: 2026-03-10 -- Completed 01-02 (5-step wizard, model selection, 23 providers); Completed quick-1-01 (settings dashboard, env var priority, savedKeys persistence)
+Phase: 5 of 5 (Production Hardening -- Security, Reliability, Deployment Quality)
+Plan: 3 of 6 in current phase
+Status: In progress
+Last activity: 2026-03-11 -- Completed 05-03 (eval injection fix, auth token hashing, gateway-owns-all-auth)
 
-Progress: [####......] 40%
+Progress: [#########.] 87%
 
 ## Performance Metrics
 
@@ -52,6 +52,10 @@ Recent decisions affecting current work:
 - 01-02: Compact horizontal card layout with scrollable grid (max-height 420px) to keep Continue button visible
 - quick-1-01: Settings dashboard on /setup for configured agents; per-field inline editing; savedKeys in-memory + persisted in setup.json
 - quick-1-01: os.environ.get guards on all 4 re-hydration export paths in entrypoint.sh; Railway/Docker env vars always win
+- 05-03: mktemp+shlex.quote replaces eval "$(python3 -c ...)" in entrypoint.sh -- eliminates shell injection vector
+- 05-03: re.sub sanitizes vault GOOSECLAW_* variable names (YAML hyphens -> underscores)
+- 05-03: SHA-256 hashing of auth tokens before storage; plaintext never on disk; get_auth_token returns (token, is_hashed) tuple
+- 05-03: gateway-owns-all-auth: goose web subprocess gets random internal token; gateway verifies users against hash, proxies with internal token
 
 ### Pending Todos
 
@@ -74,6 +78,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-10
-Stopped at: Completed quick-1-01 -- settings dashboard, env var priority, savedKeys persistence
+Last session: 2026-03-11
+Stopped at: Completed 05-03 -- eval injection fix, auth token hashing, gateway-owns-all-auth
 Resume file: None

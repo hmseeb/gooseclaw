@@ -854,9 +854,18 @@ def apply_config(config):
             }, f)
         lines.append("GOOSE_PROVIDER: custom")
     elif provider_type in env_map:
+        # map env var names to their setup.json field names for non-standard providers
+        field_map = {
+            'AZURE_OPENAI_API_KEY': 'azure_key',
+            'AZURE_OPENAI_ENDPOINT': 'azure_endpoint',
+            'LITELLM_HOST': 'litellm_host',
+            'OLLAMA_HOST': 'ollama_host',
+            'GITHUB_TOKEN': 'api_key',
+        }
         # set env vars for the provider from the module-level registry
         for env_var in env_map.get(provider_type, []):
-            val = config.get(env_var.lower(), "") or api_key
+            mapped_field = field_map.get(env_var, env_var.lower())
+            val = config.get(mapped_field, "") or api_key
             if val:
                 os.environ[env_var] = val
         lines.append(f"GOOSE_PROVIDER: {provider_type}")

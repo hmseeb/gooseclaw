@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-03-10)
 ## Current Position
 
 Phase: 5 of 5 (Production Hardening -- Security, Reliability, Deployment Quality)
-Plan: 6 of 6 in current phase (05-01, 05-04, 05-05 complete)
-Status: In progress
-Last activity: 2026-03-11 -- Completed 05-05 (crash recovery, thread safety, atomic writes, proxy timeout, graceful shutdown)
+Plan: 6 of 6 in current phase (05-01, 05-04, 05-05, 05-06 complete)
+Status: Complete
+Last activity: 2026-03-11 -- Completed 05-06 (security headers, structured logging, error sanitization, /api/version, input sanitization)
 
-Progress: [#########.] 90%
+Progress: [##########] 100%
 
 ## Performance Metrics
 
@@ -36,6 +36,7 @@ Progress: [#########.] 90%
 *Updated after each plan completion*
 | Phase 05 P02 | 6 | 2 tasks | 3 files |
 | Phase 05 P05 | 3 | 2 tasks | 2 files |
+| Phase 05 P06 | 4 | 3 tasks | 1 file |
 
 ## Accumulated Context
 
@@ -70,6 +71,10 @@ Recent decisions affecting current work:
 - [Phase 05]: goose_health_monitor runs as daemon thread checking every 15s; backoff doubles per failure capped at 120s
 - [Phase 05]: os.replace() atomic write for setup.json; .tmp + rename prevents corruption; .bak backup before overwrite
 - [Phase 05]: PROXY_TIMEOUT defaults 60s (was 300s); SSE connections exempt from timeout; entrypoint waits for gateway on SIGTERM
+- 05-06: SECURITY_HEADERS dict applied in send_json(), handle_setup_page(), and proxy_to_goose() -- all response paths covered
+- 05-06: unsafe-inline in CSP script-src accepted; CSP still blocks frame-ancestors and external origins; HSTS conditional on RAILWAY_ENVIRONMENT
+- 05-06: log_request() override with _request_start timing; _internal_error() helper for sanitized 500s; error codes INTERNAL_ERROR/RATE_LIMITED/INVALID_CONFIG
+- 05-06: _sanitize_string() applied to all POST endpoints (strip, truncate 2000 chars, remove control chars except \\n and \\t)
 
 ### Pending Todos
 
@@ -93,5 +98,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-03-11
-Stopped at: Completed 05-05 -- crash recovery, thread safety, atomic writes, proxy timeout, graceful shutdown
+Stopped at: Completed 05-06 -- security headers, structured logging, error sanitization, /api/version, input sanitization
 Resume file: None

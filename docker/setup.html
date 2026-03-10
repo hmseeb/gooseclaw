@@ -250,24 +250,41 @@ body::after {
 }
 .category-label:first-child { margin-top: 0; }
 
+/* ── provider scroll container ── */
+.provider-scroll {
+  max-height: 420px;
+  overflow-y: auto;
+  padding-right: 4px;
+  margin-bottom: 8px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-mid) transparent;
+}
+.provider-scroll::-webkit-scrollbar { width: 4px; }
+.provider-scroll::-webkit-scrollbar-track { background: transparent; }
+.provider-scroll::-webkit-scrollbar-thumb { background: var(--border-mid); border-radius: 4px; }
+.provider-scroll::-webkit-scrollbar-thumb:hover { background: var(--text-tertiary); }
+
 /* ── provider cards ── */
 .provider-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px;
-  margin-bottom: 8px;
+  gap: 8px;
+  margin-bottom: 6px;
 }
 .provider-card {
   position: relative;
-  padding: 16px;
+  padding: 10px 12px;
   border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   background: var(--bg-card);
   backdrop-filter: blur(12px);
   transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   overflow: hidden;
   animation: fadeSlideIn 0.35s ease-out both;
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 .provider-card::before {
   content: '';
@@ -291,56 +308,54 @@ body::after {
 }
 .provider-card.selected::before { opacity: 1; }
 .provider-card .card-icon {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 16px;
-  margin-bottom: 10px;
+  font-size: 14px;
+  flex-shrink: 0;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid var(--border-subtle);
 }
+.provider-card .card-text {
+  flex: 1;
+  min-width: 0;
+}
 .provider-card .card-name {
   font-weight: 600;
-  font-size: 14px;
+  font-size: 13px;
   color: var(--text-primary);
-  margin-bottom: 2px;
   position: relative;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .provider-card .card-desc {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-tertiary);
   position: relative;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .provider-card .card-meta {
-  font-size: 11px;
-  color: var(--text-tertiary);
-  margin-top: 6px;
-  position: relative;
-  opacity: 0.8;
+  display: none;
 }
 .provider-card .card-link {
-  font-size: 11px;
-  color: var(--text-accent);
-  text-decoration: none;
-  margin-top: 6px;
-  display: inline-block;
-  position: relative;
-  opacity: 0.75;
-  transition: opacity 0.2s;
+  display: none;
 }
-.provider-card .card-link:hover { opacity: 1; text-decoration: underline; }
 .provider-card.selected .card-name { color: var(--accent-bright); }
 .provider-card.selected .card-icon {
   background: var(--accent-glow);
   border-color: rgba(124, 58, 237, 0.3);
 }
 
-/* full-width last card if odd count within a grid */
+/* full-width last card if odd count within a category grid */
 .provider-grid .provider-card:last-child:nth-child(odd) {
   grid-column: 1 / -1;
+  max-width: 50%;
 }
 
 /* ── form fields ── */
@@ -713,7 +728,9 @@ body::after {
   <!-- step 0: provider selection -->
   <div class="step active" id="step-0">
     <div class="step-title">Choose Provider</div>
-    <div id="providerGrid"></div>
+    <div class="provider-scroll">
+      <div id="providerGrid"></div>
+    </div>
     <div class="btn-row">
       <div></div>
       <button class="btn btn-primary" id="nextBtn0" onclick="if(selectedProvider){goToStep(1)}else{showAlert('info','pick a provider first')}">
@@ -990,6 +1007,58 @@ const PROVIDERS = {
     keyPlaceholder: 'pplx-...',
     keyPrefix: 'pplx-',
   },
+  avian: {
+    name: 'Avian',
+    icon: '\u2708',
+    desc: 'DeepSeek, Kimi, GLM',
+    category: 'cloud',
+    pricing: 'Pay per token',
+    keyUrl: 'https://avian.sh',
+    envVar: 'AVIAN_API_KEY',
+    defaultModel: 'deepseek-chat',
+    models: ['deepseek-chat', 'kimi-chat', 'glm-4'],
+    keyPlaceholder: '...',
+    keyPrefix: null,
+  },
+  litellm: {
+    name: 'LiteLLM',
+    icon: '\u2301',
+    desc: 'Universal LLM proxy',
+    category: 'cloud',
+    pricing: 'Varies by backend',
+    keyUrl: 'https://docs.litellm.ai',
+    envVar: 'LITELLM_API_KEY',
+    defaultModel: '',
+    models: [],
+    keyPlaceholder: '...',
+    keyPrefix: null,
+  },
+  venice: {
+    name: 'Venice',
+    icon: '\u2307',
+    desc: 'Privacy-focused AI',
+    category: 'cloud',
+    pricing: 'Pay per token',
+    keyUrl: 'https://venice.ai/settings',
+    envVar: 'VENICE_API_KEY',
+    defaultModel: '',
+    models: [],
+    keyPlaceholder: '...',
+    keyPrefix: null,
+  },
+  ovhcloud: {
+    name: 'OVHcloud',
+    icon: '\u2609',
+    desc: 'European cloud AI',
+    category: 'cloud',
+    pricing: 'Pay per token',
+    keyUrl: 'https://ovh.com/manager',
+    envVar: 'OVHCLOUD_API_KEY',
+    defaultModel: '',
+    models: [],
+    keyPlaceholder: '...',
+    keyPrefix: null,
+  },
   'claude-code': {
     name: 'Claude Code',
     icon: '\u2760',
@@ -1003,6 +1072,19 @@ const PROVIDERS = {
     keyPlaceholder: 'sk-ant-oat01-...',
     keyPrefix: null,
   },
+  'github-copilot': {
+    name: 'GitHub Copilot',
+    icon: '\u2687',
+    desc: 'Use your Copilot subscription',
+    category: 'subscription',
+    pricing: 'Included in plan',
+    keyUrl: 'https://github.com/settings/copilot',
+    envVar: '',
+    defaultModel: 'default',
+    models: [],
+    keyPlaceholder: '',
+    keyPrefix: null,
+  },
   ollama: {
     name: 'Ollama',
     icon: '\u25A1',
@@ -1010,6 +1092,45 @@ const PROVIDERS = {
     category: 'local',
     pricing: 'Free (self-hosted)',
     keyUrl: 'https://ollama.com/download',
+    envVar: 'OLLAMA_HOST',
+    defaultModel: '',
+    models: [],
+    keyPlaceholder: 'http://host.docker.internal:11434',
+    keyPrefix: null,
+  },
+  'lm-studio': {
+    name: 'LM Studio',
+    icon: '\u25A8',
+    desc: 'Local model server',
+    category: 'local',
+    pricing: 'Free (self-hosted)',
+    keyUrl: 'https://lmstudio.ai',
+    envVar: 'OPENAI_HOST',
+    defaultModel: '',
+    models: [],
+    keyPlaceholder: 'http://host.docker.internal:1234',
+    keyPrefix: null,
+  },
+  'docker-model-runner': {
+    name: 'Docker Models',
+    icon: '\u2693',
+    desc: 'Docker native inference',
+    category: 'local',
+    pricing: 'Free (self-hosted)',
+    keyUrl: 'https://docs.docker.com/model-runner/',
+    envVar: 'OPENAI_HOST',
+    defaultModel: '',
+    models: [],
+    keyPlaceholder: 'http://host.docker.internal:12434',
+    keyPrefix: null,
+  },
+  ramalama: {
+    name: 'RamaLama',
+    icon: '\u25E3',
+    desc: 'Local model runner',
+    category: 'local',
+    pricing: 'Free (self-hosted)',
+    keyUrl: 'https://github.com/containers/ramalama',
     envVar: 'OLLAMA_HOST',
     defaultModel: '',
     models: [],
@@ -1073,21 +1194,15 @@ function renderProviderGrid() {
     html += `<div class="category-label">${catMeta.label}</div>`;
     html += `<div class="provider-grid">`;
     providers.forEach(([id, p]) => {
-      const delay = (globalIndex * 0.04).toFixed(2);
+      const delay = (globalIndex * 0.03).toFixed(2);
       globalIndex++;
-      let linkHtml = '';
-      if (id === 'ollama') {
-        linkHtml = `<a class="card-link" href="${p.keyUrl}" target="_blank" rel="noopener">Download</a>`;
-      } else if (id !== 'custom' && p.keyUrl) {
-        linkHtml = `<a class="card-link" href="${p.keyUrl}" target="_blank" rel="noopener">Get key &rarr;</a>`;
-      }
       html += `
         <div class="provider-card" data-provider="${id}" onclick="selectProvider('${id}')" style="animation-delay:${delay}s">
           <div class="card-icon">${p.icon}</div>
-          <div class="card-name">${p.name}</div>
-          <div class="card-desc">${p.desc}</div>
-          <div class="card-meta">${p.pricing}</div>
-          ${linkHtml}
+          <div class="card-text">
+            <div class="card-name">${p.name}</div>
+            <div class="card-desc">${p.desc}</div>
+          </div>
         </div>`;
     });
     html += `</div>`;
@@ -1163,15 +1278,42 @@ function buildCredFields() {
         </div>
       </div>`;
 
-  } else if (selectedProvider === 'ollama') {
+  } else if (selectedProvider === 'github-copilot') {
     html = `
       <div class="field">
-        <label>Ollama Host URL</label>
-        <input type="text" id="ollamaHost" placeholder="http://host.docker.internal:11434" value="http://host.docker.internal:11434">
+        <div class="field-hint" style="margin-top:0">
+          GitHub Copilot uses device flow authentication. No API key needed.<br>
+          When goose starts, it will prompt you to authenticate via browser.<br><br>
+          Requires an active <a href="https://github.com/settings/copilot" target="_blank" rel="noopener">GitHub Copilot subscription</a>.
+        </div>
+      </div>`;
+
+  } else if (selectedProvider === 'ollama' || selectedProvider === 'ramalama') {
+    const name = PROVIDERS[selectedProvider].name;
+    const defaultHost = 'http://host.docker.internal:11434';
+    html = `
+      <div class="field">
+        <label>${name} Host URL</label>
+        <input type="text" id="ollamaHost" placeholder="${defaultHost}" value="${defaultHost}">
         <div class="field-hint">
-          Ollama must be running and accessible from this container.
+          ${name} must be running and accessible from this container.
           If running on the Docker host, use <code>host.docker.internal</code>.
           <br>Models must be pre-pulled locally with <code>ollama pull &lt;model&gt;</code>
+        </div>
+      </div>`;
+
+  } else if (selectedProvider === 'lm-studio' || selectedProvider === 'docker-model-runner') {
+    const name = PROVIDERS[selectedProvider].name;
+    const defaultHost = selectedProvider === 'lm-studio'
+      ? 'http://host.docker.internal:1234'
+      : 'http://host.docker.internal:12434';
+    html = `
+      <div class="field">
+        <label>${name} Host URL</label>
+        <input type="text" id="ollamaHost" placeholder="${defaultHost}" value="${defaultHost}">
+        <div class="field-hint">
+          ${name} must be running and accessible from this container.
+          If running on the Docker host, use <code>host.docker.internal</code>.
         </div>
       </div>`;
 
@@ -1247,7 +1389,7 @@ function buildModelStep() {
   });
 
   /* set hint */
-  if (selectedProvider === 'claude-code') {
+  if (selectedProvider === 'claude-code' || selectedProvider === 'github-copilot') {
     hintEl.innerHTML = 'Uses your subscription default model';
     modelInput.placeholder = 'subscription default';
     modelInput.value = '';
@@ -1264,19 +1406,34 @@ function buildModelStep() {
 
   /* provider-specific notes */
   let noteHtml = '';
-  if (selectedProvider === 'ollama') {
+  if (selectedProvider === 'ollama' || selectedProvider === 'ramalama') {
     noteHtml = `<div class="model-note">
-      Models must be pre-pulled on your Ollama host before they can be used here.<br>
+      Models must be pre-pulled on your host before they can be used here.<br>
       Run <code>ollama pull modelname</code> in your terminal first, then enter the model name above.
+    </div>`;
+  } else if (selectedProvider === 'lm-studio') {
+    noteHtml = `<div class="model-note">
+      Load a model in LM Studio first, then enter its name here.<br>
+      Check LM Studio's local server tab for the exact model identifier.
+    </div>`;
+  } else if (selectedProvider === 'docker-model-runner') {
+    noteHtml = `<div class="model-note">
+      Pull a model with <code>docker model pull modelname</code> first.<br>
+      Then enter the model name above.
     </div>`;
   } else if (selectedProvider === 'openrouter') {
     noteHtml = `<div class="model-note">
       OpenRouter routes to many providers. Model names use <code>provider/model</code> format.<br>
       See <a href="https://openrouter.ai/models" target="_blank" rel="noopener">available models</a> for the full list.
     </div>`;
-  } else if (selectedProvider === 'claude-code') {
+  } else if (selectedProvider === 'claude-code' || selectedProvider === 'github-copilot') {
     noteHtml = `<div class="model-note">
-      Claude Code uses your subscription's default model. Model selection is not applicable.
+      Uses your subscription's default model. Model selection is not applicable.
+    </div>`;
+  } else if (selectedProvider === 'litellm') {
+    noteHtml = `<div class="model-note">
+      LiteLLM proxies to many providers. Enter the model in <code>provider/model</code> format.<br>
+      See <a href="https://docs.litellm.ai/docs/providers" target="_blank" rel="noopener">supported providers</a>.
     </div>`;
   } else if (selectedProvider === 'custom') {
     noteHtml = `<div class="model-note">
@@ -1297,7 +1454,7 @@ function buildSummary() {
   const providerIcon = provider ? provider.icon : '';
 
   const modelVal = document.getElementById('model')?.value;
-  const modelDisplay = selectedProvider === 'claude-code'
+  const modelDisplay = (selectedProvider === 'claude-code' || selectedProvider === 'github-copilot')
     ? 'subscription default'
     : (modelVal || (provider && provider.defaultModel) || 'not set');
 
@@ -1414,11 +1571,13 @@ async function validateKey() {
   } else if (selectedProvider === 'custom') {
     payload.url = document.getElementById('customUrl')?.value;
     payload.api_key = document.getElementById('customKey')?.value;
-  } else if (selectedProvider === 'ollama') {
+  } else if (selectedProvider === 'ollama' || selectedProvider === 'ramalama' || selectedProvider === 'lm-studio' || selectedProvider === 'docker-model-runner') {
     payload.ollama_host = document.getElementById('ollamaHost')?.value;
   } else if (selectedProvider === 'azure-openai') {
     payload.api_key = document.getElementById('azureKey')?.value;
     payload.azure_endpoint = document.getElementById('azureEndpoint')?.value;
+  } else if (selectedProvider === 'github-copilot') {
+    /* no credentials to validate */
   } else {
     payload.api_key = document.getElementById('apiKey')?.value;
   }
@@ -1464,11 +1623,13 @@ async function saveConfig() {
     config.custom_url = document.getElementById('customUrl')?.value || '';
     config.custom_model = document.getElementById('customModel')?.value || 'gpt-4';
     config.custom_key = document.getElementById('customKey')?.value || '';
-  } else if (selectedProvider === 'ollama') {
+  } else if (selectedProvider === 'ollama' || selectedProvider === 'ramalama' || selectedProvider === 'lm-studio' || selectedProvider === 'docker-model-runner') {
     config.ollama_host = document.getElementById('ollamaHost')?.value || '';
   } else if (selectedProvider === 'azure-openai') {
     config.azure_key = document.getElementById('azureKey')?.value || '';
     config.azure_endpoint = document.getElementById('azureEndpoint')?.value || '';
+  } else if (selectedProvider === 'github-copilot') {
+    /* no credentials needed, device flow at runtime */
   } else {
     config.api_key = document.getElementById('apiKey')?.value || '';
   }

@@ -17,6 +17,7 @@ API:
 """
 
 import base64
+import collections
 import hashlib
 import http.client
 import http.server
@@ -32,6 +33,46 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from http.server import ThreadingHTTPServer
+
+# ── rate limiting ────────────────────────────────────────────────────────────
+
+class RateLimiter:
+    """Simple per-IP sliding window rate limiter using stdlib only."""
+
+    def __init__(self, max_requests=60, window_seconds=60):
+        self.max_requests = max_requests
+        self.window = window_seconds
+        self._requests = collections.defaultdict(list)  # ip -> [timestamps]
+        self._lock = threading.Lock()
+
+    def is_allowed(self, ip):
+        """Check if request from IP is allowed. Cleans old entries."""
+        now = time.time()
+        cutoff = now - self.window
+        with self._lock:
+            timestamps = self._requests[ip]
+            # remove expired entries
+            self._requests[ip] = [t for t in timestamps if t > cutoff]
+            if len(self._requests[ip]) >= self.max_requests:
+                return False
+            self._requests[ip].append(now)
+            return True
+
+    def cleanup(self):
+        """Periodic cleanup of stale IPs (call from a timer)."""
+        now = time.time()
+        cutoff = now - self.window
+        with self._lock:
+            stale = [ip for ip, ts in self._requests.items() if not ts or ts[-1] < cutoff]
+            for ip in stale:
+                del self._requests[ip]
+
+
+# module-level rate limiter instances
+api_limiter = RateLimiter(max_requests=60, window_seconds=60)    # 1 req/sec sustained
+auth_limiter = RateLimiter(max_requests=5, window_seconds=60)    # auth-sensitive endpoints
+notify_limiter = RateLimiter(max_requests=10, window_seconds=60)  # notify endpoint
+
 
 # ── config ──────────────────────────────────────────────────────────────────
 
@@ -857,12 +898,25 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         if args and str(args[0]).startswith("5"):
             print(f"[gateway] {format % args}")
 
+    def _check_rate_limit(self, limiter):
+        """Return True if request is allowed; send 429 and return False if over limit."""
+        ip = self.client_address[0]
+        if not limiter.is_allowed(ip):
+            self.send_json(429, {"error": "Too many requests. Try again later."})
+            return False
+        return True
+
     # ── routing ──
 
     def do_GET(self):
         path = urllib.parse.urlparse(self.path).path
+        # rate-limit all /api/* requests; skip static /setup pages and proxy
+        if path.startswith("/api/") and not self._check_rate_limit(api_limiter):
+            return
         if path == "/api/health":
-            self.send_json(200, {"status": "ok", "service": "gooseclaw"})
+            self.handle_health()
+        elif path == "/api/health/ready":
+            self.handle_health_ready()
         elif path.rstrip("/") == "/setup" or path.startswith("/setup/"):
             self.handle_setup_page()
         elif path == "/api/setup/config":
@@ -1007,6 +1061,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(200, {"configured": False})
 
     def handle_save(self):
+        if not self._check_rate_limit(auth_limiter):
+            return
         if load_setup() and not check_auth(self):
             self.send_response(401)
             self.end_headers()
@@ -1047,6 +1103,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(500, {"success": False, "error": str(e)})
 
     def handle_validate(self):
+        if not self._check_rate_limit(auth_limiter):
+            return
         body = self._read_body()
         try:
             data = json.loads(body)
@@ -1061,6 +1119,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
 
     def handle_notify(self):
         """POST /api/notify — send a message to all paired telegram users."""
+        if not self._check_rate_limit(notify_limiter):
+            return
         if _is_first_boot():
             self.send_json(403, {"error": "agent not configured yet"})
             return
@@ -1303,6 +1363,16 @@ def main():
         print("[gateway] no provider configured. serving setup wizard.")
 
     server = ThreadingHTTPServer(("0.0.0.0", PORT), GatewayHandler)
+
+    # periodic rate limiter cleanup (every 5 minutes) to free stale IP entries
+    def _rate_limiter_cleanup():
+        while True:
+            time.sleep(300)
+            api_limiter.cleanup()
+            auth_limiter.cleanup()
+            notify_limiter.cleanup()
+
+    threading.Thread(target=_rate_limiter_cleanup, daemon=True).start()
 
     def shutdown(_sig, _frame):
         print("[gateway] shutting down...")

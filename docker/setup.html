@@ -772,6 +772,13 @@ body::after {
   flex-shrink: 0;
 }
 /* ── pairing card ── */
+#pair-card-container {
+  width: 100%;
+  margin: 0 auto;
+}
+#pairBox {
+  margin: 0 auto 20px;
+}
 .pair-card {
   margin-top: 16px;
   border: 1px solid var(--border-subtle);
@@ -1052,7 +1059,7 @@ body::after {
         <div class="token-label">Web UI Auth Token &mdash; save this</div>
         <code id="savedToken"></code>
       </div>
-      <div id="pairBox" style="display:none; width:100%; max-width:380px">
+      <div id="pairBox" style="display:none; max-width:400px">
         <div class="pair-card">
           <div class="pair-card-header">
             <span class="dot amber"></span>

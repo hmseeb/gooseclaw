@@ -62,6 +62,12 @@ None yet.
 - goose web is experimental and may crash -- Phase 3 addresses resilience
 - Python stdlib only constraint limits validation options in gateway.py
 
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 1 | Setup wizard settings dashboard with config editing, env var priority fix, and provider key persistence | 2026-03-10 | 720048c | [1-setup-wizard-settings-dashboard-with-con](./quick/1-setup-wizard-settings-dashboard-with-con/) |
+
 ## Session Continuity
 
 Last session: 2026-03-10

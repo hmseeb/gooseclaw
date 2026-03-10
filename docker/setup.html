@@ -771,18 +771,67 @@ body::after {
   transition: all 0.2s;
   flex-shrink: 0;
 }
-.pair-code-display {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 18px;
-  letter-spacing: 3px;
-  color: var(--accent-bright);
-  background: rgba(124, 58, 237, 0.08);
-  padding: 4px 12px;
-  border-radius: var(--radius-sm);
+/* ── pairing card ── */
+.pair-card {
+  margin-top: 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 20px;
+  background: var(--bg-card);
+  text-align: center;
+}
+.pair-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.pair-card-header .dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
   display: inline-block;
 }
-.pair-status-ok { color: var(--success); }
-.pair-status-waiting { color: var(--text-accent); }
+.pair-card-header .dot.green { background: var(--success); box-shadow: 0 0 6px rgba(52,211,153,0.4); }
+.pair-card-header .dot.amber { background: #f59e0b; box-shadow: 0 0 6px rgba(245,158,11,0.4); }
+.pair-card-header .dot.red { background: var(--error); }
+.pair-card-code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: 6px;
+  color: var(--accent-bright);
+  margin: 14px 0 6px;
+}
+.pair-card-hint {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-bottom: 14px;
+  line-height: 1.5;
+}
+.pair-card-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+}
+.pair-card-btn {
+  background: transparent;
+  border: 1px solid var(--border-mid);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 5px 14px;
+  font-size: 12px;
+  font-family: 'DM Sans', sans-serif;
+  transition: all 0.2s;
+}
+.pair-card-btn:hover { border-color: var(--accent); color: var(--text-primary); background: rgba(124,58,237,0.06); }
+.pair-card-btn.primary { border-color: var(--accent); color: var(--accent-bright); }
+.pair-card-btn.primary:hover { background: rgba(124,58,237,0.12); }
+.pair-card.paired { border-color: rgba(52,211,153,0.2); }
+.pair-card.paired .pair-card-code { color: var(--success); font-size: 16px; letter-spacing: 1px; }
 .dashboard-edit-btn:hover {
   border-color: var(--border-mid);
   color: var(--text-secondary);
@@ -1003,15 +1052,20 @@ body::after {
         <div class="token-label">Web UI Auth Token &mdash; save this</div>
         <code id="savedToken"></code>
       </div>
-      <div class="token-box" id="pairBox" style="display:none">
-        <div class="token-label">Telegram Pairing Code &mdash; send this to your bot</div>
-        <div style="display:flex; align-items:center; gap:12px; justify-content:center">
-          <code id="pairCode" style="font-size:28px; letter-spacing:4px"></code>
-          <button onclick="copyPairCode()" id="copyPairBtn" style="background:none; border:1px solid var(--border-mid); border-radius:6px; padding:4px 10px; color:var(--text-secondary); cursor:pointer; font-size:12px; font-family:'DM Sans',sans-serif">copy</button>
-        </div>
-        <div class="field-hint" style="margin-top:8px; font-size:12px">
-          Open your bot in Telegram, send this code, and you're paired.
-          <br>One-time only. Persists across restarts.
+      <div id="pairBox" style="display:none; width:100%; max-width:380px">
+        <div class="pair-card">
+          <div class="pair-card-header">
+            <span class="dot amber"></span>
+            Telegram Pairing
+          </div>
+          <div class="pair-card-code" id="pairCode"></div>
+          <div class="pair-card-hint">
+            Open your bot in Telegram and send this code.<br>
+            One-time only. Persists across restarts.
+          </div>
+          <div class="pair-card-actions">
+            <button class="pair-card-btn primary" onclick="copyPairCode()">Copy code</button>
+          </div>
         </div>
       </div>
       <button class="btn btn-primary" onclick="window.location.href='/'">
@@ -1067,11 +1121,6 @@ body::after {
         </div>
         <button class="dashboard-edit-btn" onclick="startDashboardEdit('telegram')">edit</button>
       </div>
-      <div class="dashboard-field" id="df-tg-pairing" style="display:none">
-        <span class="dashboard-field-label">Pairing</span>
-        <span class="dashboard-field-value" id="dfv-tg-pairing"></span>
-        <button class="dashboard-edit-btn" id="btn-new-pair" onclick="requestNewPairCode()" style="display:none">new code</button>
-      </div>
       <div class="dashboard-field" id="df-authtoken">
         <span class="dashboard-field-label">Auth Token</span>
         <span class="dashboard-field-value" id="dfv-authtoken"></span>
@@ -1081,6 +1130,7 @@ body::after {
         <button class="dashboard-edit-btn" onclick="startDashboardEdit('authtoken')">edit</button>
       </div>
     </div>
+    <div id="pair-card-container" style="display:none"></div>
     <div class="dashboard-actions">
       <div class="dashboard-links">
         <button class="dashboard-link" onclick="switchToWizard()">Re-run Setup Wizard</button>
@@ -1890,19 +1940,19 @@ async function validateKey() {
 /* ── clipboard helpers ── */
 
 function copyPairCode() {
-  const code = document.getElementById('pairCode')?.textContent;
+  const code = document.getElementById('pairCode')?.textContent?.trim();
   if (!code) return;
+  const btn = document.querySelector('#pairBox .pair-card-btn.primary');
   navigator.clipboard.writeText(code).then(() => {
-    const btn = document.getElementById('copyPairBtn');
-    if (btn) { btn.textContent = 'copied!'; setTimeout(() => { btn.textContent = 'copy'; }, 2000); }
+    if (btn) { btn.textContent = 'Copied!'; setTimeout(() => { btn.textContent = 'Copy code'; }, 2000); }
   }).catch(() => {});
 }
 
 function copyDashboardPairCode(el) {
-  const codeEl = document.querySelector('.pair-code-display');
+  const codeEl = document.getElementById('dashboard-pair-code');
   if (!codeEl) return;
-  navigator.clipboard.writeText(codeEl.textContent).then(() => {
-    if (el) { el.textContent = 'copied!'; setTimeout(() => { el.textContent = 'copy'; }, 2000); }
+  navigator.clipboard.writeText(codeEl.textContent.trim()).then(() => {
+    if (el) { el.textContent = 'Copied!'; setTimeout(() => { el.textContent = 'Copy code'; }, 2000); }
   }).catch(() => {});
 }
 
@@ -2229,55 +2279,134 @@ async function fetchTelegramStatus() {
 }
 
 async function updateTelegramPairingUI() {
-  const field = document.getElementById('df-tg-pairing');
-  const val = document.getElementById('dfv-tg-pairing');
-  const btn = document.getElementById('btn-new-pair');
-  if (!field || !val) return;
+  const container = document.getElementById('pair-card-container');
+  if (!container) return;
 
   const status = await fetchTelegramStatus();
   if (!status || !status.bot_configured) {
-    field.style.display = 'none';
+    container.style.display = 'none';
     return;
   }
 
-  field.style.display = '';
+  container.style.display = '';
 
   if (status.paired_users > 0) {
-    val.innerHTML = `<span class="pair-status-ok">Paired (${status.paired_users} user${status.paired_users > 1 ? 's' : ''})</span>`;
-    btn.style.display = '';
-    btn.textContent = 'new code';
+    container.innerHTML = `
+      <div class="pair-card paired">
+        <div class="pair-card-header">
+          <span class="dot green"></span>
+          Telegram Connected
+        </div>
+        <div class="pair-card-code">${status.paired_users} user${status.paired_users > 1 ? 's' : ''} paired</div>
+        <div class="pair-card-actions">
+          <button class="pair-card-btn" onclick="requestNewPairCode()">Generate new pairing code</button>
+        </div>
+      </div>`;
   } else if (status.pairing_code) {
-    val.innerHTML = `<span class="pair-status-waiting">Waiting for pairing</span> <span class="pair-code-display">${status.pairing_code}</span> <button onclick="copyDashboardPairCode(this)" style="background:none;border:1px solid var(--border-mid);border-radius:6px;padding:2px 8px;color:var(--text-secondary);cursor:pointer;font-size:11px;font-family:'DM Sans',sans-serif;vertical-align:middle">copy</button>`;
-    btn.style.display = '';
-    btn.textContent = 'regenerate';
+    container.innerHTML = `
+      <div class="pair-card">
+        <div class="pair-card-header">
+          <span class="dot amber"></span>
+          Waiting for pairing
+        </div>
+        <div class="pair-card-code" id="dashboard-pair-code">${status.pairing_code}</div>
+        <div class="pair-card-hint">
+          Open your bot in Telegram and send this code.<br>
+          One-time only. Persists across restarts.
+        </div>
+        <div class="pair-card-actions">
+          <button class="pair-card-btn primary" onclick="copyDashboardPairCode(this)">Copy code</button>
+          <button class="pair-card-btn" onclick="requestNewPairCode()">Regenerate</button>
+        </div>
+      </div>`;
   } else if (status.running) {
-    val.innerHTML = '<span class="pair-status-waiting">Bot running, generating code...</span>';
-    btn.style.display = '';
-    btn.textContent = 'get code';
+    container.innerHTML = `
+      <div class="pair-card">
+        <div class="pair-card-header">
+          <span class="dot amber"></span>
+          Bot starting...
+        </div>
+        <div class="pair-card-hint" style="margin:12px 0 14px">Generating pairing code, hang on.</div>
+        <div class="pair-card-actions">
+          <button class="pair-card-btn primary" onclick="requestNewPairCode()">Get code now</button>
+        </div>
+      </div>`;
   } else {
-    val.innerHTML = '<span style="color:var(--text-tertiary)">Bot not running</span>';
-    btn.style.display = 'none';
+    container.innerHTML = `
+      <div class="pair-card">
+        <div class="pair-card-header">
+          <span class="dot red"></span>
+          Bot not running
+        </div>
+        <div class="pair-card-hint" style="margin:12px 0 14px">
+          The Telegram gateway failed to start. Check your bot token.
+        </div>
+        <div class="pair-card-actions">
+          <button class="pair-card-btn" onclick="requestNewPairCode()">Try starting</button>
+        </div>
+      </div>`;
   }
 }
 
 async function requestNewPairCode() {
-  const btn = document.getElementById('btn-new-pair');
-  const val = document.getElementById('dfv-tg-pairing');
-  if (btn) { btn.disabled = true; btn.textContent = 'generating...'; }
+  const container = document.getElementById('pair-card-container');
+  if (!container) return;
+
+  /* show loading state */
+  container.innerHTML = `
+    <div class="pair-card">
+      <div class="pair-card-header">
+        <span class="dot amber"></span>
+        Generating pairing code...
+      </div>
+      <div class="pair-card-code" style="color:var(--text-tertiary);font-size:16px">please wait</div>
+    </div>`;
 
   try {
     const resp = await fetch('/api/telegram/pair', { method: 'POST' });
     const data = await resp.json();
     if (data.code) {
-      if (val) val.innerHTML = `<span class="pair-status-waiting">Send to bot:</span> <span class="pair-code-display">${data.code}</span> <button onclick="copyDashboardPairCode(this)" style="background:none;border:1px solid var(--border-mid);border-radius:6px;padding:2px 8px;color:var(--text-secondary);cursor:pointer;font-size:11px;font-family:'DM Sans',sans-serif;vertical-align:middle">copy</button>`;
+      container.innerHTML = `
+        <div class="pair-card">
+          <div class="pair-card-header">
+            <span class="dot amber"></span>
+            Waiting for pairing
+          </div>
+          <div class="pair-card-code" id="dashboard-pair-code">${data.code}</div>
+          <div class="pair-card-hint">
+            Open your bot in Telegram and send this code.<br>
+            One-time only. Persists across restarts.
+          </div>
+          <div class="pair-card-actions">
+            <button class="pair-card-btn primary" onclick="copyDashboardPairCode(this)">Copy code</button>
+            <button class="pair-card-btn" onclick="requestNewPairCode()">Regenerate</button>
+          </div>
+        </div>`;
     } else {
-      if (val) val.innerHTML = `<span style="color:var(--error)">${data.error || 'failed to generate code'}</span>`;
+      container.innerHTML = `
+        <div class="pair-card">
+          <div class="pair-card-header">
+            <span class="dot red"></span>
+            Failed
+          </div>
+          <div class="pair-card-hint" style="margin:12px 0 14px;color:var(--error)">
+            ${data.error || 'Could not generate pairing code'}
+          </div>
+          <div class="pair-card-actions">
+            <button class="pair-card-btn" onclick="requestNewPairCode()">Retry</button>
+          </div>
+        </div>`;
     }
   } catch(e) {
-    if (val) val.innerHTML = '<span style="color:var(--error)">could not reach server</span>';
+    container.innerHTML = `
+      <div class="pair-card">
+        <div class="pair-card-header"><span class="dot red"></span> Error</div>
+        <div class="pair-card-hint" style="margin:12px 0 14px;color:var(--error)">Could not reach server</div>
+        <div class="pair-card-actions">
+          <button class="pair-card-btn" onclick="requestNewPairCode()">Retry</button>
+        </div>
+      </div>`;
   }
-
-  if (btn) { btn.disabled = false; btn.textContent = 'regenerate'; }
 }
 
 async function fetchPairCodeForSuccess() {

@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-03-10)
 Phase: 1 of 4 (Provider UI Expansion)
 Plan: 2 of 2 in current phase
 Status: Phase complete
-Last activity: 2026-03-10 -- Completed 01-02 (5-step wizard, model selection, 23 providers)
+Last activity: 2026-03-10 -- Completed 01-02 (5-step wizard, model selection, 23 providers); Completed quick-1-01 (settings dashboard, env var priority, savedKeys persistence)
 
 Progress: [####......] 40%
 
@@ -50,6 +50,8 @@ Recent decisions affecting current work:
 - 01-02: Model selection promoted to dedicated step-2 with datalist from PROVIDERS registry; Save button moved to Confirmation step (step-4)
 - 01-02: Provider registry expanded to 23 total (added avian, litellm, venice, ovhcloud, github-copilot, lm-studio, docker-model-runner, ramalama)
 - 01-02: Compact horizontal card layout with scrollable grid (max-height 420px) to keep Continue button visible
+- quick-1-01: Settings dashboard on /setup for configured agents; per-field inline editing; savedKeys in-memory + persisted in setup.json
+- quick-1-01: os.environ.get guards on all 4 re-hydration export paths in entrypoint.sh; Railway/Docker env vars always win
 
 ### Pending Todos
 
@@ -63,5 +65,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-03-10
-Stopped at: Completed 01-02-PLAN.md -- 5-step wizard, model selection step, 23 providers, confirmation summary
+Stopped at: Completed quick-1-01 -- settings dashboard, env var priority, savedKeys persistence
 Resume file: None

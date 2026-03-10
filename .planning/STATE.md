@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-03-10)
 
 **Core value:** A user with zero DevOps knowledge can deploy and configure GooseClaw correctly on the first try
-**Current focus:** Phase 2: Validation and Env Plumbing
+**Current focus:** Phase 3: Gateway Resilience and Live Feedback
 
 ## Current Position
 
-Phase: 2 of 5 (Validation and Env Plumbing)
-Plan: 3 of 3 in current phase (02-01, 02-02, 02-03 complete)
-Status: Phase complete
-Last activity: 2026-03-10 -- Completed 02-03 (dispatch_validation hardening: azure_endpoint/ollama_host/litellm_host fallbacks, claude-code setup-token instructions, github-copilot token validation)
+Phase: 3 of 5 (Gateway Resilience and Live Feedback)
+Plan: 1 of 2 in current phase (03-01 complete)
+Status: In progress
+Last activity: 2026-03-10 -- Completed 03-01 (startup state machine, stderr capture, proxy error details, auth recovery endpoint)
 
-Progress: [##########] 100%
+Progress: [#####-----] 50%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 2
-- Average duration: ~10 min
-- Total execution time: ~0.33 hours
+- Total plans completed: 3
+- Average duration: ~7 min
+- Total execution time: ~0.37 hours
 
 **By Phase:**
 
@@ -40,6 +40,7 @@ Progress: [##########] 100%
 | Phase 02 P01 | 2 | 2 tasks | 2 files |
 | Phase 02 P02 | 3 | 2 tasks | 1 file |
 | Phase 02 P03 | 2 | 2 tasks | 1 file |
+| Phase 03 P01 | 3 | 2 tasks | 1 file |
 
 ## Accumulated Context
 
@@ -89,6 +90,11 @@ Recent decisions affecting current work:
 - 02-03: credential extraction triple-fallback order: ALLCAPS_ENV_VAR > snake_case_frontend_name > legacy_field (azure_endpoint, ollama_host, litellm_host added)
 - 02-03: claude-code message includes 'claude setup-token' CLI command and 'Validation must be done manually after saving'
 - 02-03: github-copilot attempts real GitHub API validation if GITHUB_TOKEN provided; skip_validation fallback for device flow
+- 03-01: Stderr captured via subprocess.PIPE with daemon reader thread; forwarded to sys.stderr for container logs AND ring buffer for API
+- 03-01: /api/setup/status requires no auth (needed before user authenticates during startup)
+- 03-01: proxy_to_goose() 503 returns JSON with state/message/error/retry_after instead of static text (GATE-05)
+- 03-01: Auth recovery gated by GOOSECLAW_RECOVERY_SECRET env var; returns 404 when not configured
+- 03-01: secrets.compare_digest for recovery secret comparison prevents timing attacks
 
 ### Pending Todos
 
@@ -112,5 +118,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-03-10
-Stopped at: Completed 02-03 -- dispatch_validation hardening for all 23 providers (credential extraction, claude-code/github-copilot messages)
+Stopped at: Completed 03-01-PLAN.md -- startup state machine, stderr capture, proxy error details, auth recovery endpoint
 Resume file: None

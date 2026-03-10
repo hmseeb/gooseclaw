@@ -33,9 +33,9 @@
 
 - [ ] **GATE-01**: Health check thread monitors goose web process and auto-restarts on crash
 - [ ] **GATE-02**: Auto-restart uses exponential backoff (not infinite fast loop)
-- [ ] **GATE-03**: Web UI shows actual error message when goose web fails (not "refresh in a few seconds")
-- [ ] **GATE-04**: goose web stderr is captured and available for debugging
-- [ ] **GATE-05**: Gateway proxy returns goose web error details to the browser
+- [x] **GATE-03**: Web UI shows actual error message when goose web fails (not "refresh in a few seconds")
+- [x] **GATE-04**: goose web stderr is captured and available for debugging
+- [x] **GATE-05**: Gateway proxy returns goose web error details to the browser
 
 ### Env Var Rehydration
 
@@ -68,8 +68,8 @@
 
 ### Auth Recovery
 
-- [ ] **AUTH-01**: If user is locked out (lost auth token), there's a recovery path
-- [ ] **AUTH-02**: Recovery mechanism works without SSH access to container
+- [x] **AUTH-01**: If user is locked out (lost auth token), there's a recovery path
+- [x] **AUTH-02**: Recovery mechanism works without SSH access to container
 
 ## v2 Requirements
 
@@ -116,9 +116,9 @@
 | MODL-04 | Phase 1 | Complete |
 | GATE-01 | Phase 3 | Pending |
 | GATE-02 | Phase 3 | Pending |
-| GATE-03 | Phase 3 | Pending |
-| GATE-04 | Phase 3 | Pending |
-| GATE-05 | Phase 3 | Pending |
+| GATE-03 | Phase 3 | Complete |
+| GATE-04 | Phase 3 | Complete |
+| GATE-05 | Phase 3 | Complete |
 | ENV-01 | Phase 2 | Pending |
 | ENV-02 | Phase 2 | Pending |
 | ENV-03 | Phase 2 | Pending |
@@ -136,8 +136,8 @@
 | ADV-01 | Phase 4 | Pending |
 | ADV-02 | Phase 4 | Pending |
 | ADV-03 | Phase 4 | Pending |
-| AUTH-01 | Phase 3 | Pending |
-| AUTH-02 | Phase 3 | Pending |
+| AUTH-01 | Phase 3 | Complete |
+| AUTH-02 | Phase 3 | Complete |
 
 **Coverage:**
 - v1 requirements: 39 total

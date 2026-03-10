@@ -36,6 +36,105 @@ goose_process = None
 goose_lock = threading.Lock()
 
 
+# ── provider registry ────────────────────────────────────────────────────────
+
+env_map = {
+    "anthropic": ["ANTHROPIC_API_KEY"],
+    "openai": ["OPENAI_API_KEY"],
+    "google": ["GOOGLE_API_KEY"],
+    "groq": ["GROQ_API_KEY"],
+    "openrouter": ["OPENROUTER_API_KEY"],
+    "mistral": ["MISTRAL_API_KEY"],
+    "xai": ["XAI_API_KEY"],
+    "deepseek": ["DEEPSEEK_API_KEY"],
+    "together": ["TOGETHER_API_KEY"],
+    "cerebras": ["CEREBRAS_API_KEY"],
+    "perplexity": ["PERPLEXITY_API_KEY"],
+    "avian": ["AVIAN_API_KEY"],
+    "litellm": ["LITELLM_API_KEY", "LITELLM_HOST"],
+    "venice": ["VENICE_API_KEY"],
+    "ovhcloud": ["OVH_AI_ENDPOINTS_ACCESS_TOKEN"],
+    "claude-code": ["CLAUDE_CODE_OAUTH_TOKEN"],
+    "github-copilot": ["GITHUB_TOKEN"],
+    "ollama": ["OLLAMA_HOST"],
+    "lm-studio": [],
+    "docker-model-runner": [],
+    "ramalama": [],
+    "azure-openai": ["AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT"],
+    "custom": [],
+}
+
+default_models = {
+    "anthropic": "claude-sonnet-4-5",
+    "openai": "gpt-4o",
+    "google": "gemini-2.0-flash",
+    "groq": "llama-3.3-70b-versatile",
+    "openrouter": "anthropic/claude-3.5-sonnet",
+    "mistral": "mistral-large-latest",
+    "xai": "grok-2-1212",
+    "deepseek": "deepseek-chat",
+    "together": "meta-llama/Llama-3-70b-chat-hf",
+    "cerebras": "llama3.1-70b",
+    "perplexity": "llama-3.1-sonar-large-128k-online",
+    "avian": "gpt-4o",
+    "litellm": "gpt-4o",
+    "venice": "llama-3.3-70b",
+    "ovhcloud": "Meta-Llama-3.1-70B-Instruct",
+    "claude-code": "claude-sonnet-4-5",
+    "github-copilot": "gpt-4o",
+    "ollama": "llama3.2",
+    "lm-studio": "local-model",
+    "docker-model-runner": "ai/llama3.2",
+    "ramalama": "llama3.2",
+    "azure-openai": "gpt-4o",
+    "custom": "custom-model",
+}
+
+provider_names = {
+    "anthropic": "Anthropic",
+    "openai": "OpenAI",
+    "google": "Google AI (Gemini)",
+    "groq": "Groq",
+    "openrouter": "OpenRouter",
+    "mistral": "Mistral AI",
+    "xai": "xAI (Grok)",
+    "deepseek": "DeepSeek",
+    "together": "Together AI",
+    "cerebras": "Cerebras",
+    "perplexity": "Perplexity AI",
+    "avian": "Avian",
+    "litellm": "LiteLLM",
+    "venice": "Venice AI",
+    "ovhcloud": "OVHcloud AI",
+    "claude-code": "Claude Code",
+    "github-copilot": "GitHub Copilot",
+    "ollama": "Ollama",
+    "lm-studio": "LM Studio",
+    "docker-model-runner": "Docker Model Runner",
+    "ramalama": "Ramalama",
+    "azure-openai": "Azure OpenAI",
+    "custom": "Custom Provider",
+}
+
+key_urls = {
+    "anthropic": "https://console.anthropic.com/settings/keys",
+    "openai": "https://platform.openai.com/api-keys",
+    "google": "https://aistudio.google.com/app/apikey",
+    "groq": "https://console.groq.com/keys",
+    "openrouter": "https://openrouter.ai/settings/keys",
+    "mistral": "https://console.mistral.ai/api-keys",
+    "xai": "https://console.x.ai/",
+    "deepseek": "https://platform.deepseek.com/api_keys",
+    "together": "https://api.together.xyz/settings/api-keys",
+    "cerebras": "https://cloud.cerebras.ai/platform",
+    "perplexity": "https://www.perplexity.ai/settings/api",
+    "avian": "https://avian.io/",
+    "litellm": "https://docs.litellm.ai/",
+    "venice": "https://venice.ai/settings/api",
+    "ovhcloud": "https://endpoints.ai.cloud.ovh.net/",
+}
+
+
 # ── setup config management ─────────────────────────────────────────────────
 
 def load_setup():
@@ -94,78 +193,250 @@ def check_auth(handler):
 
 # ── provider validation ─────────────────────────────────────────────────────
 
-def validate_provider(provider_type, credentials):
-    """Test if credentials work by making a minimal API call."""
+def http_get(url, headers=None, timeout=10):
+    """Perform a GET request with timeout. Returns (status_code, body_text)."""
+    req = urllib.request.Request(url, headers=headers or {})
     try:
-        if provider_type == "anthropic":
-            req = urllib.request.Request(
-                "https://api.anthropic.com/v1/messages",
-                data=json.dumps({
-                    "model": "claude-sonnet-4-20250514",
-                    "max_tokens": 1,
-                    "messages": [{"role": "user", "content": "hi"}]
-                }).encode(),
-                headers={
-                    "x-api-key": credentials.get("api_key", ""),
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-            )
-            urllib.request.urlopen(req, timeout=15)
-            return {"valid": True}
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf-8", errors="replace")
+    except urllib.error.URLError as e:
+        raise ConnectionError(f"Cannot reach {url}: {e.reason}") from e
+    except Exception as e:
+        raise ConnectionError(f"Request failed: {e}") from e
 
-        elif provider_type == "openai":
-            req = urllib.request.Request(
-                "https://api.openai.com/v1/models",
-                headers={"Authorization": f"Bearer {credentials.get('api_key', '')}"},
-            )
-            urllib.request.urlopen(req, timeout=15)
-            return {"valid": True}
 
-        elif provider_type == "google":
-            key = credentials.get("api_key", "")
-            req = urllib.request.Request(
-                f"https://generativelanguage.googleapis.com/v1beta/models?key={key}"
-            )
-            urllib.request.urlopen(req, timeout=15)
-            return {"valid": True}
+def validate_openai_compatible(provider_id, api_key, base_url):
+    """Validate an OpenAI-compatible provider via GET /v1/models."""
+    name = provider_names.get(provider_id, provider_id)
+    key_url = key_urls.get(provider_id, "the provider dashboard")
+    headers = {"Authorization": f"Bearer {api_key}"}
+    try:
+        status, body = http_get(f"{base_url}/v1/models", headers=headers)
+        if status == 200:
+            try:
+                data = json.loads(body)
+                count = len(data.get("data", []))
+            except (json.JSONDecodeError, KeyError):
+                count = 0
+            return {"valid": True, "message": f"Connected to {name}. Found {count} available models."}
+        elif status in (401, 403):
+            return {"valid": False, "error": f"Invalid API key for {name}. Check your key at {key_url}."}
+        else:
+            return {"valid": False, "error": f"Unexpected response from {name} API (HTTP {status})."}
+    except ConnectionError as e:
+        return {"valid": False, "error": f"Cannot reach {name} API. Check your network."}
 
-        elif provider_type == "groq":
-            req = urllib.request.Request(
-                "https://api.groq.com/openai/v1/models",
-                headers={"Authorization": f"Bearer {credentials.get('api_key', '')}"},
-            )
-            urllib.request.urlopen(req, timeout=15)
-            return {"valid": True}
 
-        elif provider_type == "openrouter":
-            req = urllib.request.Request(
-                "https://openrouter.ai/api/v1/models",
-                headers={"Authorization": f"Bearer {credentials.get('api_key', '')}"},
-            )
-            urllib.request.urlopen(req, timeout=15)
-            return {"valid": True}
+def validate_anthropic(api_key):
+    """Validate Anthropic key via GET /v1/models with x-api-key header."""
+    headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01"}
+    try:
+        status, _body = http_get("https://api.anthropic.com/v1/models", headers=headers)
+        if status == 200:
+            return {"valid": True, "message": "Connected to Anthropic. API key is valid."}
+        elif status in (401, 403):
+            return {"valid": False, "error": "Invalid Anthropic API key."}
+        else:
+            return {"valid": False, "error": f"Unexpected response from Anthropic (HTTP {status})."}
+    except ConnectionError:
+        return {"valid": False, "error": "Cannot reach Anthropic API. Check your network."}
 
-        elif provider_type == "custom":
-            url = credentials.get("url", "").rstrip("/") + "/models"
-            headers = {}
-            if credentials.get("api_key"):
-                headers["Authorization"] = f"Bearer {credentials['api_key']}"
-            req = urllib.request.Request(url, headers=headers)
-            urllib.request.urlopen(req, timeout=15)
-            return {"valid": True}
 
-        elif provider_type == "claude-code":
-            return {"valid": True, "note": "Claude setup tokens cannot be validated remotely. Save and test."}
+def validate_google(api_key):
+    """Validate Google AI key via generativelanguage.googleapis.com."""
+    url = f"https://generativelanguage.googleapis.com/v1beta/models?key={urllib.parse.quote(api_key)}"
+    try:
+        status, body = http_get(url)
+        if status == 200:
+            try:
+                count = len(json.loads(body).get("models", []))
+            except (json.JSONDecodeError, KeyError):
+                count = 0
+            return {"valid": True, "message": f"Connected to Google AI (Gemini). Found {count} models."}
+        elif status in (400, 401, 403):
+            return {"valid": False, "error": "Invalid Google API key."}
+        else:
+            return {"valid": False, "error": f"Unexpected response from Google AI (HTTP {status})."}
+    except ConnectionError:
+        return {"valid": False, "error": "Cannot reach Google AI API. Check your network."}
 
-        return {"valid": True, "note": "Validation not available for this provider."}
 
+def validate_perplexity(api_key):
+    """Validate Perplexity via a minimal chat completions test."""
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    payload = json.dumps({
+        "model": "llama-3.1-sonar-small-128k-online",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 1,
+    }).encode()
+    req = urllib.request.Request(
+        "https://api.perplexity.ai/chat/completions",
+        data=payload, headers=headers, method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return {"valid": True, "message": "Connected to Perplexity AI. API key is valid."}
     except urllib.error.HTTPError as e:
         if e.code in (401, 403):
-            return {"valid": False, "error": "Invalid or unauthorized API key."}
-        return {"valid": True, "note": f"Got HTTP {e.code} but key format looks correct."}
-    except Exception as e:
-        return {"valid": False, "error": str(e)}
+            return {"valid": False, "error": "Invalid Perplexity API key."}
+        if e.code == 400:
+            return {"valid": True, "message": "Connected to Perplexity AI. API key appears valid."}
+        return {"valid": False, "error": f"Unexpected response from Perplexity AI (HTTP {e.code})."}
+    except urllib.error.URLError:
+        return {"valid": False, "error": "Cannot reach Perplexity AI. Check your network."}
+
+
+def validate_azure_openai(api_key, endpoint):
+    """Validate Azure OpenAI with key + endpoint."""
+    if not endpoint or not endpoint.startswith("https://"):
+        return {"valid": False, "error": "Azure OpenAI endpoint must start with 'https://'."}
+    url = f"{endpoint.rstrip('/')}/openai/models?api-version=2024-02-01"
+    try:
+        status, _body = http_get(url, headers={"api-key": api_key})
+        if status == 200:
+            return {"valid": True, "message": "Connected to Azure OpenAI. Credentials are valid."}
+        elif status in (401, 403):
+            return {"valid": False, "error": "Invalid Azure OpenAI API key or endpoint."}
+        else:
+            return {"valid": False, "error": f"Unexpected response from Azure OpenAI (HTTP {status})."}
+    except ConnectionError:
+        return {"valid": False, "error": "Cannot reach Azure OpenAI endpoint."}
+
+
+def validate_litellm(api_key, host):
+    """Validate LiteLLM proxy via GET /v1/models."""
+    if not host:
+        return {"valid": False, "error": "LiteLLM host URL is required. Set LITELLM_HOST."}
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    try:
+        status, _body = http_get(f"{host.rstrip('/')}/v1/models", headers=headers)
+        if status == 200:
+            return {"valid": True, "message": "Connected to LiteLLM proxy."}
+        elif status in (401, 403):
+            return {"valid": False, "error": "LiteLLM proxy returned auth error. Check LITELLM_API_KEY."}
+        else:
+            return {"valid": False, "error": f"Unexpected response from LiteLLM (HTTP {status})."}
+    except ConnectionError:
+        return {"valid": False, "error": f"Cannot reach LiteLLM at {host}."}
+
+
+def validate_local_provider(provider_id, host=None):
+    """Validate a local provider (ollama, lm-studio, docker-model-runner, ramalama)."""
+    name = provider_names.get(provider_id, provider_id)
+    defaults = {
+        "ollama": "http://localhost:11434",
+        "lm-studio": "http://localhost:1234",
+        "docker-model-runner": "http://localhost:12434",
+        "ramalama": "http://localhost:8080",
+    }
+    if not host:
+        return {"valid": True, "message": f"No host URL configured. Default: {defaults.get(provider_id, 'http://localhost:8080')}"}
+    check_url = f"{host.rstrip('/')}/api/tags" if provider_id == "ollama" else f"{host.rstrip('/')}/v1/models"
+    try:
+        status, body = http_get(check_url)
+        if status == 200:
+            count = 0
+            try:
+                data = json.loads(body)
+                count = len(data.get("models" if provider_id == "ollama" else "data", []))
+            except (json.JSONDecodeError, KeyError):
+                pass
+            return {"valid": True, "message": f"Connected to {name}. {count} models available."}
+        else:
+            return {"valid": False, "error": f"Cannot reach {name} at {host} (HTTP {status})."}
+    except ConnectionError:
+        return {"valid": False, "error": f"Cannot reach {host}."}
+
+
+def dispatch_validation(provider, credentials):
+    """Route validation to the correct handler for the given provider."""
+    # Special / skip-validation providers
+    if provider == "claude-code":
+        return {"valid": True, "message": "Claude Code uses OAuth. Validation must be done manually.", "skip_validation": True}
+    if provider == "github-copilot":
+        return {"valid": True, "message": "GitHub Copilot token validation is not supported remotely.", "skip_validation": True}
+
+    # Anthropic
+    if provider == "anthropic":
+        key = credentials.get("ANTHROPIC_API_KEY") or credentials.get("api_key", "")
+        return validate_anthropic(key) if key else {"valid": False, "error": "API key is required."}
+
+    # Google
+    if provider == "google":
+        key = credentials.get("GOOGLE_API_KEY") or credentials.get("api_key", "")
+        return validate_google(key) if key else {"valid": False, "error": "API key is required."}
+
+    # Perplexity
+    if provider == "perplexity":
+        key = credentials.get("PERPLEXITY_API_KEY") or credentials.get("api_key", "")
+        return validate_perplexity(key) if key else {"valid": False, "error": "API key is required."}
+
+    # Avian (format-only)
+    if provider == "avian":
+        key = credentials.get("AVIAN_API_KEY") or credentials.get("api_key", "")
+        if not key:
+            return {"valid": False, "error": "API key is required."}
+        if key.startswith("avian-"):
+            return {"valid": True, "message": "Avian API key format is valid."}
+        return {"valid": False, "error": "Avian keys must start with 'avian-'."}
+
+    # OVHcloud (length-only)
+    if provider == "ovhcloud":
+        key = credentials.get("OVH_AI_ENDPOINTS_ACCESS_TOKEN") or credentials.get("api_key", "")
+        if not key:
+            return {"valid": False, "error": "Access token is required."}
+        if len(key) > 20:
+            return {"valid": True, "message": "OVHcloud AI Endpoints token appears valid."}
+        return {"valid": False, "error": "OVHcloud token appears too short."}
+
+    # Azure OpenAI
+    if provider == "azure-openai":
+        key = credentials.get("AZURE_OPENAI_API_KEY") or credentials.get("api_key", "")
+        endpoint = credentials.get("AZURE_OPENAI_ENDPOINT") or credentials.get("endpoint", "")
+        if not key or not endpoint:
+            return {"valid": False, "error": "Both API key and endpoint are required."}
+        return validate_azure_openai(key, endpoint)
+
+    # LiteLLM
+    if provider == "litellm":
+        key = credentials.get("LITELLM_API_KEY") or credentials.get("api_key", "")
+        host = credentials.get("LITELLM_HOST") or credentials.get("host", "")
+        return validate_litellm(key, host)
+
+    # Local providers
+    if provider in ("ollama", "lm-studio", "docker-model-runner", "ramalama"):
+        host = credentials.get("OLLAMA_HOST") or credentials.get("host") or credentials.get("url")
+        return validate_local_provider(provider, host)
+
+    # Custom provider
+    if provider == "custom":
+        key = credentials.get("api_key") or credentials.get("custom_key", "")
+        url = credentials.get("url") or credentials.get("custom_url", "")
+        if not url:
+            return {"valid": False, "error": "Custom provider URL is required."}
+        return validate_openai_compatible("custom", key, url.rstrip("/")) if key else {"valid": True, "message": f"Connected to {url} (no auth)."}
+
+    # OpenAI-compatible providers
+    openai_compat = {
+        "openai": "https://api.openai.com",
+        "groq": "https://api.groq.com/openai",
+        "openrouter": "https://openrouter.ai/api",
+        "mistral": "https://api.mistral.ai",
+        "xai": "https://api.x.ai",
+        "deepseek": "https://api.deepseek.com",
+        "together": "https://api.together.xyz",
+        "cerebras": "https://api.cerebras.ai",
+        "venice": "https://api.venice.ai/api",
+    }
+    if provider in openai_compat:
+        key = credentials.get(env_map[provider][0]) or credentials.get("api_key", "")
+        if not key:
+            return {"valid": False, "error": "API key is required."}
+        return validate_openai_compatible(provider, key, openai_compat[provider])
+
+    return {"valid": False, "error": f"Unknown provider: {provider!r}"}
 
 
 # ── goose web subprocess management ─────────────────────────────────────────
@@ -250,27 +521,16 @@ def apply_config(config):
                 "api_key": custom_key,
             }, f)
         lines.append("GOOSE_PROVIDER: custom")
-    elif provider_type in ("anthropic", "openai", "google", "groq", "openrouter"):
-        env_map = {
-            "anthropic": "ANTHROPIC_API_KEY",
-            "openai": "OPENAI_API_KEY",
-            "google": "GOOGLE_API_KEY",
-            "groq": "GROQ_API_KEY",
-            "openrouter": "OPENROUTER_API_KEY",
-        }
-        os.environ[env_map[provider_type]] = api_key
+    elif provider_type in env_map:
+        # set env vars for the provider from the module-level registry
+        for env_var in env_map.get(provider_type, []):
+            val = config.get(env_var.lower(), "") or api_key
+            if val:
+                os.environ[env_var] = val
         lines.append(f"GOOSE_PROVIDER: {provider_type}")
 
-    # default models per provider if none specified
+    # default models per provider if none specified (from module-level registry)
     if not model:
-        default_models = {
-            "claude-code": "default",
-            "anthropic": "claude-sonnet-4-20250514",
-            "openrouter": "anthropic/claude-sonnet-4-20250514",
-            "openai": "gpt-4o",
-            "google": "gemini-2.0-flash",
-            "groq": "llama-3.3-70b-versatile",
-        }
         model = default_models.get(provider_type, "")
 
     if model:
@@ -461,7 +721,9 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         body = self._read_body()
         try:
             data = json.loads(body)
-            result = validate_provider(data.get("provider_type", ""), data)
+            provider = data.get("provider_type") or data.get("provider", "")
+            credentials = data.get("credentials", data)
+            result = dispatch_validation(provider, credentials)
             self.send_json(200, result)
         except Exception as e:
             self.send_json(500, {"valid": False, "error": str(e)})

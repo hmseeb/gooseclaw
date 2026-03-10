@@ -1156,6 +1156,7 @@ body::after {
 let selectedProvider = '';
 let isReconfigure = false;
 let savedKeys = {};
+let savedKeysSet = {};
 
 /* ── provider data registry ── */
 const PROVIDERS = {
@@ -1545,6 +1546,10 @@ fetch('/api/setup/config').then(r => r.json()).then(data => {
     /* load previously saved keys for provider switching persistence */
     if (data.config.saved_keys && typeof data.config.saved_keys === 'object') {
       savedKeys = data.config.saved_keys;
+    }
+    /* load boolean key-set indicators from server (no partial key leakage) */
+    if (data.config.saved_keys_set && typeof data.config.saved_keys_set === 'object') {
+      savedKeysSet = data.config.saved_keys_set;
     }
     /* show settings dashboard instead of wizard */
     showDashboard(data.config);
@@ -2135,10 +2140,18 @@ function updateDashboardCredField(pt) {
     credInput.type = 'password';
     credInput.disabled = false;
   }
-  /* auto-fill from savedKeys if available */
+  /* show "already set" placeholder when a key is known to be saved.
+     savedKeysSet[pt] is the canonical boolean indicator from the server (no
+     partial key leakage). Fall back to checking savedKeys[pt] for string
+     presence (backwards-compatible with older API responses). */
   const saved = savedKeys[pt];
-  if (saved && typeof saved === 'string') {
-    credInput.value = '';  /* don't pre-fill masked value, let user enter new one */
+  const isSet = savedKeysSet[pt] === true || (saved && typeof saved === 'string');
+  if (isSet) {
+    credInput.value = '';  /* never pre-fill masked value */
+    /* override placeholder text to communicate that a key is already stored */
+    if (!credInput.disabled) {
+      credInput.placeholder = 'key already set — leave blank to keep current';
+    }
   }
 }
 

@@ -951,24 +951,57 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         setup = load_setup()
         if setup:
             safe = {**setup}
-            # mask top-level secrets
-            for key in ("api_key", "claude_setup_token", "custom_key", "web_auth_token", "web_auth_token_hash"):
+
+            # ── Top-level secret masking ─────────────────────────────────────
+            # Replace secret values with a fixed placeholder ("********").
+            # This reveals NOTHING about the key (no partial leakage).
+            # Also add boolean companion fields (_set) so the frontend can
+            # display "key already set" placeholders without knowing the value.
+            # telegram_bot_token is removed entirely — frontend only needs bool.
+            SECRET_FIELDS = (
+                "api_key",
+                "claude_setup_token",
+                "custom_key",
+                "web_auth_token",
+                "web_auth_token_hash",
+            )
+            for key in SECRET_FIELDS:
                 val = safe.get(key, "")
-                if val and len(val) > 12:
-                    safe[key] = val[:6] + "..." + val[-4:]
-                elif val:
-                    safe[key] = "***"
-            # mask values inside saved_keys dict
+                safe[f"{key}_set"] = bool(val)
+                if val:
+                    safe[key] = "********"
+                else:
+                    safe.pop(key, None)
+
+            # telegram_bot_token: only expose whether it is set, never the value
+            tbt = safe.pop("telegram_bot_token", "")
+            safe["telegram_bot_token_set"] = bool(tbt)
+
+            # ── saved_keys masking ───────────────────────────────────────────
+            # Return "********" as the masked value so typeof val === 'string'
+            # still holds in setup.html's updateDashboardCredField().
+            # Also add a saved_keys_set dict with booleans for smarter UI hints.
             if "saved_keys" in safe and isinstance(safe["saved_keys"], dict):
                 masked_keys = {}
+                set_indicators = {}
                 for provider_id, val in safe["saved_keys"].items():
-                    if isinstance(val, str) and len(val) > 12:
-                        masked_keys[provider_id] = val[:6] + "..." + val[-4:]
-                    elif isinstance(val, str) and val:
-                        masked_keys[provider_id] = "***"
+                    if isinstance(val, str) and val:
+                        masked_keys[provider_id] = "********"
+                        set_indicators[provider_id] = True
+                    elif isinstance(val, dict) and val:
+                        # complex value (e.g. azure key+endpoint dict) — mask
+                        # each string sub-field
+                        masked_sub = {}
+                        for sub_key, sub_val in val.items():
+                            masked_sub[sub_key] = "********" if sub_val else sub_val
+                        masked_keys[provider_id] = masked_sub
+                        set_indicators[provider_id] = True
                     else:
                         masked_keys[provider_id] = val
+                        set_indicators[provider_id] = False
                 safe["saved_keys"] = masked_keys
+                safe["saved_keys_set"] = set_indicators
+
             self.send_json(200, {"configured": True, "config": safe})
         else:
             self.send_json(200, {"configured": False})

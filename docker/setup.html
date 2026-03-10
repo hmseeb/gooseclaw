@@ -1190,6 +1190,27 @@ body::after {
     </div>
   </div>
 
+  <!-- auth recovery (shown via /setup?recover) -->
+  <div class="step" id="step-recover">
+    <div class="step-title">Account Recovery</div>
+    <p style="color:var(--text-secondary);margin-bottom:20px;font-size:14px">
+      Lost your auth token? Enter the recovery secret to get a new one.<br>
+      <span style="color:var(--text-tertiary);font-size:12px">
+        The recovery secret is the GOOSECLAW_RECOVERY_SECRET environment variable set in your deployment.
+      </span>
+    </p>
+    <div class="input-group" style="margin-bottom:16px">
+      <label class="input-label">Recovery Secret</label>
+      <input type="password" id="recoverySecret" class="text-input" placeholder="Enter your recovery secret">
+    </div>
+    <div id="recoveryResult" style="display:none"></div>
+    <div class="btn-row">
+      <button class="btn btn-primary" onclick="submitRecovery()">
+        Reset Auth Token
+      </button>
+    </div>
+  </div>
+
 </div>
 
 <script>
@@ -1646,22 +1667,28 @@ try {
   commonTZ.forEach(tz => { const o = document.createElement('option'); o.value = tz; o.textContent = tz; tzSelect.appendChild(o); });
 }
 
-/* ── check existing config ── */
-fetch('/api/setup/config').then(r => r.json()).then(data => {
-  if (data.configured) {
-    isReconfigure = true;
-    /* load previously saved keys for provider switching persistence */
-    if (data.config.saved_keys && typeof data.config.saved_keys === 'object') {
-      savedKeys = data.config.saved_keys;
+/* ── check for recovery mode ── */
+if (window.location.search.includes('recover')) {
+  goToStep('recover');
+  /* skip loading config — user is locked out */
+} else {
+  /* ── check existing config ── */
+  fetch('/api/setup/config').then(r => r.json()).then(data => {
+    if (data.configured) {
+      isReconfigure = true;
+      /* load previously saved keys for provider switching persistence */
+      if (data.config.saved_keys && typeof data.config.saved_keys === 'object') {
+        savedKeys = data.config.saved_keys;
+      }
+      /* load boolean key-set indicators from server (no partial key leakage) */
+      if (data.config.saved_keys_set && typeof data.config.saved_keys_set === 'object') {
+        savedKeysSet = data.config.saved_keys_set;
+      }
+      /* show settings dashboard instead of wizard */
+      showDashboard(data.config);
     }
-    /* load boolean key-set indicators from server (no partial key leakage) */
-    if (data.config.saved_keys_set && typeof data.config.saved_keys_set === 'object') {
-      savedKeysSet = data.config.saved_keys_set;
-    }
-    /* show settings dashboard instead of wizard */
-    showDashboard(data.config);
-  }
-}).catch(() => {});
+  }).catch(() => {});
+}
 
 /* ── provider selection ── */
 function selectProvider(id) {
@@ -2783,6 +2810,47 @@ async function fetchPairCodeForSuccess() {
       pairBox.style.display = 'block';
     }
   } catch(e) {}
+}
+
+/* ── auth recovery ── */
+async function submitRecovery() {
+  const secret = document.getElementById('recoverySecret').value.trim();
+  const resultEl = document.getElementById('recoveryResult');
+  if (!secret) {
+    resultEl.style.display = 'block';
+    resultEl.innerHTML = '<div class="alert-error show">Please enter the recovery secret.</div>';
+    return;
+  }
+
+  resultEl.style.display = 'block';
+  resultEl.innerHTML = '<div style="color:var(--text-secondary)">Verifying...</div>';
+
+  try {
+    const resp = await fetch('/api/auth/recover', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ secret }),
+    });
+    const data = await resp.json();
+    if (data.success && data.auth_token) {
+      resultEl.innerHTML = `
+        <div style="background:var(--success-bg);border:1px solid rgba(52,211,153,0.2);border-radius:var(--radius-md);padding:16px;text-align:left">
+          <strong style="color:var(--success)">Token reset successfully!</strong><br>
+          <div class="token-box" style="margin-top:12px;display:block">
+            <div class="token-label">New Auth Token &mdash; save this</div>
+            <code>${data.auth_token}</code>
+          </div>
+          <p style="margin-top:12px;font-size:13px;color:var(--text-secondary)">
+            Use this token to log in. It won't be shown again.<br>
+            <a href="/setup" style="color:var(--text-accent)">Go to setup page</a>
+          </p>
+        </div>`;
+    } else {
+      resultEl.innerHTML = '<div class="alert-error show">' + (data.error || 'Recovery failed.') + '</div>';
+    }
+  } catch(e) {
+    resultEl.innerHTML = '<div class="alert-error show">Could not reach the server. Try again.</div>';
+  }
 }
 
 /* ── startup status polling ── */

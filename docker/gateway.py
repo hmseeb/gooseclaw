@@ -1321,12 +1321,16 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
 
     def handle_setup_page(self):
         # first boot (no setup.json) = open. after that = require auth.
-        if load_setup() and not check_auth(self):
+        # allow unauthenticated access to recovery page
+        query = urllib.parse.urlparse(self.path).query
+        is_recovery = "recover" in urllib.parse.parse_qs(query)
+        if load_setup() and not is_recovery and not check_auth(self):
+            body = b"Authentication required. Lost your token? Visit /setup?recover"
             self.send_response(401)
             self.send_header("WWW-Authenticate", 'Basic realm="gooseclaw setup"')
-            self.send_header("Content-Length", "23")
+            self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(b"Authentication required")
+            self.wfile.write(body)
             return
         try:
             with open(SETUP_HTML, "rb") as f:

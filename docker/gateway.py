@@ -17,6 +17,7 @@ API:
 """
 
 import base64
+import hashlib
 import http.client
 import http.server
 import json
@@ -47,6 +48,21 @@ goose_lock = threading.Lock()
 telegram_process = None
 telegram_pair_code = None
 telegram_pair_lock = threading.Lock()
+
+# internal token used for gateway -> goose web communication (never exposed to users)
+_INTERNAL_GOOSE_TOKEN = None
+
+
+# ── auth token hashing ───────────────────────────────────────────────────────
+
+def hash_token(token):
+    """Hash an auth token using SHA-256 for storage."""
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def verify_token(provided, stored_hash):
+    """Verify a provided token against a stored SHA-256 hash."""
+    return hashlib.sha256(provided.encode()).hexdigest() == stored_hash
 
 
 # ── provider registry ────────────────────────────────────────────────────────
@@ -303,20 +319,30 @@ def is_configured():
 
 
 def get_auth_token():
-    """Get the active auth token from env var or setup file."""
+    """Get the active auth token. Returns (token_or_hash, is_hashed) tuple.
+
+    - env var GOOSE_WEB_AUTH_TOKEN -> (plaintext, False)
+    - setup.json web_auth_token_hash (new format) -> (hash, True)
+    - setup.json web_auth_token (legacy plaintext) -> (plaintext, False)
+    """
     token = os.environ.get("GOOSE_WEB_AUTH_TOKEN", "")
     if token:
-        return token
+        return token, False
     setup = load_setup()
     if setup:
-        return setup.get("web_auth_token", "")
-    return ""
+        stored_hash = setup.get("web_auth_token_hash", "")
+        if stored_hash:
+            return stored_hash, True
+        legacy = setup.get("web_auth_token", "")
+        if legacy:
+            return legacy, False
+    return "", False
 
 
 def check_auth(handler):
     """Check HTTP Basic Auth. Returns True if authorized."""
-    token = get_auth_token()
-    if not token:
+    stored, is_hashed = get_auth_token()
+    if not stored:
         return True
 
     auth_header = handler.headers.get("Authorization", "")
@@ -324,7 +350,9 @@ def check_auth(handler):
         try:
             decoded = base64.b64decode(auth_header[6:]).decode()
             _, provided = decoded.split(":", 1)
-            return provided == token
+            if is_hashed:
+                return verify_token(provided, stored)
+            return provided == stored
         except Exception:
             pass
     return False
@@ -753,7 +781,7 @@ def start_telegram_gateway(bot_token):
 
 
 def start_goose_web():
-    global goose_process
+    global goose_process, _INTERNAL_GOOSE_TOKEN
     with goose_lock:
         if goose_process and goose_process.poll() is None:
             goose_process.terminate()
@@ -762,15 +790,16 @@ def start_goose_web():
             except subprocess.TimeoutExpired:
                 goose_process.kill()
 
-        token = get_auth_token()
+        # Generate a random internal token for goose web communication.
+        # This token is never exposed to users -- gateway handles all user auth.
+        # Users authenticate against the stored hash; gateway then proxies
+        # requests to goose web using this internal token.
+        _INTERNAL_GOOSE_TOKEN = secrets.token_urlsafe(32)
         cmd = ["goose", "web", "--host", "127.0.0.1", "--port", str(GOOSE_WEB_PORT)]
-        if token:
-            cmd += ["--auth-token", token]
-        else:
-            cmd += ["--no-auth"]
+        cmd += ["--auth-token", _INTERNAL_GOOSE_TOKEN]
 
         print(f"[gateway] starting goose web on 127.0.0.1:{GOOSE_WEB_PORT}")
-        print(f"[gateway] cmd: {' '.join(cmd)}")
+        print(f"[gateway] cmd: goose web --host 127.0.0.1 --port {GOOSE_WEB_PORT} --auth-token [internal]")
         goose_process = subprocess.Popen(cmd, stdout=sys.stdout, stderr=sys.stderr)
 
         # wait for it to listen
@@ -890,7 +919,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         if setup:
             safe = {**setup}
             # mask top-level secrets
-            for key in ("api_key", "claude_setup_token", "custom_key", "web_auth_token"):
+            for key in ("api_key", "claude_setup_token", "custom_key", "web_auth_token", "web_auth_token_hash"):
                 val = safe.get(key, "")
                 if val and len(val) > 12:
                     safe[key] = val[:6] + "..." + val[-4:]
@@ -921,8 +950,15 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             config = json.loads(body)
 
             # auto-generate auth token if not provided
-            if not config.get("web_auth_token") and not os.environ.get("GOOSE_WEB_AUTH_TOKEN"):
-                config["web_auth_token"] = secrets.token_urlsafe(24)
+            plaintext_token = config.get("web_auth_token", "")
+            if not plaintext_token and not os.environ.get("GOOSE_WEB_AUTH_TOKEN"):
+                plaintext_token = secrets.token_urlsafe(24)
+
+            # hash the token before storage -- plaintext never hits disk
+            if plaintext_token:
+                config["web_auth_token_hash"] = hash_token(plaintext_token)
+                # remove plaintext from config dict before saving
+                config.pop("web_auth_token", None)
 
             save_setup(config)
             apply_config(config)
@@ -934,8 +970,9 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             threading.Thread(target=_restart, daemon=True).start()
 
             resp = {"success": True, "message": "saved. agent is restarting..."}
-            if config.get("web_auth_token"):
-                resp["auth_token"] = config["web_auth_token"]
+            if plaintext_token:
+                # one-time display to user -- not stored in setup.json
+                resp["auth_token"] = plaintext_token
             self.send_json(200, resp)
 
         except json.JSONDecodeError:
@@ -1069,6 +1106,14 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                     headers[key] = self.headers[key]
             headers["Host"] = f"127.0.0.1:{GOOSE_WEB_PORT}"
             headers["Connection"] = "close"
+
+            # replace user Authorization with internal token
+            # gateway already authenticated the user in do_GET/do_POST
+            if _INTERNAL_GOOSE_TOKEN:
+                auth_value = base64.b64encode(
+                    f"user:{_INTERNAL_GOOSE_TOKEN}".encode()
+                ).decode()
+                headers["Authorization"] = f"Basic {auth_value}"
 
             # read body
             content_length = int(self.headers.get("Content-Length", 0))

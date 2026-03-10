@@ -1,0 +1,44 @@
+# Version control
+.git
+.gitignore
+
+# Planning and AI agent artifacts
+.planning
+.agents
+.claude
+
+# Documentation (exclude most md files, keep critical runtime identity files)
+*.md
+!identity/*.md
+!VERSION
+
+LICENSE
+
+# Environment and secrets
+.env
+.env.*
+
+# Python artifacts
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+
+# Node
+node_modules
+npm-debug.log
+
+# Editor artifacts
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# Test and dev files
+*.test.*
+coverage/
+.nyc_output/

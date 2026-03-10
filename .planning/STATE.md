@@ -10,9 +10,9 @@ See: .planning/PROJECT.md (updated 2026-03-10)
 ## Current Position
 
 Phase: 2 of 5 (Validation and Env Plumbing)
-Plan: 2 of 3 in current phase (02-01, 02-02 complete)
-Status: In progress
-Last activity: 2026-03-10 -- Completed 02-02 (frontend credential validation gating, format hints, wizard pre-fill on reconfigure)
+Plan: 3 of 3 in current phase (02-01, 02-02, 02-03 complete)
+Status: Phase complete
+Last activity: 2026-03-10 -- Completed 02-03 (dispatch_validation hardening: azure_endpoint/ollama_host/litellm_host fallbacks, claude-code setup-token instructions, github-copilot token validation)
 
 Progress: [##########] 100%
 
@@ -39,6 +39,7 @@ Progress: [##########] 100%
 | Phase 05 P06 | 4 | 3 tasks | 1 file |
 | Phase 02 P01 | 2 | 2 tasks | 2 files |
 | Phase 02 P02 | 3 | 2 tasks | 1 file |
+| Phase 02 P03 | 2 | 2 tasks | 1 file |
 
 ## Accumulated Context
 
@@ -85,6 +86,9 @@ Recent decisions affecting current work:
 - 02-02: advanceFromCredentials() gate: blocks empty API keys, validates URL format for local providers, auto-passes for github-copilot
 - 02-02: prefillWizard(config) centralizes reconfigure pre-fill; secrets shown as masked placeholder ('already set'), value never sent to DOM
 - 02-02: saveConfig() omits empty credential fields during reconfigure so backend never receives empty string override of existing secrets
+- 02-03: credential extraction triple-fallback order: ALLCAPS_ENV_VAR > snake_case_frontend_name > legacy_field (azure_endpoint, ollama_host, litellm_host added)
+- 02-03: claude-code message includes 'claude setup-token' CLI command and 'Validation must be done manually after saving'
+- 02-03: github-copilot attempts real GitHub API validation if GITHUB_TOKEN provided; skip_validation fallback for device flow
 
 ### Pending Todos
 
@@ -108,5 +112,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-03-10
-Stopped at: Completed 02-02 -- frontend credential validation gating, format hints, wizard pre-fill on reconfigure
+Stopped at: Completed 02-03 -- dispatch_validation hardening for all 23 providers (credential extraction, claude-code/github-copilot messages)
 Resume file: None

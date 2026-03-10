@@ -13,7 +13,7 @@ Transform the existing GooseClaw setup wizard from a 7-provider basic setup into
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Provider UI Expansion** - Redesign wizard with 15+ providers in categories, model selection, and full setup flow steps (completed 2026-03-10)
-- [ ] **Phase 2: Validation and Env Plumbing** - Every provider validates credentials, maps env vars correctly, rehydrates on restart, and pre-fills on reconfigure
+- [x] **Phase 2: Validation and Env Plumbing** - Every provider validates credentials, maps env vars correctly, rehydrates on restart, and pre-fills on reconfigure (completed 2026-03-10)
 - [ ] **Phase 3: Gateway Resilience and Live Feedback** - goose web is monitored, auto-restarted, errors surfaced to user, real-time startup status, and auth recovery
 - [ ] **Phase 4: Advanced Multi-Model Settings** - Lead/worker multi-model configuration for power users
 - [x] **Phase 5: Production Hardening** - Security, reliability, and deployment quality across gateway, entrypoint, and Dockerfile (completed 2026-03-10)
@@ -46,12 +46,12 @@ Plans:
   3. Claude-code provider shows clear manual instructions since remote validation is impossible
   4. After container restart, all previously configured env vars are restored and goose starts with correct provider/model
   5. When reconfiguring, form fields are pre-filled with existing values (API keys masked)
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 
 Plans:
 - [x] 02-01-PLAN.md -- Sync env var mapping and rehydration across gateway.py and entrypoint.sh for all 23 providers (completed 2026-03-10)
-- [ ] 02-02-PLAN.md -- Frontend validation gating, per-provider format checks, and form pre-fill on reconfigure
-- [ ] 02-03-PLAN.md -- Harden dispatch_validation credential extraction and end-to-end verification
+- [x] 02-02-PLAN.md -- Frontend validation gating, per-provider format checks, and form pre-fill on reconfigure (completed 2026-03-10)
+- [x] 02-03-PLAN.md -- Harden dispatch_validation credential extraction and end-to-end verification (completed 2026-03-10)
 
 ### Phase 3: Gateway Resilience and Live Feedback
 **Goal**: goose web crashes are handled automatically, users see real-time status and actual errors, and locked-out users can recover access
@@ -117,7 +117,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Provider UI Expansion | 2/2 | Complete   | 2026-03-10 |
-| 2. Validation and Env Plumbing | 2/3 | In Progress|  |
+| 2. Validation and Env Plumbing | 3/3 | Complete   | 2026-03-10 |
 | 3. Gateway Resilience and Live Feedback | 0/2 | Not started | - |
 | 4. Advanced Multi-Model Settings | 0/1 | Not started | - |
 | 5. Production Hardening | 6/6 | Complete   | 2026-03-10 |

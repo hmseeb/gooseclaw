@@ -238,6 +238,18 @@ body::after {
   margin-bottom: 20px;
 }
 
+/* ── category label ── */
+.category-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--text-tertiary);
+  margin: 20px 0 10px;
+}
+.category-label:first-child { margin-top: 0; }
+
 /* ── provider cards ── */
 .provider-grid {
   display: grid;
@@ -255,6 +267,7 @@ body::after {
   backdrop-filter: blur(12px);
   transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   overflow: hidden;
+  animation: fadeSlideIn 0.35s ease-out both;
 }
 .provider-card::before {
   content: '';
@@ -301,13 +314,31 @@ body::after {
   color: var(--text-tertiary);
   position: relative;
 }
+.provider-card .card-meta {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-top: 6px;
+  position: relative;
+  opacity: 0.8;
+}
+.provider-card .card-link {
+  font-size: 11px;
+  color: var(--text-accent);
+  text-decoration: none;
+  margin-top: 6px;
+  display: inline-block;
+  position: relative;
+  opacity: 0.75;
+  transition: opacity 0.2s;
+}
+.provider-card .card-link:hover { opacity: 1; text-decoration: underline; }
 .provider-card.selected .card-name { color: var(--accent-bright); }
 .provider-card.selected .card-icon {
   background: var(--accent-glow);
   border-color: rgba(124, 58, 237, 0.3);
 }
 
-/* full-width last card if odd count */
+/* full-width last card if odd count within a grid */
 .provider-grid .provider-card:last-child:nth-child(odd) {
   grid-column: 1 / -1;
 }
@@ -362,6 +393,11 @@ body::after {
   padding: 2px 6px;
   border-radius: 4px;
 }
+.field-hint a {
+  color: var(--text-accent);
+  text-decoration: none;
+}
+.field-hint a:hover { text-decoration: underline; }
 
 /* ── buttons ── */
 .btn-row {
@@ -524,16 +560,6 @@ body::after {
   50% { box-shadow: 0 0 64px rgba(124, 58, 237, 0.4), 0 0 120px rgba(124, 58, 237, 0.15); }
 }
 
-/* stagger card animations */
-.provider-card { animation: fadeSlideIn 0.35s ease-out both; }
-.provider-card:nth-child(1) { animation-delay: 0.05s; }
-.provider-card:nth-child(2) { animation-delay: 0.1s; }
-.provider-card:nth-child(3) { animation-delay: 0.15s; }
-.provider-card:nth-child(4) { animation-delay: 0.2s; }
-.provider-card:nth-child(5) { animation-delay: 0.25s; }
-.provider-card:nth-child(6) { animation-delay: 0.3s; }
-.provider-card:nth-child(7) { animation-delay: 0.35s; }
-
 /* ── responsive ── */
 @media (max-width: 480px) {
   body { padding: 32px 16px 60px; }
@@ -585,43 +611,7 @@ body::after {
   <!-- step 0: provider selection -->
   <div class="step active" id="step-0">
     <div class="step-title">Choose Provider</div>
-    <div class="provider-grid">
-      <div class="provider-card" data-provider="claude-code" onclick="selectProvider(this)">
-        <div class="card-icon">&#9672;</div>
-        <div class="card-name">Claude Subscription</div>
-        <div class="card-desc">use your existing plan</div>
-      </div>
-      <div class="provider-card" data-provider="anthropic" onclick="selectProvider(this)">
-        <div class="card-icon">&#9651;</div>
-        <div class="card-name">Anthropic API</div>
-        <div class="card-desc">claude via API key</div>
-      </div>
-      <div class="provider-card" data-provider="openai" onclick="selectProvider(this)">
-        <div class="card-icon">&#9673;</div>
-        <div class="card-name">OpenAI</div>
-        <div class="card-desc">GPT models</div>
-      </div>
-      <div class="provider-card" data-provider="google" onclick="selectProvider(this)">
-        <div class="card-icon">&#9830;</div>
-        <div class="card-name">Google</div>
-        <div class="card-desc">Gemini models</div>
-      </div>
-      <div class="provider-card" data-provider="groq" onclick="selectProvider(this)">
-        <div class="card-icon">&#9889;</div>
-        <div class="card-name">Groq</div>
-        <div class="card-desc">fast inference</div>
-      </div>
-      <div class="provider-card" data-provider="openrouter" onclick="selectProvider(this)">
-        <div class="card-icon">&#8644;</div>
-        <div class="card-name">OpenRouter</div>
-        <div class="card-desc">multi-model routing</div>
-      </div>
-      <div class="provider-card" data-provider="custom" onclick="selectProvider(this)">
-        <div class="card-icon">&#9881;</div>
-        <div class="card-name">Custom Endpoint</div>
-        <div class="card-desc">any OpenAI-compatible API</div>
-      </div>
-    </div>
+    <div id="providerGrid"></div>
     <div class="btn-row">
       <div></div>
       <button class="btn btn-primary" id="nextBtn0" onclick="if(selectedProvider){goToStep(1)}else{showAlert('info','pick a provider first')}">
@@ -710,6 +700,260 @@ body::after {
 let selectedProvider = '';
 let isReconfigure = false;
 
+/* ── provider data registry ── */
+const PROVIDERS = {
+  anthropic: {
+    name: 'Anthropic',
+    icon: '\u25B3',
+    desc: 'Claude models via API',
+    category: 'cloud',
+    pricing: 'Pay per token',
+    keyUrl: 'https://console.anthropic.com',
+    envVar: 'ANTHROPIC_API_KEY',
+    defaultModel: 'claude-sonnet-4-5',
+    models: ['claude-sonnet-4-5', 'claude-sonnet-4-20250514', 'claude-opus-4', 'claude-haiku-3-5'],
+    keyPlaceholder: 'sk-ant-api03-...',
+    keyPrefix: 'sk-ant-',
+  },
+  openai: {
+    name: 'OpenAI',
+    icon: '\u25CB',
+    desc: 'GPT and o-series models',
+    category: 'cloud',
+    pricing: 'Pay per token',
+    keyUrl: 'https://platform.openai.com/api-keys',
+    envVar: 'OPENAI_API_KEY',
+    defaultModel: 'gpt-4o',
+    models: ['gpt-4o', 'gpt-4o-mini', 'o3', 'o3-mini'],
+    keyPlaceholder: 'sk-...',
+    keyPrefix: 'sk-',
+  },
+  google: {
+    name: 'Google AI',
+    icon: '\u25C6',
+    desc: 'Gemini models',
+    category: 'cloud',
+    pricing: 'Free tier available',
+    keyUrl: 'https://aistudio.google.com/apikey',
+    envVar: 'GOOGLE_API_KEY',
+    defaultModel: 'gemini-2.5-flash',
+    models: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash'],
+    keyPlaceholder: 'AI...',
+    keyPrefix: 'AI',
+  },
+  groq: {
+    name: 'Groq',
+    icon: '\u26A1',
+    desc: 'Ultra-fast inference',
+    category: 'cloud',
+    pricing: 'Free tier available',
+    keyUrl: 'https://console.groq.com/keys',
+    envVar: 'GROQ_API_KEY',
+    defaultModel: 'llama-3.3-70b-versatile',
+    models: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'],
+    keyPlaceholder: 'gsk_...',
+    keyPrefix: 'gsk_',
+  },
+  openrouter: {
+    name: 'OpenRouter',
+    icon: '\u21C4',
+    desc: 'Multi-model routing',
+    category: 'cloud',
+    pricing: 'Pay per token',
+    keyUrl: 'https://openrouter.ai/keys',
+    envVar: 'OPENROUTER_API_KEY',
+    defaultModel: 'anthropic/claude-sonnet-4-5',
+    models: ['anthropic/claude-sonnet-4-5', 'openai/gpt-4o', 'google/gemini-2.5-flash'],
+    keyPlaceholder: 'sk-or-...',
+    keyPrefix: 'sk-or-',
+  },
+  mistral: {
+    name: 'Mistral',
+    icon: 'M',
+    desc: 'European AI models',
+    category: 'cloud',
+    pricing: 'Pay per token',
+    keyUrl: 'https://console.mistral.ai/api-keys',
+    envVar: 'MISTRAL_API_KEY',
+    defaultModel: 'mistral-medium-latest',
+    models: ['mistral-medium-latest', 'mistral-large-latest', 'mistral-small-latest'],
+    keyPlaceholder: '...',
+    keyPrefix: null,
+  },
+  xai: {
+    name: 'xAI',
+    icon: '\u2605',
+    desc: 'Grok models',
+    category: 'cloud',
+    pricing: 'Pay per token',
+    keyUrl: 'https://console.x.ai',
+    envVar: 'XAI_API_KEY',
+    defaultModel: 'grok-3',
+    models: ['grok-3', 'grok-3-mini', 'grok-2'],
+    keyPlaceholder: 'xai-...',
+    keyPrefix: 'xai-',
+  },
+  deepseek: {
+    name: 'DeepSeek',
+    icon: '\u223F',
+    desc: 'Cost-efficient reasoning',
+    category: 'cloud',
+    pricing: 'Pay per token',
+    keyUrl: 'https://platform.deepseek.com/api_keys',
+    envVar: 'DEEPSEEK_API_KEY',
+    defaultModel: 'deepseek-chat',
+    models: ['deepseek-chat', 'deepseek-reasoner'],
+    keyPlaceholder: 'sk-...',
+    keyPrefix: 'sk-',
+  },
+  together: {
+    name: 'Together AI',
+    icon: '\u229E',
+    desc: 'Open-source model hub',
+    category: 'cloud',
+    pricing: 'Pay per token',
+    keyUrl: 'https://api.together.ai/settings/api-keys',
+    envVar: 'TOGETHER_API_KEY',
+    defaultModel: 'meta-llama/Llama-3-70b-chat-hf',
+    models: ['meta-llama/Llama-3-70b-chat-hf', 'mistralai/Mixtral-8x7B-Instruct-v0.1'],
+    keyPlaceholder: '...',
+    keyPrefix: null,
+  },
+  cerebras: {
+    name: 'Cerebras',
+    icon: '\u29EB',
+    desc: 'Fastest inference',
+    category: 'cloud',
+    pricing: 'Free tier available',
+    keyUrl: 'https://cloud.cerebras.ai',
+    envVar: 'CEREBRAS_API_KEY',
+    defaultModel: 'llama-3.3-70b',
+    models: ['llama-3.3-70b', 'llama-3.1-8b'],
+    keyPlaceholder: 'csk-...',
+    keyPrefix: 'csk-',
+  },
+  perplexity: {
+    name: 'Perplexity',
+    icon: '\u2315',
+    desc: 'Search-augmented AI',
+    category: 'cloud',
+    pricing: 'Pay per token',
+    keyUrl: 'https://perplexity.ai/settings/api',
+    envVar: 'PERPLEXITY_API_KEY',
+    defaultModel: 'sonar-pro',
+    models: ['sonar-pro', 'sonar'],
+    keyPlaceholder: 'pplx-...',
+    keyPrefix: 'pplx-',
+  },
+  'claude-code': {
+    name: 'Claude Code',
+    icon: '\u2760',
+    desc: 'Use your Claude subscription',
+    category: 'subscription',
+    pricing: 'Included in plan',
+    keyUrl: 'https://claude.ai/settings',
+    envVar: 'CLAUDE_CODE_OAUTH_TOKEN',
+    defaultModel: 'default',
+    models: [],
+    keyPlaceholder: 'sk-ant-oat01-...',
+    keyPrefix: null,
+  },
+  ollama: {
+    name: 'Ollama',
+    icon: '\u25A1',
+    desc: 'Run models locally',
+    category: 'local',
+    pricing: 'Free (self-hosted)',
+    keyUrl: 'https://ollama.com/download',
+    envVar: 'OLLAMA_HOST',
+    defaultModel: '',
+    models: [],
+    keyPlaceholder: 'http://host.docker.internal:11434',
+    keyPrefix: null,
+  },
+  'azure-openai': {
+    name: 'Azure OpenAI',
+    icon: '\u2601',
+    desc: 'Enterprise OpenAI',
+    category: 'enterprise',
+    pricing: 'Enterprise pricing',
+    keyUrl: 'https://portal.azure.com',
+    envVar: 'AZURE_OPENAI_API_KEY',
+    defaultModel: '',
+    models: [],
+    keyPlaceholder: '...',
+    keyPrefix: null,
+  },
+  custom: {
+    name: 'Custom Endpoint',
+    icon: '\u2699',
+    desc: 'Any OpenAI-compatible API',
+    category: 'custom',
+    pricing: 'Varies',
+    keyUrl: null,
+    envVar: '',
+    defaultModel: 'gpt-4',
+    models: [],
+    keyPlaceholder: 'https://...',
+    keyPrefix: null,
+  },
+};
+
+/* ── category metadata ── */
+const CATEGORIES = {
+  cloud:        { label: 'Cloud API',    desc: 'API key providers' },
+  subscription: { label: 'Subscription', desc: 'Use your existing plan' },
+  local:        { label: 'Local',        desc: 'Self-hosted models' },
+  enterprise:   { label: 'Enterprise',   desc: 'Corporate deployments' },
+  custom:       { label: 'Custom',       desc: 'Bring your own endpoint' },
+};
+
+/* ── render provider grid ── */
+function renderProviderGrid() {
+  const container = document.getElementById('providerGrid');
+  const grouped = {};
+  Object.entries(PROVIDERS).forEach(([id, p]) => {
+    if (!grouped[p.category]) grouped[p.category] = [];
+    grouped[p.category].push([id, p]);
+  });
+
+  let html = '';
+  let globalIndex = 0;
+  const categoryOrder = ['cloud', 'subscription', 'local', 'enterprise', 'custom'];
+
+  categoryOrder.forEach(cat => {
+    const providers = grouped[cat];
+    if (!providers || providers.length === 0) return;
+    const catMeta = CATEGORIES[cat];
+    html += `<div class="category-label">${catMeta.label}</div>`;
+    html += `<div class="provider-grid">`;
+    providers.forEach(([id, p]) => {
+      const delay = (globalIndex * 0.04).toFixed(2);
+      globalIndex++;
+      let linkHtml = '';
+      if (id === 'ollama') {
+        linkHtml = `<a class="card-link" href="${p.keyUrl}" target="_blank" rel="noopener">Download</a>`;
+      } else if (id !== 'custom' && p.keyUrl) {
+        linkHtml = `<a class="card-link" href="${p.keyUrl}" target="_blank" rel="noopener">Get key &rarr;</a>`;
+      }
+      html += `
+        <div class="provider-card" data-provider="${id}" onclick="selectProvider('${id}')" style="animation-delay:${delay}s">
+          <div class="card-icon">${p.icon}</div>
+          <div class="card-name">${p.name}</div>
+          <div class="card-desc">${p.desc}</div>
+          <div class="card-meta">${p.pricing}</div>
+          ${linkHtml}
+        </div>`;
+    });
+    html += `</div>`;
+  });
+
+  container.innerHTML = html;
+}
+
+/* ── call on page load ── */
+renderProviderGrid();
+
 /* ── timezone dropdown ── */
 const tzSelect = document.getElementById('timezone');
 const commonTZ = [
@@ -738,32 +982,68 @@ fetch('/api/setup/config').then(r => r.json()).then(data => {
     isReconfigure = true;
     document.getElementById('reconfigBanner').classList.add('show');
     const p = data.config.provider_type;
-    if (p) {
-      const card = document.querySelector(`[data-provider="${p}"]`);
-      if (card) selectProvider(card);
-    }
+    if (p) selectProvider(p);
   }
 }).catch(() => {});
 
 /* ── provider selection ── */
-function selectProvider(card) {
+function selectProvider(id) {
   document.querySelectorAll('.provider-card').forEach(c => c.classList.remove('selected'));
-  card.classList.add('selected');
-  selectedProvider = card.dataset.provider;
+  const card = document.querySelector(`[data-provider="${id}"]`);
+  if (card) card.classList.add('selected');
+  selectedProvider = id;
   buildCredFields();
 }
 
+/* ── build credential fields ── */
 function buildCredFields() {
   const container = document.getElementById('cred-fields');
+  const provider = PROVIDERS[selectedProvider];
   let html = '';
+
+  if (!provider) {
+    container.innerHTML = '';
+    return;
+  }
 
   if (selectedProvider === 'claude-code') {
     html = `
       <div class="field">
         <label>Claude Setup Token</label>
         <input type="password" id="claudeToken" placeholder="sk-ant-oat01-...">
-        <div class="field-hint">run <code>claude setup-token</code> locally to get this</div>
+        <div class="field-hint">
+          Run <code>claude setup-token</code> in your local terminal to get this token.
+          Requires an active Claude Pro/Team subscription.
+          <br><a href="https://claude.ai/settings" target="_blank" rel="noopener">claude.ai/settings</a>
+        </div>
       </div>`;
+
+  } else if (selectedProvider === 'ollama') {
+    html = `
+      <div class="field">
+        <label>Ollama Host URL</label>
+        <input type="text" id="ollamaHost" placeholder="http://host.docker.internal:11434" value="http://host.docker.internal:11434">
+        <div class="field-hint">
+          Ollama must be running and accessible from this container.
+          If running on the Docker host, use <code>host.docker.internal</code>.
+          <br>Models must be pre-pulled locally with <code>ollama pull &lt;model&gt;</code>
+        </div>
+      </div>`;
+
+  } else if (selectedProvider === 'azure-openai') {
+    html = `
+      <div class="field">
+        <label>Azure OpenAI API Key</label>
+        <input type="password" id="azureKey" placeholder="...">
+        <div class="field-hint">Find these in Azure Portal &rsaquo; your OpenAI resource &rsaquo; Keys and Endpoint.
+          <br><a href="https://portal.azure.com" target="_blank" rel="noopener">portal.azure.com</a>
+        </div>
+      </div>
+      <div class="field">
+        <label>Azure OpenAI Endpoint</label>
+        <input type="text" id="azureEndpoint" placeholder="https://your-resource.openai.azure.com">
+      </div>`;
+
   } else if (selectedProvider === 'custom') {
     html = `
       <div class="field">
@@ -779,15 +1059,22 @@ function buildCredFields() {
         <input type="password" id="customKey" placeholder="optional">
         <div class="field-hint">leave blank if your endpoint doesn't require auth</div>
       </div>`;
+
   } else {
-    const names = {anthropic:'Anthropic',openai:'OpenAI',google:'Google',groq:'Groq',openrouter:'OpenRouter'};
-    const placeholders = {anthropic:'sk-ant-api03-...',openai:'sk-...',google:'AI...',groq:'gsk_...',openrouter:'sk-or-...'};
+    /* standard API key provider */
+    const prefixHint = provider.keyPrefix
+      ? `<br>Key should start with <code>${provider.keyPrefix}</code>`
+      : '';
     html = `
       <div class="field">
-        <label>${names[selectedProvider]} API Key</label>
-        <input type="password" id="apiKey" placeholder="${placeholders[selectedProvider] || ''}">
+        <label>${provider.name} API Key</label>
+        <input type="password" id="apiKey" placeholder="${provider.keyPlaceholder || ''}">
+        <div class="field-hint">
+          Get your API key at <a href="${provider.keyUrl}" target="_blank" rel="noopener">${provider.keyUrl}</a>${prefixHint}
+        </div>
       </div>`;
   }
+
   container.innerHTML = html;
 }
 
@@ -846,6 +1133,11 @@ async function validateKey() {
   } else if (selectedProvider === 'custom') {
     payload.url = document.getElementById('customUrl')?.value;
     payload.api_key = document.getElementById('customKey')?.value;
+  } else if (selectedProvider === 'ollama') {
+    payload.ollama_host = document.getElementById('ollamaHost')?.value;
+  } else if (selectedProvider === 'azure-openai') {
+    payload.api_key = document.getElementById('azureKey')?.value;
+    payload.azure_endpoint = document.getElementById('azureEndpoint')?.value;
   } else {
     payload.api_key = document.getElementById('apiKey')?.value;
   }
@@ -891,6 +1183,11 @@ async function saveConfig() {
     config.custom_url = document.getElementById('customUrl')?.value || '';
     config.custom_model = document.getElementById('customModel')?.value || 'gpt-4';
     config.custom_key = document.getElementById('customKey')?.value || '';
+  } else if (selectedProvider === 'ollama') {
+    config.ollama_host = document.getElementById('ollamaHost')?.value || '';
+  } else if (selectedProvider === 'azure-openai') {
+    config.azure_key = document.getElementById('azureKey')?.value || '';
+    config.azure_endpoint = document.getElementById('azureEndpoint')?.value || '';
   } else {
     config.api_key = document.getElementById('apiKey')?.value || '';
   }

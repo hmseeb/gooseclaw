@@ -63,11 +63,11 @@ Plans:
   3. When goose web fails to start, the actual error message from stderr is shown in the browser UI
   4. Telegram pairing code is displayed in the web UI after setup completes (not buried in logs)
   5. A user who lost their auth token can regain access without SSH into the container
-**Plans**: TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] 03-01: TBD
-- [ ] 03-02: TBD
+- [ ] 03-01-PLAN.md -- Backend: goose web stderr capture, startup status state machine API, auth recovery endpoint
+- [ ] 03-02-PLAN.md -- Frontend: real-time startup status polling, error display, auth recovery UI
 
 ### Phase 4: Advanced Multi-Model Settings
 **Goal**: Power users can configure lead/worker multi-model setups without leaving the wizard

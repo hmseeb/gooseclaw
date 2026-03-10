@@ -264,6 +264,7 @@ def apply_config(config):
     # default models per provider if none specified
     if not model:
         default_models = {
+            "claude-code": "default",
             "anthropic": "claude-sonnet-4-20250514",
             "openrouter": "anthropic/claude-sonnet-4-20250514",
             "openai": "gpt-4o",

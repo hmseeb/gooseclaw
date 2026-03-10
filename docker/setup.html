@@ -2015,11 +2015,11 @@ async function validateKey() {
     if (data.valid) {
       validationPassed = true;
       updateSaveBtn();
-      showAlert('success', data.note || '\u2713 connection successful');
+      showAlert('success', data.message || data.note || '\u2713 connection successful');
     } else if (data.skip_validation) {
       validationPassed = true;
       updateSaveBtn();
-      showAlert('info', data.note || '\u2713 no validation needed for this provider');
+      showAlert('info', data.message || data.note || '\u2713 no validation needed for this provider');
     } else {
       showAlert('error', data.error || 'validation failed');
     }

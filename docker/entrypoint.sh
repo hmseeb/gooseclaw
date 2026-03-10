@@ -125,6 +125,7 @@ elif [ -f "$CONFIG_DIR/setup.json" ]; then
     PROVIDER_CONFIGURED=true
 
     # re-hydrate env vars from setup.json (needed after container restart)
+    # env vars set via Railway/Docker take priority over stored values
     eval "$(python3 -c "
 import json, os
 c = json.load(open('$CONFIG_DIR/setup.json'))
@@ -138,14 +139,16 @@ env_map = {
     'openrouter': 'OPENROUTER_API_KEY',
 }
 if pt == 'claude-code' and c.get('claude_setup_token'):
-    print(f'export CLAUDE_CODE_OAUTH_TOKEN=\"{c[\"claude_setup_token\"]}\"')
+    if not os.environ.get('CLAUDE_CODE_OAUTH_TOKEN'):
+        print(f'export CLAUDE_CODE_OAUTH_TOKEN=\"{c[\"claude_setup_token\"]}\"')
 elif pt in env_map and ak:
-    print(f'export {env_map[pt]}=\"{ak}\"')
+    if not os.environ.get(env_map[pt]):
+        print(f'export {env_map[pt]}=\"{ak}\"')
 tg = c.get('telegram_bot_token', '')
-if tg:
+if tg and not os.environ.get('TELEGRAM_BOT_TOKEN'):
     print(f'export TELEGRAM_BOT_TOKEN=\"{tg}\"')
 tz = c.get('timezone', '')
-if tz:
+if tz and not os.environ.get('TZ'):
     print(f'export TZ=\"{tz}\"')
 " 2>/dev/null)" || echo "[provider] WARN: could not parse setup.json"
 fi

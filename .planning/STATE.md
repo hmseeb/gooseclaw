@@ -10,9 +10,9 @@ See: .planning/PROJECT.md (updated 2026-03-10)
 ## Current Position
 
 Phase: 5 of 5 (Production Hardening -- Security, Reliability, Deployment Quality)
-Plan: 3 of 6 in current phase
+Plan: 3 of 6 in current phase (05-02 complete, resuming from 05-04)
 Status: In progress
-Last activity: 2026-03-11 -- Completed 05-03 (eval injection fix, auth token hashing, gateway-owns-all-auth)
+Last activity: 2026-03-11 -- Completed 05-02 (Docker build optimization: .dockerignore, labels, healthcheck, non-root user, requirements.txt)
 
 Progress: [#########.] 87%
 
@@ -34,6 +34,7 @@ Progress: [#########.] 87%
 - Trend: -
 
 *Updated after each plan completion*
+| Phase 05 P02 | 6 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -56,6 +57,8 @@ Recent decisions affecting current work:
 - 05-03: re.sub sanitizes vault GOOSECLAW_* variable names (YAML hyphens -> underscores)
 - 05-03: SHA-256 hashing of auth tokens before storage; plaintext never on disk; get_auth_token returns (token, is_hashed) tuple
 - 05-03: gateway-owns-all-auth: goose web subprocess gets random internal token; gateway verifies users against hash, proxies with internal token
+- [Phase 05-02]: Keep apt-based python3-yaml; requirements.txt as version documentation and pip alternative
+- [Phase 05-02]: Container runs root by default; non-root gooseclaw user created for optional --user override
 
 ### Pending Todos
 
@@ -79,5 +82,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-03-11
-Stopped at: Completed 05-03 -- eval injection fix, auth token hashing, gateway-owns-all-auth
+Stopped at: Completed 05-02 -- .dockerignore, Dockerfile labels/healthcheck/user, docker/requirements.txt
 Resume file: None

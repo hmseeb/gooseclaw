@@ -83,6 +83,7 @@ APP_DIR = os.environ.get("APP_DIR", "/app")
 SETUP_HTML = os.path.join(APP_DIR, "docker", "setup.html")
 PORT = int(os.environ.get("PORT", 8080))
 GOOSE_WEB_PORT = 3001
+PROXY_TIMEOUT = int(os.environ.get("GOOSECLAW_PROXY_TIMEOUT", "60"))
 
 goose_process = None
 goose_lock = threading.Lock()
@@ -419,10 +420,28 @@ def load_setup():
 
 
 def save_setup(config):
+    """Atomically write config to setup.json (write tmp, then rename)."""
+    import shutil
     os.makedirs(CONFIG_DIR, exist_ok=True)
-    with open(SETUP_FILE, "w") as f:
-        json.dump(config, f, indent=2)
-    os.chmod(SETUP_FILE, 0o600)
+    # back up existing config before overwrite
+    if os.path.exists(SETUP_FILE):
+        try:
+            shutil.copy2(SETUP_FILE, SETUP_FILE + ".bak")
+        except Exception:
+            pass  # non-fatal
+    tmp_path = SETUP_FILE + ".tmp"
+    try:
+        with open(tmp_path, "w") as f:
+            json.dump(config, f, indent=2)
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, SETUP_FILE)  # atomic on same filesystem
+    except Exception:
+        # clean up temp file on failure
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def is_configured():
@@ -1430,7 +1449,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             return
 
         try:
-            conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=300)
+            conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=PROXY_TIMEOUT)
 
             # forward headers
             headers = {}
@@ -1472,6 +1491,12 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
 
             # stream the response body
             if is_sse:
+                # SSE connections are long-lived — remove socket timeout so they
+                # don't get killed by PROXY_TIMEOUT during an active stream
+                try:
+                    conn.sock.settimeout(None)
+                except Exception:
+                    pass
                 while True:
                     chunk = resp.read(1)
                     if not chunk:
@@ -1569,10 +1594,22 @@ def main():
 
     def shutdown(_sig, _frame):
         print("[gateway] shutting down...")
-        stop_goose_web()
-        if telegram_process and telegram_process.poll() is None:
-            telegram_process.terminate()
+        # stop accepting new connections first
         threading.Thread(target=server.shutdown, daemon=True).start()
+        # terminate goose web and clean up PID
+        stop_goose_web()
+        _remove_pid("goose_web")
+        # terminate telegram and clean up PID
+        with telegram_lock:
+            tproc = telegram_process
+        if tproc and tproc.poll() is None:
+            tproc.terminate()
+            try:
+                tproc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                tproc.kill()
+        _remove_pid("telegram")
+        print("[gateway] shutdown complete")
 
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)

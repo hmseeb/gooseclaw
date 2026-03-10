@@ -403,10 +403,13 @@ shutdown() {
         "$APP_DIR/scripts/persist.sh" 2>&1 || true
     fi
 
-    kill "$GATEWAY_PY_PID" 2>/dev/null || true
-    # telegram is a child of gateway.py — killed when gateway exits
-    [ -n "${PERSIST_PID:-}" ] && kill "$PERSIST_PID" 2>/dev/null || true
-    [ -n "${WATCHDOG_PID:-}" ] && kill "$WATCHDOG_PID" 2>/dev/null || true
+    # send SIGTERM to gateway (it handles its own children) and wait for it
+    if kill -0 "$GATEWAY_PY_PID" 2>/dev/null; then
+        kill -TERM "$GATEWAY_PY_PID"
+        wait "$GATEWAY_PY_PID" 2>/dev/null || true
+    fi
+    [ -n "${PERSIST_PID:-}" ] && kill -TERM "$PERSIST_PID" 2>/dev/null || true
+    [ -n "${WATCHDOG_PID:-}" ] && kill -TERM "$WATCHDOG_PID" 2>/dev/null || true
 
     echo "[shutdown] done"
     exit 0

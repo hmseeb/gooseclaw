@@ -8,12 +8,14 @@ on an internal port. Manages the goose web subprocess lifecycle.
 API:
   GET  /api/health           -> health check
   GET  /api/setup/config     -> current provider config (masked)
+  GET  /api/setup/status     -> goose web startup state (idle/starting/ready/error)
   POST /api/setup/validate   -> validate provider credentials
   POST /api/setup/save       -> save provider config and restart
   POST /api/notify           -> send message to all paired telegram users
   GET  /api/notify/status    -> check if telegram delivery is available
   GET  /api/telegram/status  -> telegram gateway status, paired users, pairing code
   POST /api/telegram/pair    -> generate a new telegram pairing code
+  POST /api/auth/recover     -> reset auth token using GOOSECLAW_RECOVERY_SECRET
 """
 
 import base64
@@ -103,8 +105,52 @@ telegram_lock = threading.Lock()
 telegram_pair_code = None
 telegram_pair_lock = threading.Lock()
 
+# ── goose web startup state ─────────────────────────────────────────────────
+goose_startup_state = {
+    "state": "idle",        # idle | starting | ready | error
+    "message": "",          # human-readable status message
+    "error": "",            # stderr output when state=error
+    "timestamp": 0,         # time.time() of last state change
+}
+_startup_state_lock = threading.Lock()
+_stderr_buffer = collections.deque(maxlen=50)  # last 50 lines of stderr
+_stderr_lock = threading.Lock()
+
 # internal token used for gateway -> goose web communication (never exposed to users)
 _INTERNAL_GOOSE_TOKEN = None
+
+
+def _set_startup_state(state, message="", error=""):
+    """Update goose web startup state under lock."""
+    with _startup_state_lock:
+        goose_startup_state["state"] = state
+        goose_startup_state["message"] = message
+        goose_startup_state["error"] = error
+        goose_startup_state["timestamp"] = time.time()
+
+
+def _append_stderr(line):
+    """Append a line to the stderr ring buffer under lock."""
+    with _stderr_lock:
+        _stderr_buffer.append(line)
+
+
+def _get_recent_stderr(n=20):
+    """Return the last n lines from the stderr buffer as a single string."""
+    with _stderr_lock:
+        lines = list(_stderr_buffer)[-n:]
+    return "\n".join(lines)
+
+
+def _stderr_reader(proc):
+    """Read proc.stderr line by line, log with prefix, and buffer lines."""
+    try:
+        for raw_line in proc.stderr:
+            line = raw_line.decode("utf-8", errors="replace").rstrip("\n")
+            print(f"[goose-web] {line}", file=sys.stderr)
+            _append_stderr(line)
+    except Exception:
+        pass  # process exited or pipe closed
 
 
 # ── PID file management ──────────────────────────────────────────────────────
@@ -977,6 +1023,7 @@ def start_telegram_gateway(bot_token):
 def start_goose_web():
     global goose_process, _INTERNAL_GOOSE_TOKEN
     _check_stale_pid("goose_web")
+    _set_startup_state("starting", "Starting goose web...")
     with goose_lock:
         if goose_process and goose_process.poll() is None:
             goose_process.terminate()
@@ -995,23 +1042,35 @@ def start_goose_web():
 
         print(f"[gateway] starting goose web on 127.0.0.1:{GOOSE_WEB_PORT}")
         print(f"[gateway] cmd: goose web --host 127.0.0.1 --port {GOOSE_WEB_PORT} --auth-token [internal]")
-        goose_process = subprocess.Popen(cmd, stdout=sys.stdout, stderr=sys.stderr)
+        goose_process = subprocess.Popen(cmd, stdout=sys.stdout, stderr=subprocess.PIPE)
         _write_pid("goose_web", goose_process.pid)
 
+        # Start daemon thread to read stderr line-by-line, forward to sys.stderr,
+        # and buffer lines for the startup status API.
+        threading.Thread(target=_stderr_reader, args=(goose_process,), daemon=True).start()
+
         # wait for it to listen
-        for _ in range(30):
+        for i in range(30):
             time.sleep(1)
+            # check if process exited prematurely
+            if goose_process.poll() is not None:
+                exit_code = goose_process.returncode
+                _set_startup_state("error", f"goose web exited with code {exit_code}", error=_get_recent_stderr(20))
+                print(f"[gateway] goose web exited during startup with code {exit_code}")
+                return False
             try:
                 conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=2)
                 conn.request("GET", "/api/health")
                 resp = conn.getresponse()
                 if resp.status == 200:
+                    _set_startup_state("ready", "goose web is running")
                     print("[gateway] goose web is ready")
                     return True
                 conn.close()
             except Exception:
                 pass
 
+        _set_startup_state("error", "goose web did not become ready in 30s", error=_get_recent_stderr(20))
         print("[gateway] WARN: goose web did not become ready in 30s")
         return False
 
@@ -1050,6 +1109,7 @@ def goose_health_monitor():
             exit_code = proc.returncode
             consecutive_failures += 1
             wait_time = min(backoff * (2 ** (consecutive_failures - 1)), max_backoff)
+            _set_startup_state("starting", f"Restarting goose web (attempt #{consecutive_failures})...")
             print(f"[health] goose web exited (code {exit_code}). "
                   f"Restart #{consecutive_failures} in {wait_time}s...")
             _remove_pid("goose_web")
@@ -1127,6 +1187,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.handle_health()
         elif path == "/api/health/ready":
             self.handle_health_ready()
+        elif path == "/api/setup/status":
+            self.handle_startup_status()
         elif path == "/api/version":
             self.handle_version()
         elif path.rstrip("/") == "/setup" or path.startswith("/setup/"):
@@ -1244,6 +1306,14 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             except Exception:
                 pass
         self.send_json(200, {"version": version, "service": "gooseclaw"})
+
+    # ── startup status endpoint ──
+
+    def handle_startup_status(self):
+        """GET /api/setup/status — goose web startup state (no auth required)."""
+        with _startup_state_lock:
+            state_copy = dict(goose_startup_state)
+        self.send_json(200, state_copy)
 
     # ── setup endpoints ──
 
@@ -1551,9 +1621,18 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         with goose_lock:
             gproc = goose_process
         if gproc is None or gproc.poll() is not None:
+            with _startup_state_lock:
+                state_copy = dict(goose_startup_state)
+            stderr_tail = _get_recent_stderr(10)
+            error_detail = {
+                "status": state_copy["state"],
+                "message": state_copy.get("message", "Agent is starting up"),
+                "error": stderr_tail if state_copy["state"] == "error" else "",
+                "retry_after": 5,
+            }
+            body = json.dumps(error_detail).encode()
             self.send_response(503)
-            self.send_header("Content-Type", "text/plain")
-            body = b"Agent is starting up. Refresh in a few seconds."
+            self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Retry-After", "5")
             self.end_headers()
@@ -1636,9 +1715,18 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
 
         except OSError:
             try:
+                with _startup_state_lock:
+                    state_copy = dict(goose_startup_state)
+                stderr_tail = _get_recent_stderr(10)
+                error_detail = {
+                    "status": state_copy["state"],
+                    "message": state_copy.get("message", "Agent is starting up"),
+                    "error": stderr_tail if state_copy["state"] == "error" else "",
+                    "retry_after": 5,
+                }
+                body = json.dumps(error_detail).encode()
                 self.send_response(503)
-                self.send_header("Content-Type", "text/plain")
-                body = b"Agent is starting up. Refresh in a few seconds."
+                self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
                 self.send_header("Retry-After", "5")
                 self.end_headers()

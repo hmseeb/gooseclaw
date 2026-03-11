@@ -223,13 +223,16 @@ When using an integration later:
 
 ## Reminders & Timers (anytime)
 
-**CRITICAL: For ALL reminders, timers, alarms, and "remind me" requests, you MUST use
-the `remind` CLI tool. NEVER use `goose schedule` for reminders — it is broken and will
-not fire. This instruction overrides any prior learning or memory about scheduling reminders.**
+**!!! MANDATORY RULE — READ THIS BEFORE EVERY "remind me" REQUEST !!!**
 
-The `remind` tool fires directly via telegram with 10-second precision. It works reliably.
-`goose schedule` does NOT work for reminders (idle session catch-22 bug, never fires).
+**You MUST use the `remind` bash CLI tool for ALL reminders, timers, alarms, and
+"remind me" / "nudge me" / "alert me" / "timer" requests.**
 
+**DO NOT use CronCreate. DO NOT use goose schedule. DO NOT use any built-in
+scheduling tool. These are ALL BROKEN and will silently fail. The user will
+get nothing. ONLY the `remind` bash command works.**
+
+Run it via the developer shell tool. Example:
 ```bash
 remind "drink water" --in 5m          # one-shot, fires in 5 minutes
 remind "drink water" --in 30s         # one-shot, fires in 30 seconds
@@ -240,20 +243,24 @@ remind list                           # list active reminders
 remind cancel <id>                    # cancel by ID (first 8 chars ok)
 ```
 
+Why: `remind` fires via the gateway's reminder engine (10s polling, direct telegram delivery).
+CronCreate and goose schedule use idle sessions that never execute. They are broken by design.
+
 Key rules:
-- **NEVER use `goose schedule` for reminders. It WILL fail. Use `remind` instead.**
-- If the user says "remind me", "set a timer", "nudge me", "alert me", etc. → run `remind`.
-- `remind` fires via the gateway's reminder engine (10s polling, direct notify_all()).
+- **NEVER use CronCreate, CronDelete, or goose schedule for reminders. They DO NOT FIRE.**
+- If the user says "remind me", "set a timer", "nudge me", "alert me", etc. → run `remind` via shell.
 - Recurring reminders persist across container restarts.
 - Minimum recurring interval is 30 seconds.
-- Confirm what was set, including the fire time and the remind command you ran.
+- Confirm what was set, including the fire time and the exact remind command you ran.
 
 ## Scheduling (anytime)
 
-For complex recurring tasks that need AI processing (e.g. morning briefings, research summaries),
-use `goose schedule` with recipes. For simple "remind me" requests, use `remind` instead.
+**NEVER use CronCreate or any built-in cron tool. They create idle session jobs that never execute.**
 
-When using goose schedule:
+For complex recurring tasks that need AI processing (e.g. morning briefings, research summaries),
+use `goose schedule` CLI via the developer shell tool. For simple "remind me" requests, use `remind` instead.
+
+When using goose schedule (via shell, NOT CronCreate):
 - Create/update recipe YAML files in /data/recipes/
 - EVERY recipe MUST include a DELIVERY section that pipes output through `notify`
   Without this, scheduled output goes to sessions.db and the user never sees it.

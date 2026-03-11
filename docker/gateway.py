@@ -1504,9 +1504,9 @@ def delete_job(job_id):
 
 
 def list_active_jobs():
-    """Return list of active (not fired, enabled) jobs."""
+    """Return list of active (not fired, enabled) jobs. Returns copies to avoid mutation."""
     with _jobs_lock:
-        return [j for j in _jobs if not j.get("fired") and j.get("enabled", True)]
+        return [dict(j) for j in _jobs if not j.get("fired") and j.get("enabled", True)]
 
 
 def _run_script(job):
@@ -1693,16 +1693,16 @@ def _job_engine_loop():
                 _save_jobs()
 
             # prune old fired one-shot jobs (> 24h)
-            cutoff = now - 86400
+            cutoff_ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 86400))
             with _jobs_lock:
                 before = len(_jobs)
                 _jobs[:] = [
                     j for j in _jobs
-                    if not j.get("fired") or (j.get("last_run") and j["last_run"] > time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(cutoff)))
+                    if not j.get("fired") or (j.get("last_run", "") > cutoff_ts)
                 ]
-                if len(_jobs) < before:
-                    save_needed = True
-            if save_needed:
+                pruned = before - len(_jobs)
+            if pruned > 0:
+                print(f"[jobs] pruned {pruned} expired one-shot job(s)")
                 _save_jobs()
 
         except Exception as e:
@@ -1771,6 +1771,23 @@ def _parse_cron_field(field, min_val, max_val):
         else:
             values.add(int(part))
     return values
+
+
+def _validate_cron(cron_expr):
+    """Validate a 5-field cron expression. Returns (True, "") or (False, error_message)."""
+    fields = cron_expr.strip().split()
+    if len(fields) == 6:
+        fields = fields[1:]
+    if len(fields) != 5:
+        return False, f"expected 5 fields (min hour dom month dow), got {len(fields)}"
+    labels = ["minute (0-59)", "hour (0-23)", "day-of-month (1-31)", "month (1-12)", "day-of-week (0-6)"]
+    ranges = [(0, 59), (0, 23), (1, 31), (1, 12), (0, 6)]
+    for i, (field, label, (lo, hi)) in enumerate(zip(fields, labels, ranges)):
+        try:
+            _parse_cron_field(field, lo, hi)
+        except (ValueError, IndexError):
+            return False, f"invalid {label} field: '{field}'"
+    return True, ""
 
 
 def _cron_matches_now(cron_expr, now=None):
@@ -3751,6 +3768,13 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                         data["fire_at"] = time.time() + recurring
                 except (ValueError, TypeError):
                     self.send_json(400, {"error": "recurring_seconds must be an integer"})
+                    return
+
+            # validate cron expression if provided
+            if data.get("cron"):
+                valid, cron_err = _validate_cron(data["cron"])
+                if not valid:
+                    self.send_json(400, {"error": f"invalid cron expression: {cron_err}"})
                     return
 
             # must have at least one scheduling mechanism

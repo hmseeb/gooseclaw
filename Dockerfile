@@ -12,7 +12,12 @@ ENV DEBIAN_FRONTEND=noninteractive
 # python3-yaml pinned via apt; see docker/requirements.txt for pip-based version tracking
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-      curl git python3 python3-yaml ca-certificates jq bzip2 libgomp1 nodejs npm && \
+      curl git python3 python3-yaml ca-certificates jq bzip2 libgomp1 && \
+    rm -rf /var/lib/apt/lists/*
+
+# install node 20 LTS (ubuntu 22.04 apt ships v12, MCP tools need 18+)
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y --no-install-recommends nodejs && \
     rm -rf /var/lib/apt/lists/*
 
 # install goose (prebuilt binary via official script)

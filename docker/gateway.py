@@ -28,6 +28,8 @@ import os
 import re
 import secrets
 import signal
+import socket
+import struct
 import subprocess
 import sys
 import threading
@@ -1110,7 +1112,7 @@ def _get_session_id(chat_id):
         return sid
 
     # create a new agent session via goose web
-    sid = _start_agent_session()
+    sid = _create_goose_session()
     if not sid:
         # fallback to random UUID if goose web is unavailable
         sid = str(uuid.uuid4())
@@ -1123,78 +1125,175 @@ def _get_session_id(chat_id):
     return sid
 
 
-def _goose_web_headers():
-    """Build auth headers for goose web. Tries both Basic and X-Secret-Key."""
-    auth_value = base64.b64encode(f"user:{_INTERNAL_GOOSE_TOKEN}".encode()).decode()
-    return {
-        "Content-Type": "application/json",
-        "Authorization": f"Basic {auth_value}",
-        "X-Secret-Key": _INTERNAL_GOOSE_TOKEN,
-    }
-
-
-def _probe_goose_web():
-    """Diagnostic: probe goose web routes to figure out what's available."""
-    if not _INTERNAL_GOOSE_TOKEN:
-        print("[telegram] probe: no internal token yet")
-        return
-
-    headers = _goose_web_headers()
-    probes = [
-        ("GET", "/status", None),
-        ("GET", "/sessions", None),
-        ("POST", "/agent/start", json.dumps({"working_dir": "/app"}).encode()),
-        ("POST", "/reply", json.dumps({"user_message": {"role": "user", "content": [{"type": "text", "text": "ping"}]}, "session_id": "test"}).encode()),
-    ]
-
-    for method, path, body in probes:
-        try:
-            conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=5)
-            conn.request(method, path, body=body, headers=headers)
-            resp = conn.getresponse()
-            resp_body = resp.read().decode("utf-8", errors="replace")[:200]
-            conn.close()
-            print(f"[telegram] probe {method} {path} -> {resp.status}: {resp_body}")
-        except Exception as e:
-            print(f"[telegram] probe {method} {path} -> ERROR: {e}")
-
-
-def _start_agent_session():
-    """Call POST /agent/start on goose web to create a new agent session.
+def _create_goose_session():
+    """Create a new session via GET / on goose web (follows redirect to get session_id).
 
     Returns the session_id string, or None on failure.
     """
     if not _INTERNAL_GOOSE_TOKEN:
         return None
 
-    headers = _goose_web_headers()
-    body = json.dumps({"working_dir": "/app"}).encode("utf-8")
-
     try:
-        conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=15)
-        conn.request("POST", "/agent/start", body=body, headers=headers)
+        conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=10)
+        conn.request("GET", "/", headers={
+            "Authorization": f"Bearer {_INTERNAL_GOOSE_TOKEN}",
+        })
         resp = conn.getresponse()
-        resp_body = resp.read().decode("utf-8", errors="replace")
+        resp.read()  # consume body
+
+        if resp.status in (301, 302, 303, 307, 308):
+            location = resp.getheader("Location", "")
+            # location is like /session/20260311_170000
+            if "/session/" in location:
+                sid = location.split("/session/")[-1].strip("/")
+                conn.close()
+                print(f"[telegram] created session via redirect: {sid}")
+                return sid
+
+        # fallback: try GET /api/sessions to find the latest
+        conn.close()
+        conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=10)
+        conn.request("GET", "/api/sessions", headers={
+            "Authorization": f"Bearer {_INTERNAL_GOOSE_TOKEN}",
+        })
+        resp = conn.getresponse()
+        body = resp.read().decode("utf-8", errors="replace")
         conn.close()
 
-        print(f"[telegram] /agent/start -> {resp.status}: {resp_body[:500]}")
+        if resp.status == 200:
+            sessions = json.loads(body)
+            if isinstance(sessions, list) and sessions:
+                sid = sessions[-1].get("id") or sessions[-1].get("session_id")
+                if sid:
+                    print(f"[telegram] using latest session from /api/sessions: {sid}")
+                    return str(sid)
 
-        if resp.status != 200:
-            return None
-
-        data = json.loads(resp_body)
-        # try various possible field names
-        sid = data.get("id") or data.get("session_id") or data.get("session", {}).get("id")
-        if sid:
-            print(f"[telegram] agent started, session_id: {sid}")
-            return str(sid)
-        else:
-            print(f"[telegram] /agent/start response keys: {list(data.keys())}")
-            return None
+        print(f"[telegram] could not create session: GET / returned {resp.status}")
+        return None
 
     except Exception as e:
-        print(f"[telegram] /agent/start failed: {e}")
+        print(f"[telegram] session creation failed: {e}")
         return None
+
+
+# ── minimal WebSocket client (stdlib only, no external deps) ────────────────
+
+def _ws_connect(host, port, path):
+    """Open a WebSocket connection. Returns the raw socket or raises."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(120)
+    sock.connect((host, port))
+
+    # generate a random 16-byte key for the handshake
+    ws_key = base64.b64encode(os.urandom(16)).decode()
+
+    request = (
+        f"GET {path} HTTP/1.1\r\n"
+        f"Host: {host}:{port}\r\n"
+        f"Upgrade: websocket\r\n"
+        f"Connection: Upgrade\r\n"
+        f"Sec-WebSocket-Key: {ws_key}\r\n"
+        f"Sec-WebSocket-Version: 13\r\n"
+        f"\r\n"
+    )
+    sock.sendall(request.encode())
+
+    # read the HTTP response (until \r\n\r\n)
+    response = b""
+    while b"\r\n\r\n" not in response:
+        chunk = sock.recv(4096)
+        if not chunk:
+            sock.close()
+            raise ConnectionError("WebSocket handshake failed: connection closed")
+        response += chunk
+
+    status_line = response.split(b"\r\n")[0].decode()
+    if "101" not in status_line:
+        sock.close()
+        raise ConnectionError(f"WebSocket handshake failed: {status_line}")
+
+    return sock
+
+
+def _ws_send_text(sock, text):
+    """Send a text frame over WebSocket."""
+    payload = text.encode("utf-8")
+    mask_key = os.urandom(4)
+
+    # build frame header
+    header = bytearray()
+    header.append(0x81)  # FIN=1, opcode=1 (text)
+
+    length = len(payload)
+    if length < 126:
+        header.append(0x80 | length)  # MASK=1
+    elif length < 65536:
+        header.append(0x80 | 126)
+        header.extend(struct.pack(">H", length))
+    else:
+        header.append(0x80 | 127)
+        header.extend(struct.pack(">Q", length))
+
+    header.extend(mask_key)
+
+    # mask the payload
+    masked = bytearray(len(payload))
+    for i in range(len(payload)):
+        masked[i] = payload[i] ^ mask_key[i % 4]
+
+    sock.sendall(bytes(header) + bytes(masked))
+
+
+def _ws_recv_frame(sock):
+    """Read one WebSocket frame. Returns (opcode, payload_bytes) or raises."""
+    def _recv_exact(n):
+        buf = b""
+        while len(buf) < n:
+            chunk = sock.recv(n - len(buf))
+            if not chunk:
+                raise ConnectionError("WebSocket connection closed")
+            buf += chunk
+        return buf
+
+    header = _recv_exact(2)
+    opcode = header[0] & 0x0F
+    masked = bool(header[1] & 0x80)
+    length = header[1] & 0x7F
+
+    if length == 126:
+        length = struct.unpack(">H", _recv_exact(2))[0]
+    elif length == 127:
+        length = struct.unpack(">Q", _recv_exact(8))[0]
+
+    if masked:
+        mask_key = _recv_exact(4)
+        payload = bytearray(_recv_exact(length))
+        for i in range(length):
+            payload[i] ^= mask_key[i % 4]
+        return opcode, bytes(payload)
+
+    return opcode, _recv_exact(length)
+
+
+def _ws_recv_text(sock):
+    """Read text frames, handling pings/close. Returns text string or None on close."""
+    while True:
+        opcode, payload = _ws_recv_frame(sock)
+        if opcode == 0x1:  # text frame
+            return payload.decode("utf-8", errors="replace")
+        elif opcode == 0x9:  # ping
+            # send pong
+            pong = bytearray([0x8A, 0x80 | len(payload)])
+            mask_key = os.urandom(4)
+            pong.extend(mask_key)
+            masked = bytearray(len(payload))
+            for i in range(len(payload)):
+                masked[i] = payload[i] ^ mask_key[i % 4]
+            pong.extend(masked)
+            sock.sendall(bytes(pong))
+        elif opcode == 0x8:  # close
+            return None
+        # ignore other frames (continuation, binary, pong)
 
 
 # ── telegram bot API helpers ────────────────────────────────────────────────
@@ -1214,97 +1313,98 @@ def _send_typing_action(bot_token, chat_id):
 
 
 def _relay_to_goose_web(user_text, session_id, chat_id=None):
-    """POST a user message to goose web /reply and return the assistant's text.
+    """Send a user message to goose web via WebSocket and return the assistant's text.
 
     Returns (response_text, error_string). On success error_string is empty.
-    If chat_id is provided and the session is stale (404), creates a new agent
-    session and retries once.
+    If chat_id is provided and the session is stale, creates a new session and retries.
     """
     if not _INTERNAL_GOOSE_TOKEN:
         return "", "Goose is not ready yet (no internal token). Please try again in a moment."
 
-    text, err = _do_relay(user_text, session_id)
+    text, err = _do_ws_relay(user_text, session_id)
 
-    # if 404, the session was evicted — start a new agent and retry
-    if err and "HTTP 404" in err and chat_id:
-        print(f"[telegram] session {session_id} got 404, creating new agent session")
-        new_sid = _start_agent_session()
+    # if connection or session error, try creating a new session
+    if err and chat_id:
+        print(f"[telegram] relay failed ({err}), creating new session")
+        new_sid = _create_goose_session()
         if new_sid:
             with _telegram_sessions_lock:
                 _telegram_sessions[str(chat_id)] = new_sid
             _save_telegram_sessions()
             print(f"[telegram] retrying with new session {new_sid}")
-            return _do_relay(user_text, new_sid)
-        # couldn't start new agent, return original error
-        return text, err
+            return _do_ws_relay(user_text, new_sid)
 
     return text, err
 
 
-def _do_relay(user_text, session_id):
-    """Internal: POST to goose web /reply and parse the SSE response.
+def _do_ws_relay(user_text, session_id):
+    """Connect to goose web via WebSocket, send a message, collect the response.
 
     Returns (response_text, error_string).
     """
-    headers = _goose_web_headers()
-    headers["Accept"] = "text/event-stream"
-    body = json.dumps({
-        "user_message": {
-            "role": "user",
-            "content": [{"type": "text", "text": user_text}],
-        },
-        "session_id": session_id,
-    }).encode("utf-8")
+    ws_path = f"/ws?token={urllib.parse.quote(_INTERNAL_GOOSE_TOKEN)}"
+    print(f"[telegram] WS relay session_id={session_id} text={user_text[:50]!r}")
 
-    print(f"[telegram] POST /reply session_id={session_id} text={user_text[:50]!r}")
-
+    sock = None
     try:
-        conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=120)
-        conn.request("POST", "/reply", body=body, headers=headers)
-        resp = conn.getresponse()
-        if resp.status != 200:
-            err_body = resp.read().decode("utf-8", errors="replace")[:500]
-            conn.close()
-            return "", f"Goose returned HTTP {resp.status}: {err_body}"
+        sock = _ws_connect("127.0.0.1", GOOSE_WEB_PORT, ws_path)
 
-        # Parse the SSE stream
-        collected_text = []
-        buf = b""
+        # send the user message
+        msg = json.dumps({
+            "type": "message",
+            "content": user_text,
+            "session_id": session_id,
+            "timestamp": int(time.time() * 1000),
+        })
+        _ws_send_text(sock, msg)
+
+        # collect response chunks until "complete"
+        collected = []
         while True:
-            chunk = resp.read(4096)
-            if not chunk:
+            frame_text = _ws_recv_text(sock)
+            if frame_text is None:
+                # connection closed
                 break
-            buf += chunk
-            # process complete lines
-            while b"\n" in buf:
-                line_bytes, buf = buf.split(b"\n", 1)
-                line = line_bytes.decode("utf-8", errors="replace").strip()
-                if not line.startswith("data: "):
-                    continue
-                data_str = line[6:]  # strip "data: " prefix
-                try:
-                    event = json.loads(data_str)
-                except (json.JSONDecodeError, ValueError):
-                    continue
-                etype = event.get("type", "")
-                if etype == "Message":
-                    msg = event.get("message", {})
-                    if msg.get("role") == "assistant":
-                        for part in msg.get("content", []):
-                            if part.get("type") == "text":
-                                collected_text.append(part.get("text", ""))
-                elif etype == "Finish":
-                    break
 
-        conn.close()
-        full_text = "".join(collected_text).strip()
+            try:
+                event = json.loads(frame_text)
+            except (json.JSONDecodeError, ValueError):
+                continue
+
+            etype = event.get("type", "")
+
+            if etype == "response":
+                content = event.get("content", "")
+                if content:
+                    collected.append(content)
+            elif etype == "error":
+                err_msg = event.get("message", "Unknown error")
+                print(f"[telegram] WS error event: {err_msg}")
+                sock.close()
+                return "", f"Goose error: {err_msg}"
+            elif etype == "complete":
+                break
+            # ignore: thinking, tool_request, tool_confirmation, tool_response, cancelled
+
+        sock.close()
+        full_text = "".join(collected).strip()
         if not full_text:
             return "(No response from goose)", ""
         return full_text, ""
 
-    except (ConnectionRefusedError, OSError) as e:
-        return "", f"Cannot reach goose web: {e}"
+    except ConnectionError as e:
+        if sock:
+            try:
+                sock.close()
+            except Exception:
+                pass
+        return "", f"WebSocket error: {e}"
     except Exception as e:
+        if sock:
+            try:
+                sock.close()
+            except Exception:
+                pass
         return "", f"Error communicating with goose: {e}"
 
 
@@ -1420,7 +1520,7 @@ def _telegram_poll_loop(bot_token):
                         with _telegram_sessions_lock:
                             old = _telegram_sessions.pop(chat_id, None)
                         # create a fresh agent session
-                        new_sid = _start_agent_session()
+                        new_sid = _create_goose_session()
                         if new_sid:
                             with _telegram_sessions_lock:
                                 _telegram_sessions[chat_id] = new_sid
@@ -1511,9 +1611,6 @@ def start_telegram_gateway(bot_token):
         return
 
     _load_telegram_sessions()
-
-    # probe goose web routes for diagnostics
-    _probe_goose_web()
 
     # generate an initial pairing code
     _generate_and_store_pair_code()

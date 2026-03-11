@@ -62,9 +62,9 @@
 
 ### Advanced Settings
 
-- [ ] **ADV-01**: Optional "Advanced" toggle reveals lead/worker multi-model settings
-- [ ] **ADV-02**: Lead provider, model, and turn count configurable
-- [ ] **ADV-03**: Advanced settings write to config.yaml correctly (GOOSE_LEAD_PROVIDER, etc.)
+- [x] **ADV-01**: Optional "Advanced" toggle reveals lead/worker multi-model settings
+- [x] **ADV-02**: Lead provider, model, and turn count configurable
+- [x] **ADV-03**: Advanced settings write to config.yaml correctly (GOOSE_LEAD_PROVIDER, etc.)
 
 ### Auth Recovery
 
@@ -133,9 +133,9 @@
 | TG-01 | Phase 1 | Complete |
 | TG-02 | Phase 2 | Complete |
 | TG-03 | Phase 3 | Complete |
-| ADV-01 | Phase 4 | Pending |
-| ADV-02 | Phase 4 | Pending |
-| ADV-03 | Phase 4 | Pending |
+| ADV-01 | Phase 4 | Complete |
+| ADV-02 | Phase 4 | Complete |
+| ADV-03 | Phase 4 | Complete |
 | AUTH-01 | Phase 3 | Complete |
 | AUTH-02 | Phase 3 | Complete |
 

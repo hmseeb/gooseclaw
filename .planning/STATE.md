@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-03-10)
 ## Current Position
 
 Phase: 4 of 5 (Advanced Multi-Model Settings)
-Plan: 0 of ? in current phase
-Status: Planning
-Last activity: 2026-03-11 -- Phase 3 verified (5/5 must-haves). Starting phase 4.
+Plan: 1 of 1 in current phase
+Status: Phase 4 Complete
+Last activity: 2026-03-11 -- Phase 4 complete (1/1 plan). Advanced multi-model settings shipped.
 
-Progress: [########--] 80%
+Progress: [#########-] 90%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 3
-- Average duration: ~7 min
-- Total execution time: ~0.37 hours
+- Total plans completed: 4
+- Average duration: ~6 min
+- Total execution time: ~0.45 hours
 
 **By Phase:**
 
@@ -42,6 +42,7 @@ Progress: [########--] 80%
 | Phase 02 P03 | 2 | 2 tasks | 1 file |
 | Phase 03 P01 | 3 | 2 tasks | 1 file |
 | Phase 03 P02 | 5 | 2 tasks | 2 files |
+| Phase 04 P01 | 5 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -100,6 +101,11 @@ Recent decisions affecting current work:
 - 03-02: Recovery page (/setup?recover) served without auth via query param bypass in gateway.py
 - 03-02: 401 response body includes /setup?recover hint for discoverability
 - 03-02: lastSavedConfig captured before fetch so retryStartup() can re-POST without re-entry
+- 04-01: Lead provider select excludes 'custom' category; populated from same PROVIDERS registry as main provider
+- 04-01: Lead turn count defaults to 3 when field empty but lead provider set
+- 04-01: Dashboard lead fields hidden entirely when no lead_provider in config (clean default UX)
+- 04-01: Lead settings validation: provider must be in env_map, turn count 1-50 integer range
+- 04-01: Conditional config persistence: GOOSE_LEAD_* only written when lead_provider is non-empty
 
 ### Pending Todos
 
@@ -122,6 +128,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-10
-Stopped at: Completed 03-02-PLAN.md -- real-time startup status UI, auth recovery form. Phase 3 complete.
+Last session: 2026-03-11
+Stopped at: Completed 04-01-PLAN.md -- advanced multi-model settings (lead provider/model/turn count). Phase 4 complete.
 Resume file: None

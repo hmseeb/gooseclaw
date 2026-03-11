@@ -2467,11 +2467,14 @@ def _do_ws_relay(user_text, session_id):
     Returns (response_text, error_string).
     """
     ws_path = f"/ws?token={urllib.parse.quote(str(_INTERNAL_GOOSE_TOKEN))}"
-    print(f"[telegram] WS relay session_id={session_id} text={user_text[:50]!r}")
+    t0 = time.time()
+    print(f"[relay] start session={session_id} text={user_text[:50]!r}")
 
     sock = None
     try:
         sock = _ws_connect("127.0.0.1", GOOSE_WEB_PORT, ws_path, auth_token=_INTERNAL_GOOSE_TOKEN)
+        t_connect = time.time()
+        print(f"[relay] ws connected in {t_connect - t0:.1f}s")
 
         # send the user message
         msg = json.dumps({
@@ -2484,6 +2487,7 @@ def _do_ws_relay(user_text, session_id):
 
         # collect response chunks until "complete"
         collected = []
+        first_chunk_time = None
         while True:
             frame_text = _ws_recv_text(sock)
             if frame_text is None:
@@ -2500,10 +2504,13 @@ def _do_ws_relay(user_text, session_id):
             if etype == "response":
                 content = event.get("content", "")
                 if content:
+                    if first_chunk_time is None:
+                        first_chunk_time = time.time()
+                        print(f"[relay] first chunk in {first_chunk_time - t0:.1f}s (TTFB)")
                     collected.append(content)
             elif etype == "error":
                 err_msg = event.get("message", "Unknown error")
-                print(f"[telegram] WS error event: {err_msg}")
+                print(f"[relay] error event after {time.time() - t0:.1f}s: {err_msg}")
                 sock.close()
                 return "", f"Goose error: {err_msg}"
             elif etype == "complete":
@@ -2511,12 +2518,15 @@ def _do_ws_relay(user_text, session_id):
             # ignore: thinking, tool_request, tool_confirmation, tool_response, cancelled
 
         sock.close()
+        elapsed = time.time() - t0
         full_text = "".join(collected).strip()
+        print(f"[relay] done in {elapsed:.1f}s ({len(full_text)} chars) session={session_id}")
         if not full_text:
             return "(No response from goose)", ""
         return full_text, ""
 
     except ConnectionError as e:
+        print(f"[relay] connection error after {time.time() - t0:.1f}s: {e}")
         if sock:
             try:
                 sock.close()
@@ -2524,6 +2534,7 @@ def _do_ws_relay(user_text, session_id):
                 pass
         return "", f"WebSocket error: {e}"
     except Exception as e:
+        print(f"[relay] error after {time.time() - t0:.1f}s: {e}")
         if sock:
             try:
                 sock.close()

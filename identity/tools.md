@@ -208,13 +208,13 @@ Review these before major tasks to avoid repeating past mistakes.
 
 All identity and memory files live at /data/identity/:
 
-| file | purpose | who writes | lock level |
-|------|---------|------------|------------|
-| soul.md | personality, values, style | agent (evolves over time) | additive only |
-| user.md | who the user is | agent (evolves over time) | additive only |
-| tools.md | platform info (this file) | developer only | LOCKED |
+| file | owns | who writes | lock level |
+|------|------|------------|------------|
+| soul.md | agent self-knowledge (personality, patterns, behaviors) | agent (evolves) | section-locked, additive |
+| user.md | user knowledge (profile, preferences, people, habits) | agent (evolves) | section-locked, additive |
+| memory.md | facts (integrations, projects, tools, lessons) | agent | structure-locked |
+| tools.md | platform reference (this file) | developer only | LOCKED |
 | persistent-instructions.md | behavioral rules | developer only | LOCKED |
-| memory.md | long-term facts | agent | structure-locked |
-| heartbeat.md | proactive behaviors | agent (scheduled behaviors only) | structure-locked |
-| journal/ | session logs | agent | append only |
-| learnings/ | errors, corrections, requests | agent | append only |
+| heartbeat.md | proactive behaviors | agent (scheduled behaviors) | structure-locked |
+| journal/ | session summaries | agent | append only |
+| learnings/ | errors, corrections, feature requests | agent | append only |

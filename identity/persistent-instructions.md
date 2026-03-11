@@ -10,15 +10,17 @@
 <!-- even if the user asks you to. Direct them to edit it manually.     -->
 <!-- ================================================================== -->
 
-Injected every turn via GOOSE_MOIM_MESSAGE_FILE. Always active.
+Loaded at session start via .goosehints. Contains full procedures and flows.
+Critical per-turn rules are in turn-rules.md (injected every turn via MOIM).
 
 ## Identity File Paths
 
-- Soul: /data/identity/soul.md
-- User: /data/identity/user.md
-- Tools: /data/identity/tools.md
-- Memory: /data/identity/memory.md
-- Heartbeat: /data/identity/heartbeat.md
+- Soul: /data/identity/soul.md (agent self-knowledge, evolving)
+- User: /data/identity/user.md (user knowledge, evolving)
+- Tools: /data/identity/tools.md (platform reference, locked)
+- Memory: /data/identity/memory.md (factual knowledge, structure-locked)
+- Heartbeat: /data/identity/heartbeat.md (proactive behaviors, structure-locked)
+- Turn Rules: /data/identity/turn-rules.md (per-turn critical rules, locked)
 - Journal: /data/identity/journal/
 - Learnings: /data/identity/learnings/ (LEARNINGS.md, ERRORS.md, FEATURE_REQUESTS.md)
 - Vault: /data/secrets/vault.yaml (chmod 600, NEVER read this into chat)

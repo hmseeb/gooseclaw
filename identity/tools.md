@@ -204,6 +204,17 @@ Entry ID format: `TYPE-YYYYMMDD-XXX` (e.g. `LRN-20260312-001`, `ERR-20260312-001
 
 Review these before major tasks to avoid repeating past mistakes.
 
+## Context Loading (two-layer system)
+
+| Layer | File | When loaded | Token cost |
+|-------|------|-------------|------------|
+| Session start | .goosehints (inlines soul.md, user.md, tools.md, memory.md, heartbeat.md, persistent-instructions.md) | once per session | heavier but one-time |
+| Every turn | turn-rules.md via MOIM | every message | slim (~100 lines) |
+| Every turn | MOIM text | every message | 1 line (remind CLI mandate) |
+
+Session context has full procedures (onboarding, integrations, scheduling).
+Per-turn rules have only critical guards (file protection, self-improvement triggers, remind mandate).
+
 ## Identity Files
 
 All identity and memory files live at /data/identity/:
@@ -214,7 +225,8 @@ All identity and memory files live at /data/identity/:
 | user.md | user knowledge (profile, preferences, people, habits) | agent (evolves) | section-locked, additive |
 | memory.md | facts (integrations, projects, tools, lessons) | agent | structure-locked |
 | tools.md | platform reference (this file) | developer only | LOCKED |
-| persistent-instructions.md | behavioral rules | developer only | LOCKED |
+| persistent-instructions.md | full procedures and flows | developer only | LOCKED |
+| turn-rules.md | critical per-turn rules | developer only | LOCKED |
 | heartbeat.md | proactive behaviors | agent (scheduled behaviors) | structure-locked |
 | journal/ | session summaries | agent | append only |
 | learnings/ | errors, corrections, feature requests | agent | append only |

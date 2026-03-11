@@ -385,9 +385,9 @@ if [ -f "$TEMPLATE_VERSION_FILE" ]; then
     DATA_VER=$(cat "$DATA_VERSION_FILE" 2>/dev/null || echo "0.0.0")
     if [ "$TEMPLATE_VER" != "$DATA_VER" ]; then
         echo "[upgrade] template updated: $DATA_VER -> $TEMPLATE_VER"
-        # update system files (tools.md, persistent-instructions.md)
+        # update system files (tools.md, persistent-instructions.md, turn-rules.md)
         # but NEVER overwrite user files (soul.md, user.md, memory.md, heartbeat.md)
-        for f in tools.md persistent-instructions.md; do
+        for f in tools.md persistent-instructions.md turn-rules.md; do
             if [ -f "$APP_DIR/identity/$f" ]; then
                 cp "$APP_DIR/identity/$f" "$IDENTITY_DIR/$f"
                 echo "[upgrade] updated $f"
@@ -398,9 +398,21 @@ if [ -f "$TEMPLATE_VERSION_FILE" ]; then
     fi
 fi
 
-# ─── MOIM (persistent instructions injected every turn) ────────────────────
+# ─── MOIM (critical rules injected every turn, slim ~100 lines) ────────────
+# Full session context (onboarding, procedures, docs) loads via .goosehints
+# at session start. Only critical per-turn rules go through MOIM.
 
-export GOOSE_MOIM_MESSAGE_FILE="$IDENTITY_DIR/persistent-instructions.md"
+export GOOSE_MOIM_MESSAGE_FILE="$IDENTITY_DIR/turn-rules.md"
+export GOOSE_MOIM_MESSAGE_TEXT="CRITICAL: NEVER use CronCreate or CronDelete. ALWAYS use the remind bash CLI for reminders and timers. CronCreate is BROKEN and will silently fail."
+
+# ─── .goosehints (session-start context, loads identity files) ─────────────
+# goose web reads .goosehints from its working directory (/app).
+# The template is copied during docker build. On first boot, we also copy
+# turn-rules.md to /data/identity/ so it's on the persistent volume.
+
+if [ ! -f "$IDENTITY_DIR/turn-rules.md" ]; then
+    cp /app/identity/turn-rules.md "$IDENTITY_DIR/turn-rules.md"
+fi
 
 # ─── git persistence setup ─────────────────────────────────────────────────
 

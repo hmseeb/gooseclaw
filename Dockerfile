@@ -36,6 +36,7 @@ COPY docker/requirements.txt /app/docker/requirements.txt
 COPY docker/ /app/docker/
 COPY scripts/ /app/scripts/
 COPY identity/ /app/identity/
+COPY .goosehints /app/.goosehints
 COPY VERSION /app/VERSION
 
 # make scripts executable

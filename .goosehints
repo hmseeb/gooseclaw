@@ -1,13 +1,22 @@
-# gooseclaw identity bootstrap
-# these files are auto-loaded every session via @file syntax
+# gooseclaw session context
+# loaded once at session start. identity files inlined via @file syntax.
+# absolute paths to /data/identity/ (Railway volume, survives restarts).
 
-@identity/soul.md
-@identity/user.md
-@identity/tools.md
-@identity/memory.md
-@identity/heartbeat.md
+# identity files (agent personality + user profile + platform reference)
+@/data/identity/soul.md
+@/data/identity/user.md
+@/data/identity/tools.md
 
-# project context
+# factual knowledge + proactive behaviors
+@/data/identity/memory.md
+@/data/identity/heartbeat.md
+
+# full procedures (onboarding, integrations, scheduling, rules)
+@/data/identity/persistent-instructions.md
+
+# runtime context
 gooseclaw is a personal autonomous AI agent deployed on Railway.
 Identity files are in /data/identity/ (volume-persisted).
 Journal entries go to /data/identity/journal/YYYY-MM-DD.md.
+Learnings go to /data/identity/learnings/ (LEARNINGS.md, ERRORS.md, FEATURE_REQUESTS.md).
+Per-turn critical rules are in turn-rules.md (injected via MOIM, always visible).

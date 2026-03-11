@@ -919,6 +919,32 @@ def _setup_claude_cli():
         print("[gateway] created ~/.claude.json")
 
 
+def _extract_yaml_sections(content, section_keys):
+    """Extract multi-line YAML sections from config content.
+
+    Returns a string containing all matched top-level sections (key + nested lines).
+    Used to preserve extensions: and gateway_* sections when rewriting config.yaml.
+    """
+    lines = content.split("\n")
+    buf = []
+    in_section = False
+    for line in lines:
+        if any(line.startswith(k) for k in section_keys):
+            in_section = True
+            buf.append(line)
+        elif in_section:
+            # still inside the section if the line is indented or a YAML list item
+            if line and (line[0].isspace() or line.strip().startswith("-")):
+                buf.append(line)
+            else:
+                in_section = False
+                # check if the new line starts another section we want
+                if any(line.startswith(k) for k in section_keys):
+                    in_section = True
+                    buf.append(line)
+    return "\n".join(buf) + "\n" if buf else ""
+
+
 def apply_config(config):
     """Write goose config.yaml and set env vars from setup config."""
     provider_type = config.get("provider_type", "")
@@ -929,8 +955,27 @@ def apply_config(config):
     # set timezone
     os.environ["TZ"] = tz
 
-    # base config
     config_path = os.path.join(CONFIG_DIR, "config.yaml")
+
+    # ── preserve existing extensions and gateway state ──
+    # goose re-reads config.yaml from disk on every API call. If we strip the
+    # extensions: section, the gateway detects "extensions changed" on every
+    # telegram message, evicts the agent, and the session loses continuity.
+    # Similarly, gateway_pairings must survive reconfiguration.
+    preserved = ""
+    try:
+        with open(config_path) as f:
+            old_content = f.read()
+        preserved = _extract_yaml_sections(old_content, [
+            "extensions:",
+            "gateway_pairings:",
+            "gateway_configs:",
+            "gateway_pending_codes:",
+        ])
+    except FileNotFoundError:
+        pass
+
+    # base config
     lines = [
         "keyring: false",
         "GOOSE_MODE: auto",
@@ -995,8 +1040,14 @@ def apply_config(config):
         if lead_turn_count:
             lines.append(f"GOOSE_LEAD_TURN_COUNT: {lead_turn_count}")
 
-    with open(config_path, "w") as f:
-        f.write("\n".join(lines) + "\n")
+    # write base config + preserved sections atomically
+    content = "\n".join(lines) + "\n"
+    if preserved:
+        content += preserved
+    tmp_path = config_path + ".tmp"
+    with open(tmp_path, "w") as f:
+        f.write(content)
+    os.replace(tmp_path, config_path)
 
     # telegram — set env var AND start gateway if not already running
     tg_token = config.get("telegram_bot_token", "")
@@ -1248,8 +1299,6 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.handle_startup_status()
         elif path == "/api/version":
             self.handle_version()
-        elif path == "/api/debug/sessions":
-            self.handle_debug_sessions()  # temp: no auth for debugging
         elif path.rstrip("/") == "/setup" or path.startswith("/setup/"):
             self.handle_setup_page()
         elif path == "/api/setup/config":
@@ -1367,78 +1416,6 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             except Exception:
                 pass
         self.send_json(200, {"version": version, "service": "gooseclaw"})
-
-    def handle_debug_sessions(self):
-        """GET /api/debug/sessions — inspect gateway session state (auth required)."""
-        import sqlite3 as _sqlite3
-        result = {"config_path": GOOSE_CONFIG_PATH, "sessions_db": None, "pairings": None, "config_gateway_lines": None, "sessions": [], "errors": []}
-        # read gateway-related sections from config
-        try:
-            with open(GOOSE_CONFIG_PATH) as f:
-                content = f.read()
-            # extract ALL gateway-related lines
-            lines = content.split("\n")
-            in_gw = False
-            gw_lines = []
-            gw_keys = ("gateway_pairings:", "gateway_configs:", "gateway_pending_codes:")
-            for line in lines:
-                if any(line.startswith(k) for k in gw_keys):
-                    in_gw = True
-                    gw_lines.append(line)
-                elif in_gw:
-                    if line and not line[0].isspace() and not line.strip().startswith("-"):
-                        in_gw = False
-                        if any(line.startswith(k) for k in gw_keys):
-                            in_gw = True
-                            gw_lines.append(line)
-                    else:
-                        gw_lines.append(line)
-            result["config_gateway_lines"] = gw_lines if gw_lines else ["NONE FOUND"]
-            # also check if gateway_pairings specifically exists
-            result["has_gateway_pairings"] = any(l.startswith("gateway_pairings:") for l in lines)
-        except Exception as e:
-            result["errors"].append(f"config read: {e}")
-        # find sessions.db
-        home = os.environ.get("HOME", "/home/gooseclaw")
-        db_paths = [
-            os.path.join(home, ".local/share/goose/sessions/sessions.db"),
-            os.path.join(DATA_DIR, "sessions/sessions.db"),
-        ]
-        for dbp in db_paths:
-            is_link = os.path.islink(dbp)
-            target = os.readlink(dbp) if is_link else None
-            exists = os.path.exists(dbp)
-            result.setdefault("db_files", []).append({"path": dbp, "exists": exists, "is_symlink": is_link, "target": target})
-            if exists and not result["sessions_db"]:
-                result["sessions_db"] = dbp
-                try:
-                    conn = _sqlite3.connect(dbp)
-                    cur = conn.cursor()
-                    # get all gateway sessions
-                    cur.execute("SELECT id, name, session_type, total_tokens, updated_at FROM sessions WHERE session_type = 'gateway' ORDER BY updated_at DESC LIMIT 10")
-                    for row in cur.fetchall():
-                        sid = row[0]
-                        msg_cur = conn.cursor()
-                        msg_cur.execute("SELECT COUNT(*) FROM messages WHERE session_id = ?", (sid,))
-                        msg_count = msg_cur.fetchone()[0]
-                        # get ALL messages for the LATEST session, last 3 for others
-                        if not result["sessions"]:  # first = latest
-                            msg_cur.execute("SELECT id, role, substr(content_json, 1, 300), created_timestamp, tokens FROM messages WHERE session_id = ? ORDER BY created_timestamp ASC", (sid,))
-                            recent = [{"id": r[0], "role": r[1], "content_preview": r[2], "ts": r[3], "tokens": r[4]} for r in msg_cur.fetchall()]
-                        else:
-                            msg_cur.execute("SELECT role, substr(content_json, 1, 200), created_timestamp FROM messages WHERE session_id = ? ORDER BY created_timestamp DESC LIMIT 3", (sid,))
-                            recent = [{"role": r[0], "content_preview": r[1], "ts": r[2]} for r in msg_cur.fetchall()]
-                        result["sessions"].append({"id": sid, "name": row[1][:80], "type": row[2], "tokens": row[3], "updated": row[4], "msg_count": msg_count, "recent": recent})
-                    conn.close()
-                except Exception as e:
-                    result["errors"].append(f"db read: {e}")
-        # goose version
-        try:
-            gv = subprocess.check_output(["goose", "--help"], stderr=subprocess.STDOUT, timeout=5).decode().strip().split("\n")[0]
-            result["goose_version"] = gv
-        except Exception as e:
-            result["goose_version"] = f"error: {e}"
-        self.send_json(200, result)
 
     # ── startup status endpoint ──
 

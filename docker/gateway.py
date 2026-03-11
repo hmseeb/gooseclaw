@@ -1371,25 +1371,31 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
     def handle_debug_sessions(self):
         """GET /api/debug/sessions — inspect gateway session state (auth required)."""
         import sqlite3 as _sqlite3
-        result = {"config_path": GOOSE_CONFIG_PATH, "sessions_db": None, "pairings": None, "sessions": [], "errors": []}
-        # read pairings from config
+        result = {"config_path": GOOSE_CONFIG_PATH, "sessions_db": None, "pairings": None, "config_gateway_lines": None, "sessions": [], "errors": []}
+        # read gateway-related sections from config
         try:
             with open(GOOSE_CONFIG_PATH) as f:
                 content = f.read()
-            # extract gateway_pairings block
+            # extract ALL gateway-related lines
             lines = content.split("\n")
             in_gw = False
             gw_lines = []
+            gw_keys = ("gateway_pairings:", "gateway_configs:", "gateway_pending_codes:")
             for line in lines:
-                if line.startswith("gateway_pairings:") or line.startswith("gateway_configs:"):
+                if any(line.startswith(k) for k in gw_keys):
                     in_gw = True
                     gw_lines.append(line)
                 elif in_gw:
                     if line and not line[0].isspace() and not line.strip().startswith("-"):
                         in_gw = False
+                        if any(line.startswith(k) for k in gw_keys):
+                            in_gw = True
+                            gw_lines.append(line)
                     else:
                         gw_lines.append(line)
-            result["pairings"] = "\n".join(gw_lines) if gw_lines else "NONE FOUND"
+            result["config_gateway_lines"] = gw_lines if gw_lines else ["NONE FOUND"]
+            # also check if gateway_pairings specifically exists
+            result["has_gateway_pairings"] = any(l.startswith("gateway_pairings:") for l in lines)
         except Exception as e:
             result["errors"].append(f"config read: {e}")
         # find sessions.db
@@ -1415,9 +1421,13 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                         msg_cur = conn.cursor()
                         msg_cur.execute("SELECT COUNT(*) FROM messages WHERE session_id = ?", (sid,))
                         msg_count = msg_cur.fetchone()[0]
-                        # get last 3 messages
-                        msg_cur.execute("SELECT role, substr(content_json, 1, 200), created_timestamp FROM messages WHERE session_id = ? ORDER BY created_timestamp DESC LIMIT 3", (sid,))
-                        recent = [{"role": r[0], "content_preview": r[1], "ts": r[2]} for r in msg_cur.fetchall()]
+                        # get ALL messages for the LATEST session, last 3 for others
+                        if not result["sessions"]:  # first = latest
+                            msg_cur.execute("SELECT id, role, substr(content_json, 1, 300), created_timestamp, tokens FROM messages WHERE session_id = ? ORDER BY created_timestamp ASC", (sid,))
+                            recent = [{"id": r[0], "role": r[1], "content_preview": r[2], "ts": r[3], "tokens": r[4]} for r in msg_cur.fetchall()]
+                        else:
+                            msg_cur.execute("SELECT role, substr(content_json, 1, 200), created_timestamp FROM messages WHERE session_id = ? ORDER BY created_timestamp DESC LIMIT 3", (sid,))
+                            recent = [{"role": r[0], "content_preview": r[1], "ts": r[2]} for r in msg_cur.fetchall()]
                         result["sessions"].append({"id": sid, "name": row[1][:80], "type": row[2], "tokens": row[3], "updated": row[4], "msg_count": msg_count, "recent": recent})
                     conn.close()
                 except Exception as e:

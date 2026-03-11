@@ -1632,8 +1632,8 @@ def _fire_cron_job(job):
         f"{instructions}"
     )
 
-    # relay to goose web (10 min timeout — cron jobs do heavy tool use)
-    response_text, error = _do_ws_relay(prompt, session_id, timeout=600)
+    # relay to goose web (no timeout — task runs until goose completes)
+    response_text, error = _do_ws_relay(prompt, session_id)
 
     if error:
         print(f"[cron] job {job_id} failed: {error}")
@@ -2296,10 +2296,10 @@ def _create_goose_session():
 
 # ── minimal WebSocket client (stdlib only, no external deps) ────────────────
 
-def _ws_connect(host, port, path, auth_token=None, timeout=300):
+def _ws_connect(host, port, path, auth_token=None):
     """Open a WebSocket connection. Returns the raw socket or raises."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(timeout)
+    sock.settimeout(15)  # short timeout for initial connect only
     sock.connect((host, port))
 
     # generate a random 16-byte key for the handshake
@@ -2336,6 +2336,9 @@ def _ws_connect(host, port, path, auth_token=None, timeout=300):
         sock.close()
         raise ConnectionError(f"WebSocket handshake failed: {status_line}")
 
+    # handshake done. remove timeout so the relay can run as long as it needs.
+    # the loop exits on "complete" event or connection close, not a timer.
+    sock.settimeout(None)
     return sock
 
 
@@ -2461,11 +2464,11 @@ def _relay_to_goose_web(user_text, session_id, chat_id=None):
     return text, err
 
 
-def _do_ws_relay(user_text, session_id, timeout=300):
+def _do_ws_relay(user_text, session_id):
     """Connect to goose web via WebSocket, send a message, collect the response.
 
-    Returns (response_text, error_string).
-    timeout: socket timeout in seconds (default 300s = 5 min).
+    Returns (response_text, error_string). No timeout on the relay itself.
+    Connection uses a 15s timeout for the initial handshake only.
     """
     ws_path = f"/ws?token={urllib.parse.quote(str(_INTERNAL_GOOSE_TOKEN))}"
     t0 = time.time()
@@ -2473,7 +2476,7 @@ def _do_ws_relay(user_text, session_id, timeout=300):
 
     sock = None
     try:
-        sock = _ws_connect("127.0.0.1", GOOSE_WEB_PORT, ws_path, auth_token=_INTERNAL_GOOSE_TOKEN, timeout=timeout)
+        sock = _ws_connect("127.0.0.1", GOOSE_WEB_PORT, ws_path, auth_token=_INTERNAL_GOOSE_TOKEN)
         t_connect = time.time()
         print(f"[relay] ws connected in {t_connect - t0:.1f}s")
 

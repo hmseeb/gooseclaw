@@ -189,15 +189,32 @@ curl -s -X POST http://localhost:8080/api/script-jobs \
 - **Exa**: AI-powered web search. no API key needed.
   Use for: current events, troubleshooting, company research, how-tos.
 
+## Learnings (self-improvement logs)
+
+The agent logs mistakes, corrections, and feature requests to `/data/identity/learnings/`.
+These are append-only logs. Never delete entries, only mark resolved.
+
+| file | what goes here |
+|------|---------------|
+| `LEARNINGS.md` | corrections, knowledge gaps, best practices discovered |
+| `ERRORS.md` | command failures, API errors, unexpected behavior |
+| `FEATURE_REQUESTS.md` | capabilities the user wanted that don't exist |
+
+Entry ID format: `TYPE-YYYYMMDD-XXX` (e.g. `LRN-20260312-001`, `ERR-20260312-001`)
+
+Review these before major tasks to avoid repeating past mistakes.
+
 ## Identity Files
 
 All identity and memory files live at /data/identity/:
 
-| file | purpose | who writes |
-|------|---------|------------|
-| soul.md | personality, values, style | onboarding, then user |
-| user.md | who the user is | onboarding, then user |
-| tools.md | platform info (this file) | template |
-| memory.md | long-term facts | agent |
-| heartbeat.md | proactive behaviors | user |
-| journal/ | session logs | agent |
+| file | purpose | who writes | lock level |
+|------|---------|------------|------------|
+| soul.md | personality, values, style | agent (evolves over time) | additive only |
+| user.md | who the user is | agent (evolves over time) | additive only |
+| tools.md | platform info (this file) | developer only | LOCKED |
+| persistent-instructions.md | behavioral rules | developer only | LOCKED |
+| memory.md | long-term facts | agent | structure-locked |
+| heartbeat.md | proactive behaviors | agent (scheduled behaviors only) | structure-locked |
+| journal/ | session logs | agent | append only |
+| learnings/ | errors, corrections, requests | agent | append only |

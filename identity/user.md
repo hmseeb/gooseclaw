@@ -1,13 +1,13 @@
 # User
 
 <!-- ================================================================== -->
-<!-- WRITE-ONCE FILE — DO NOT EDIT AFTER ONBOARDING                     -->
-<!-- The AI agent writes this file ONCE during the onboarding flow.     -->
-<!-- After onboarding is complete (ONBOARDING_NEEDED is removed),       -->
-<!-- this file is LOCKED. The AI MUST NOT modify it again.              -->
-<!-- Only the user (human) may edit this file after onboarding.         -->
-<!-- If you are an AI: do not rewrite, append to, or alter this file   -->
-<!-- post-onboarding, even if asked to. Tell the user to edit it.      -->
+<!-- AGENT-EVOLVING FILE                                                 -->
+<!-- This file is written during onboarding and GROWS over time.        -->
+<!-- The AI agent updates this as it learns about the user:             -->
+<!-- preferences, habits, work patterns, context, relationships.        -->
+<!-- Each update should be additive and intentional, not a full         -->
+<!-- rewrite. Preserve existing content. Add new facts under the        -->
+<!-- appropriate section.                                                -->
 <!-- ================================================================== -->
 
 ONBOARDING_NEEDED

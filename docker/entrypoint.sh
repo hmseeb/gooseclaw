@@ -21,7 +21,7 @@ export PATH="$HOME_DIR/.local/bin:$PATH"
 
 if [ ! -f "$DATA_DIR/.initialized" ]; then
     echo "[init] first boot detected. setting up /data..."
-    mkdir -p "$IDENTITY_DIR/journal" "$CONFIG_DIR" "$DATA_DIR/sessions" "$DATA_DIR/recipes" "$DATA_DIR/secrets" "$DATA_DIR/channels"
+    mkdir -p "$IDENTITY_DIR/journal" "$IDENTITY_DIR/learnings" "$CONFIG_DIR" "$DATA_DIR/sessions" "$DATA_DIR/recipes" "$DATA_DIR/secrets" "$DATA_DIR/channels"
     chmod 700 "$DATA_DIR/secrets"
     touch "$DATA_DIR/secrets/vault.yaml"
     chmod 600 "$DATA_DIR/secrets/vault.yaml"
@@ -444,7 +444,7 @@ rm -rf "$GCLAW_HOME/.config/goose"
 ln -sf "$CONFIG_DIR" "$GCLAW_HOME/.config/goose"
 
 # goose data directories — persist everything to the Railway volume
-mkdir -p "$DATA_DIR/goose_data/sessions" "$DATA_DIR/goose_data/scheduled_recipes" "$DATA_DIR/channels"
+mkdir -p "$DATA_DIR/goose_data/sessions" "$DATA_DIR/goose_data/scheduled_recipes" "$DATA_DIR/channels" "$IDENTITY_DIR/learnings"
 mkdir -p "$GCLAW_HOME/.local/state/goose/logs"
 
 # symlink the entire goose share directory to the persistent volume

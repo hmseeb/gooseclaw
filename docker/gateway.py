@@ -2121,7 +2121,10 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         if _is_first_boot():
             self.send_json(403, {"error": "agent not configured yet"})
             return
-        if not check_auth(self):
+        # allow unauthenticated calls from localhost (e.g. notify.sh, cron jobs)
+        client_ip = self.client_address[0] if self.client_address else ""
+        is_local = client_ip in ("127.0.0.1", "::1", "localhost")
+        if not is_local and not check_auth(self):
             self.send_response(401)
             self.send_header("WWW-Authenticate", 'Basic realm="gooseclaw"')
             self.end_headers()

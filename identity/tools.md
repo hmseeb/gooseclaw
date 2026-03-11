@@ -44,6 +44,74 @@
 - credentials stored here are auto-exported as env vars on container boot.
 - format: simple YAML. `service.key` dot-path notation.
 
+## Channel Plugins
+
+The gateway supports channel plugins for adding new messaging platforms (slack, discord, whatsapp, etc.).
+Plugins are Python files in `/data/channels/`. They auto-load on startup and hot-reload via API.
+
+### Writing a channel plugin
+
+Create a `.py` file in `/data/channels/` with a `CHANNEL` dict:
+
+```python
+# /data/channels/slack.py
+
+def send(text):
+    """Send a message to the channel. REQUIRED."""
+    # your send logic here
+    return {"sent": True, "error": ""}
+
+def poll(relay_fn, stop_event, creds):
+    """Listen for incoming messages. OPTIONAL. Runs in a daemon thread."""
+    # relay_fn(user_id, text) -> response text from goose
+    # stop_event is a threading.Event — check stop_event.is_set() in your loop
+    # creds is a dict of resolved credentials
+    pass
+
+def setup(creds):
+    """Called once on load. OPTIONAL. Return {"ok": False, "error": "..."} to abort."""
+    return {"ok": True}
+
+def teardown():
+    """Called on unload/reload. OPTIONAL. Clean up resources."""
+    pass
+
+CHANNEL = {
+    "name": "slack",
+    "version": 1,
+    "send": send,
+    "poll": poll,              # omit if outbound-only
+    "setup": setup,            # omit if no init needed
+    "teardown": teardown,      # omit if no cleanup needed
+    "credentials": ["SLACK_TOKEN"],  # keys resolved from env then sidecar JSON
+}
+```
+
+### Credentials
+
+Store credentials in a sidecar JSON file: `/data/channels/<name>.json`
+
+```json
+{"SLACK_TOKEN": "xoxb-your-token-here"}
+```
+
+Resolution order: env vars first, then sidecar JSON. Never put tokens in the .py file.
+
+### Activation flow
+
+1. Write the credentials sidecar: `/data/channels/<name>.json`
+2. Write the plugin: `/data/channels/<name>.py`
+3. Reload: `curl -s -X POST http://localhost:8080/api/channels/reload`
+4. Verify: `curl -s http://localhost:8080/api/channels`
+
+### Rules
+
+- Files starting with `_` are skipped (use `_example.py` for templates)
+- Broken plugins are logged and skipped. gateway keeps running.
+- `send(text)` MUST return `{"sent": bool, "error": str}`
+- `poll()` runs forever in a thread. check `stop_event.is_set()` to exit cleanly.
+- All registered channels receive notifications from scheduler, reminders, and session watcher automatically.
+
 ## Research Tools (MCP, always available)
 
 - **Context7**: library/framework documentation lookup. no API key needed.

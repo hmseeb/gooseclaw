@@ -5,27 +5,41 @@ gooseclaw gateway — setup wizard + notification bus + reverse proxy to goose w
 Runs on $PORT. Serves /setup directly, proxies everything else to goose web
 on an internal port. Manages the goose web subprocess lifecycle.
 
+Architecture:
+  - notification bus: channel-agnostic delivery. telegram/slack/whatsapp register
+    handlers via register_notification_handler(). scheduler, reminders, and session
+    watcher all deliver through notify_all() without knowing which channels are active.
+  - cron scheduler: reads goose schedule.json, fires jobs in isolated goose web
+    sessions, delivers output via notify_all(). replaces goose's built-in scheduler
+    which only runs inside `goose gateway` (not `goose web`).
+  - reminder engine: lightweight timers (no AI). 10s tick, direct delivery.
+  - session watcher: polls goose web for scheduled session output, forwards via notify.
+
 API:
   GET  /api/health           -> health check
   GET  /api/setup/config     -> current provider config (masked)
   GET  /api/setup/status     -> goose web startup state (idle/starting/ready/error)
   POST /api/setup/validate   -> validate provider credentials
   POST /api/setup/save       -> save provider config and restart
-  POST /api/notify           -> send message to all paired telegram users
-  GET  /api/notify/status    -> check if telegram delivery is available
+  POST /api/notify           -> send message to all registered notification channels
+  GET  /api/notify/status    -> check if notification delivery is available
   GET  /api/telegram/status  -> telegram gateway status, paired users, pairing code
   POST /api/telegram/pair    -> generate a new telegram pairing code
   POST /api/auth/recover     -> reset auth token using GOOSECLAW_RECOVERY_SECRET
   GET  /api/reminders         -> list active reminders
   POST /api/reminders         -> create a new reminder (delay_seconds or fire_at)
   DELETE /api/reminders/<id>  -> cancel a reminder
+  GET  /api/channels          -> list loaded channel plugins
+  POST /api/channels/reload   -> hot-reload channel plugins from /data/channels/
 """
 
 import base64
 import collections
+import glob
 import hashlib
 import http.client
 import http.server
+import importlib.util
 import json
 import os
 import re
@@ -114,6 +128,40 @@ _telegram_running = False  # True while the Python polling thread is active
 _telegram_sessions_file = os.path.join(DATA_DIR, "telegram_sessions.json")
 _telegram_sessions = {}  # chat_id (str) -> session_id (str)
 _telegram_sessions_lock = threading.Lock()
+
+# ── notification bus (channel-agnostic delivery) ─────────────────────────────
+#
+# Any channel (telegram, slack, whatsapp, etc.) registers a handler via
+# register_notification_handler(). All delivery goes through notify_all().
+# The scheduler, reminder engine, and session watcher don't know or care
+# which channels are active.
+#
+# Handler signature: handler_fn(text) -> {"sent": bool, "error": str}
+
+_notification_handlers = []    # [{"name": str, "handler": callable}, ...]
+_notification_handlers_lock = threading.Lock()
+
+
+def register_notification_handler(name, handler_fn):
+    """Register a delivery channel. handler_fn(text) -> {"sent": bool, "error": str}."""
+    with _notification_handlers_lock:
+        # avoid double-registration
+        for h in _notification_handlers:
+            if h["name"] == name:
+                h["handler"] = handler_fn
+                print(f"[notify] updated handler: {name}")
+                return
+        _notification_handlers.append({"name": name, "handler": handler_fn})
+    print(f"[notify] registered handler: {name}")
+
+
+# ── channel plugin system state ───────────────────────────────────────────────
+
+CHANNELS_DIR = os.path.join(DATA_DIR, "channels")
+_loaded_channels = {}       # name -> {"module": mod, "channel": CHANNEL dict, "creds": dict}
+_channel_threads = {}       # name -> Thread
+_channel_stop_events = {}   # name -> threading.Event
+_channels_lock = threading.Lock()
 
 # ── session watcher state (auto-forward scheduled output to telegram) ───────
 _session_watcher_running = False
@@ -375,74 +423,205 @@ def get_paired_chat_ids():
     return chat_ids
 
 
+def _markdown_to_telegram_html(text):
+    """Convert standard markdown to Telegram-compatible HTML.
+
+    Telegram HTML supports: <b>, <i>, <code>, <pre>, <a>, <s>, <blockquote>, <u>.
+    This is far more reliable than Telegram's legacy Markdown or MarkdownV2 modes.
+    """
+    # -- Step 1: extract code blocks so they don't get mangled --
+    code_blocks = []
+    def _save_code_block(m):
+        code = m.group(2)
+        code = code.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        idx = len(code_blocks)
+        code_blocks.append(f"<pre>{code}</pre>")
+        return f"\x00CB{idx}\x00"
+    text = re.sub(r'```(\w*)\n(.*?)```', _save_code_block, text, flags=re.DOTALL)
+    # also handle ``` without newline after lang
+    text = re.sub(r'```(\w*)(.*?)```', _save_code_block, text, flags=re.DOTALL)
+
+    # -- Step 2: extract inline code --
+    inline_codes = []
+    def _save_inline(m):
+        code = m.group(1)
+        code = code.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        idx = len(inline_codes)
+        inline_codes.append(f"<code>{code}</code>")
+        return f"\x00IC{idx}\x00"
+    text = re.sub(r'`([^`\n]+)`', _save_inline, text)
+
+    # -- Step 3: escape HTML entities in remaining text --
+    text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    # -- Step 4: headers → bold --
+    text = re.sub(r'^#{1,6}\s+(.+)$', r'<b>\1</b>', text, flags=re.MULTILINE)
+
+    # -- Step 5: bold (**text** or __text__) --
+    text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
+    text = re.sub(r'__(.+?)__', r'<b>\1</b>', text)
+
+    # -- Step 6: italic (*text* or _text_) — avoid matching mid-word underscores --
+    text = re.sub(r'(?<!\w)\*([^*\n]+?)\*(?!\w)', r'<i>\1</i>', text)
+    text = re.sub(r'(?<!\w)_([^_\n]+?)_(?!\w)', r'<i>\1</i>', text)
+
+    # -- Step 7: strikethrough ~~text~~ --
+    text = re.sub(r'~~(.+?)~~', r'<s>\1</s>', text)
+
+    # -- Step 8: links [text](url) --
+    text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<a href="\2">\1</a>', text)
+
+    # -- Step 9: blockquotes (> line) --
+    def _convert_blockquotes(txt):
+        lines = txt.split('\n')
+        out = []
+        bq_buf = []
+        for line in lines:
+            stripped = line.lstrip()
+            if stripped.startswith('&gt; '):  # was '> ' before HTML escape
+                bq_buf.append(stripped[5:])
+            elif stripped == '&gt;':
+                bq_buf.append('')
+            else:
+                if bq_buf:
+                    out.append('<blockquote>' + '\n'.join(bq_buf) + '</blockquote>')
+                    bq_buf = []
+                out.append(line)
+        if bq_buf:
+            out.append('<blockquote>' + '\n'.join(bq_buf) + '</blockquote>')
+        return '\n'.join(out)
+    text = _convert_blockquotes(text)
+
+    # -- Step 10: tables → preformatted block --
+    lines = text.split('\n')
+    result = []
+    table_buf = []
+    for line in lines:
+        stripped = line.strip()
+        if re.match(r'^\|.+\|$', stripped):
+            # skip separator rows  |---|---|
+            if re.match(r'^\|[\s\-:|\+]+\|$', stripped):
+                continue
+            cells = [c.strip() for c in stripped.strip('|').split('|')]
+            table_buf.append('  '.join(cells))
+        else:
+            if table_buf:
+                result.append('<pre>' + '\n'.join(table_buf) + '</pre>')
+                table_buf = []
+            result.append(line)
+    if table_buf:
+        result.append('<pre>' + '\n'.join(table_buf) + '</pre>')
+    text = '\n'.join(result)
+
+    # -- Step 11: horizontal rules --
+    text = re.sub(r'^-{3,}$', '─' * 20, text, flags=re.MULTILINE)
+
+    # -- Step 12: restore protected blocks --
+    for i, block in enumerate(code_blocks):
+        text = text.replace(f"\x00CB{i}\x00", block)
+    for i, code in enumerate(inline_codes):
+        text = text.replace(f"\x00IC{i}\x00", code)
+
+    return text
+
+
+def _strip_html(text):
+    """Strip HTML tags for plain-text fallback."""
+    return re.sub(r'<[^>]+>', '', text)
+
+
 def send_telegram_message(bot_token, chat_id, text):
-    """Send a message via telegram bot API. Returns (ok, error)."""
+    """Send a message via telegram bot API. Returns (ok, error).
+
+    Converts markdown to Telegram HTML first. Falls back to plain text if
+    HTML parse fails.
+    """
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    html_text = _markdown_to_telegram_html(text)
+
     # split long messages (telegram limit: 4096 chars)
-    chunks = []
-    if len(text) <= 4000:
-        chunks = [text]
-    else:
+    def _chunk(t, limit=4000):
+        if len(t) <= limit:
+            return [t]
+        chunks = []
         current = ""
-        for line in text.split("\n"):
-            if len(current) + len(line) + 1 > 4000:
-                chunks.append(current)
+        for line in t.split("\n"):
+            if len(current) + len(line) + 1 > limit:
+                if current:
+                    chunks.append(current)
                 current = line
             else:
                 current = f"{current}\n{line}" if current else line
         if current:
             chunks.append(current)
+        return chunks
 
-    for chunk in chunks:
+    html_chunks = _chunk(html_text)
+    plain_chunks = _chunk(text)  # original text for fallback
+
+    for i, chunk in enumerate(html_chunks):
         try:
             payload = urllib.parse.urlencode({
                 "chat_id": chat_id,
                 "text": chunk,
-                "parse_mode": "Markdown",
+                "parse_mode": "HTML",
                 "disable_web_page_preview": "true",
             }).encode()
             req = urllib.request.Request(url, data=payload)
             with urllib.request.urlopen(req, timeout=10) as resp:
                 result = json.loads(resp.read())
                 if not result.get("ok"):
-                    # retry without markdown
-                    payload = urllib.parse.urlencode({
-                        "chat_id": chat_id,
-                        "text": chunk,
-                        "disable_web_page_preview": "true",
-                    }).encode()
-                    req = urllib.request.Request(url, data=payload)
-                    urllib.request.urlopen(req, timeout=10)
-        except urllib.error.HTTPError:
-            # markdown parse failed, retry plain
+                    raise ValueError("telegram returned ok=false")
+        except Exception:
+            # HTML failed — fall back to plain text for this chunk
             try:
+                fallback = plain_chunks[i] if i < len(plain_chunks) else _strip_html(chunk)
                 payload = urllib.parse.urlencode({
                     "chat_id": chat_id,
-                    "text": chunk,
+                    "text": fallback,
                     "disable_web_page_preview": "true",
                 }).encode()
                 req = urllib.request.Request(url, data=payload)
                 urllib.request.urlopen(req, timeout=10)
             except Exception as e:
                 return False, str(e)
-        except Exception as e:
-            return False, str(e)
     return True, ""
 
 
 def notify_all(text):
-    """Send a message to all paired telegram users. Returns summary dict."""
+    """Send a message to all registered notification channels.
+
+    Channel-agnostic: telegram, slack, whatsapp, etc. each register via
+    register_notification_handler(). This function just calls all of them.
+    """
+    with _notification_handlers_lock:
+        handlers = list(_notification_handlers)
+    if not handlers:
+        return {"sent": False, "error": "no notification channels registered"}
+    results = []
+    for h in handlers:
+        try:
+            result = h["handler"](text)
+            results.append({"channel": h["name"], **result})
+        except Exception as e:
+            results.append({"channel": h["name"], "sent": False, "error": str(e)})
+    return {"sent": any(r.get("sent") for r in results), "channels": results}
+
+
+def _telegram_notify_handler(text):
+    """Telegram notification handler — registered with the notification bus."""
     token = get_bot_token()
     if not token:
         return {"sent": False, "error": "no bot token configured"}
     chat_ids = get_paired_chat_ids()
     if not chat_ids:
-        return {"sent": False, "error": "no paired telegram users found"}
-    results = []
+        return {"sent": False, "error": "no paired telegram users"}
+    ok_all = True
     for cid in chat_ids:
         ok, err = send_telegram_message(token, cid, text)
-        results.append({"chat_id": cid, "sent": ok, "error": err})
-    return {"sent": all(r["sent"] for r in results), "recipients": results}
+        if not ok:
+            ok_all = False
+    return {"sent": ok_all, "error": "" if ok_all else "some deliveries failed"}
 
 
 # ── setup config management ─────────────────────────────────────────────────
@@ -1270,6 +1449,588 @@ def start_reminder_engine():
     threading.Thread(target=_reminder_engine_loop, daemon=True).start()
 
 
+# ── cron scheduler (channel-agnostic, reads goose schedule.json) ─────────────
+#
+# Replaces goose's built-in scheduler (which only runs inside `goose gateway`,
+# not `goose web`). Reads the same schedule.json that `goose schedule add`
+# writes to, so existing CLI commands work transparently.
+#
+# Architecture (mirrors OpenClaw's approach):
+#   - scheduler loop runs inside gateway.py (not the LLM)
+#   - each job fires in an isolated goose web session (fresh session per run)
+#   - output delivered via notify_all() (channel-agnostic bus)
+#   - anyone building a slack/whatsapp/discord gateway just registers a handler
+#
+# On each tick (30s):
+#   1. read schedule.json
+#   2. for each job where now >= next_run: fire it
+#   3. firing = read recipe YAML -> relay instructions to goose web -> notify_all()
+#   4. update last_run, write schedule.json back
+
+_cron_scheduler_running = False
+_GOOSE_SHARE_DIR = os.path.join(
+    os.environ.get("HOME", "/home/gooseclaw"), ".local", "share", "goose"
+)
+_SCHEDULE_FILE = os.path.join(_GOOSE_SHARE_DIR, "schedule.json")
+_CRON_TICK_SECONDS = 30
+
+
+def _parse_cron_field(field, min_val, max_val):
+    """Parse a single cron field into a set of valid integers."""
+    values = set()
+    for part in field.split(","):
+        part = part.strip()
+        # handle */N (step)
+        if part.startswith("*/"):
+            step = int(part[2:])
+            values.update(range(min_val, max_val + 1, step))
+        elif part == "*":
+            values.update(range(min_val, max_val + 1))
+        elif "-" in part:
+            # range: 1-5
+            lo, hi = part.split("-", 1)
+            values.update(range(int(lo), int(hi) + 1))
+        else:
+            values.add(int(part))
+    return values
+
+
+def _cron_matches_now(cron_expr, now=None):
+    """Check if a 5-field cron expression matches the current time.
+
+    Fields: minute hour day-of-month month day-of-week
+    """
+    if now is None:
+        now = time.localtime()
+    fields = cron_expr.strip().split()
+    if len(fields) == 6:
+        # 6-field: drop seconds field (first position, goose uses this)
+        fields = fields[1:]
+    if len(fields) != 5:
+        return False
+    try:
+        minutes = _parse_cron_field(fields[0], 0, 59)
+        hours = _parse_cron_field(fields[1], 0, 23)
+        days = _parse_cron_field(fields[2], 1, 31)
+        months = _parse_cron_field(fields[3], 1, 12)
+        weekdays = _parse_cron_field(fields[4], 0, 6)
+    except (ValueError, IndexError):
+        return False
+
+    # convert Python weekday (0=Mon) to cron weekday (0=Sun)
+    cron_wday = (now.tm_wday + 1) % 7
+    return (
+        now.tm_min in minutes
+        and now.tm_hour in hours
+        and now.tm_mday in days
+        and now.tm_mon in months
+        and cron_wday in weekdays
+    )
+
+
+def _load_schedule():
+    """Read schedule.json. Returns list of job dicts."""
+    try:
+        if os.path.exists(_SCHEDULE_FILE):
+            with open(_SCHEDULE_FILE) as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                return data
+    except Exception as e:
+        print(f"[cron] warn: could not load schedule.json: {e}")
+    return []
+
+
+def _save_schedule(jobs):
+    """Write schedule.json atomically."""
+    try:
+        os.makedirs(os.path.dirname(_SCHEDULE_FILE), exist_ok=True)
+        tmp = _SCHEDULE_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(jobs, f, indent=2)
+        os.replace(tmp, _SCHEDULE_FILE)
+    except Exception as e:
+        print(f"[cron] warn: could not save schedule.json: {e}")
+
+
+def _load_recipe(source_path):
+    """Read a recipe YAML file and extract the instructions field.
+
+    Uses a minimal parser (no PyYAML dependency) — reads the 'instructions: |'
+    block which is the only field we need.
+    """
+    try:
+        if not os.path.exists(source_path):
+            return None
+        with open(source_path) as f:
+            content = f.read()
+
+        # extract 'instructions: |' block (YAML literal block scalar)
+        # find the line starting with 'instructions:'
+        lines = content.split("\n")
+        capture = False
+        indent = 0
+        instruction_lines = []
+
+        for line in lines:
+            if line.strip().startswith("instructions:"):
+                # check if it's a block scalar (ends with |)
+                rest = line.split("instructions:", 1)[1].strip()
+                if rest == "|":
+                    capture = True
+                    continue
+                elif rest:
+                    # inline value
+                    return rest
+            elif capture:
+                if line.strip() == "" and not instruction_lines:
+                    continue  # skip leading blank
+                # detect indent of first content line
+                if not instruction_lines and line.strip():
+                    indent = len(line) - len(line.lstrip())
+                # block ends when we hit a line with less/equal indent that's not blank
+                if line.strip() and (len(line) - len(line.lstrip())) < indent and instruction_lines:
+                    break
+                # strip the indent prefix
+                if len(line) >= indent:
+                    instruction_lines.append(line[indent:])
+                else:
+                    instruction_lines.append(line.lstrip())
+
+        if instruction_lines:
+            return "\n".join(instruction_lines).strip()
+        return None
+    except Exception as e:
+        print(f"[cron] warn: could not read recipe {source_path}: {e}")
+        return None
+
+
+def _fire_cron_job(job):
+    """Execute a cron job: relay recipe instructions to goose web, deliver output.
+
+    Runs in a fresh isolated session (like OpenClaw's sessionTarget: "isolated").
+    """
+    job_id = job.get("id", "unknown")
+    source = job.get("source", "")
+    print(f"[cron] firing job: {job_id}")
+
+    instructions = _load_recipe(source)
+    if not instructions:
+        print(f"[cron] skip {job_id}: no instructions found in {source}")
+        return
+
+    # create an isolated session ID for this run
+    session_id = f"cron_{job_id}_{time.strftime('%Y%m%d_%H%M%S')}"
+
+    # prefix with job context so the agent knows it's a cron run
+    prompt = (
+        f"[cron: {job_id}]\n\n"
+        f"You are running as a scheduled cron job. "
+        f"Complete the task below and deliver the output using the `notify` command "
+        f"(pipe your output into it: echo \"YOUR_OUTPUT\" | notify). "
+        f"Be concise.\n\n"
+        f"{instructions}"
+    )
+
+    # relay to goose web
+    response_text, error = _do_ws_relay(prompt, session_id)
+
+    if error:
+        print(f"[cron] job {job_id} failed: {error}")
+        # notify about the failure
+        notify_all(f"[cron:{job_id}] failed: {error}")
+        return
+
+    # if the response contains useful output, deliver it
+    # (the recipe may have already called notify via shell, but we deliver
+    # the response too in case it didn't)
+    if response_text and response_text != "(No response from goose)":
+        # check if the agent already called notify (contains "notify" tool output)
+        # if so, the output was already delivered. deliver anyway as fallback
+        # since double-delivery is better than no delivery.
+        formatted = f"[{job_id}]\n\n{response_text}"
+        if len(formatted) > 4000:
+            formatted = formatted[:3997] + "..."
+        notify_all(formatted)
+
+    print(f"[cron] job {job_id} completed")
+
+
+def _cron_scheduler_loop():
+    """Background loop: check schedule.json every 30s, fire due jobs."""
+    global _cron_scheduler_running
+    _cron_scheduler_running = True
+    print(f"[cron] scheduler started ({_CRON_TICK_SECONDS}s tick)")
+
+    while _cron_scheduler_running:
+        try:
+            # wait for goose web to be ready
+            with _startup_state_lock:
+                ready = goose_startup_state["state"] == "ready"
+            if not ready:
+                time.sleep(10)
+                continue
+
+            jobs = _load_schedule()
+            now = time.localtime()
+            save_needed = False
+
+            for job in jobs:
+                if job.get("paused"):
+                    continue
+                if job.get("currently_running"):
+                    continue
+
+                cron_expr = job.get("cron", "")
+                if not cron_expr:
+                    continue
+
+                # check if this job matches the current minute
+                if not _cron_matches_now(cron_expr, now):
+                    continue
+
+                # check last_run to avoid double-firing within the same minute
+                last_run = job.get("last_run", "")
+                if last_run:
+                    try:
+                        if "T" in last_run:
+                            lr_time = last_run.split("T")[1][:5]  # HH:MM
+                            now_time = time.strftime("%H:%M", now)
+                            if lr_time == now_time:
+                                continue
+                    except Exception:
+                        pass
+
+                # fire it in a thread so we don't block other jobs
+                job["currently_running"] = True
+                save_needed = True
+
+                def _run_job(j, all_jobs):
+                    try:
+                        _fire_cron_job(j)
+                    finally:
+                        j["currently_running"] = False
+                        j["last_run"] = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "Z"
+                        j["current_session_id"] = None
+                        _save_schedule(all_jobs)
+
+                threading.Thread(target=_run_job, args=(job, jobs), daemon=True).start()
+
+            if save_needed:
+                _save_schedule(jobs)
+
+        except Exception as e:
+            print(f"[cron] error: {e}")
+
+        # sleep 30s, checking shutdown every 5s
+        for _ in range(6):
+            if not _cron_scheduler_running:
+                break
+            time.sleep(5)
+
+    print("[cron] scheduler stopped")
+
+
+def start_cron_scheduler():
+    """Start the cron scheduler daemon thread."""
+    global _cron_scheduler_running
+    if _cron_scheduler_running:
+        return
+    threading.Thread(target=_cron_scheduler_loop, daemon=True).start()
+
+
+# ── channel plugin system ─────────────────────────────────────────────────────
+#
+# Each channel is a .py file in /data/channels/ with a CHANNEL dict:
+#   CHANNEL = {
+#       "name": "slack",              # REQUIRED
+#       "version": 1,                 # REQUIRED
+#       "send": send_fn,              # REQUIRED: (text) -> {"sent": bool, "error": str}
+#       "poll": poll_fn,              # OPTIONAL: (relay_fn, stop_event, creds) -> None (blocking)
+#       "setup": setup_fn,            # OPTIONAL: (creds) -> {"ok": bool, "error": str}
+#       "teardown": teardown_fn,      # OPTIONAL: () -> None
+#       "credentials": ["TOKEN"],     # OPTIONAL: keys resolved from env then sidecar JSON
+#   }
+#
+# Credentials sidecar: /data/channels/<name>.json -> {"TOKEN": "value"}
+# Files prefixed with _ are skipped (use for templates like _example.py).
+# Hot-reload via POST /api/channels/reload.
+
+def get_paired_user_ids(platform):
+    """Read paired user IDs from config.yaml filtered by platform."""
+    user_ids = []
+    if not os.path.exists(GOOSE_CONFIG_PATH):
+        return user_ids
+    try:
+        with open(GOOSE_CONFIG_PATH) as f:
+            content = f.read()
+        in_pairings = False
+        current_entry = {}
+        for line in content.split("\n"):
+            stripped = line.strip()
+            if line.startswith("gateway_pairings:"):
+                in_pairings = True
+                continue
+            if in_pairings:
+                if line and not line[0].isspace() and not stripped.startswith("-"):
+                    break
+                if stripped.startswith("- platform:"):
+                    if current_entry.get("platform") == platform and current_entry.get("user_id"):
+                        user_ids.append(current_entry["user_id"])
+                    current_entry = {"platform": stripped.split(":", 1)[1].strip()}
+                elif stripped.startswith("user_id:"):
+                    val = stripped.split(":", 1)[1].strip().strip("'\"")
+                    current_entry["user_id"] = val
+        if current_entry.get("platform") == platform and current_entry.get("user_id"):
+            user_ids.append(current_entry["user_id"])
+    except Exception as e:
+        print(f"[channels] warn: could not read pairings for {platform}: {e}")
+    return user_ids
+
+
+def _resolve_channel_creds(name, cred_keys):
+    """Resolve credential keys: check os.environ first, then /data/channels/<name>.json."""
+    creds = {}
+    sidecar = {}
+    sidecar_path = os.path.join(CHANNELS_DIR, f"{name}.json")
+    if os.path.exists(sidecar_path):
+        try:
+            with open(sidecar_path) as f:
+                sidecar = json.load(f)
+        except Exception as e:
+            print(f"[channels] warn: could not read {sidecar_path}: {e}")
+    for key in cred_keys:
+        val = os.environ.get(key, "") or sidecar.get(key, "")
+        creds[key] = val
+    return creds
+
+
+class ChannelRelay:
+    """Relay function wrapper for channel plugins. Manages per-channel sessions."""
+
+    def __init__(self, channel_name):
+        self._name = channel_name
+        self._sessions_file = os.path.join(DATA_DIR, f"channel_sessions_{channel_name}.json")
+        self._sessions = {}
+        self._lock = threading.Lock()
+        # load existing sessions
+        try:
+            if os.path.exists(self._sessions_file):
+                with open(self._sessions_file) as f:
+                    self._sessions.update(json.load(f))
+        except Exception:
+            pass
+
+    def _save(self):
+        try:
+            with self._lock:
+                data = dict(self._sessions)
+            tmp = self._sessions_file + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(data, f, indent=2)
+            os.replace(tmp, self._sessions_file)
+        except Exception as e:
+            print(f"[channels] warn: could not save sessions for {self._name}: {e}")
+
+    def __call__(self, user_id, text):
+        """Relay a message from channel user to goose web. Returns response text."""
+        user_key = str(user_id)
+        with self._lock:
+            session_id = self._sessions.get(user_key)
+
+        if not session_id:
+            session_id = f"{self._name}_{user_key}_{time.strftime('%Y%m%d_%H%M%S')}"
+            with self._lock:
+                self._sessions[user_key] = session_id
+            self._save()
+
+        response_text, error = _do_ws_relay(text, session_id)
+        if error:
+            # try new session on failure
+            session_id = f"{self._name}_{user_key}_{time.strftime('%Y%m%d_%H%M%S')}"
+            with self._lock:
+                self._sessions[user_key] = session_id
+            self._save()
+            response_text, error = _do_ws_relay(text, session_id)
+
+        if error:
+            return f"Error: {error}"
+        return response_text
+
+    def reset_session(self, user_id):
+        """Reset a user's session (for /clear, /newsession commands)."""
+        with self._lock:
+            self._sessions.pop(str(user_id), None)
+        self._save()
+
+
+def _deregister_notification_handler(name):
+    """Remove a handler from the notification bus by name."""
+    with _notification_handlers_lock:
+        _notification_handlers[:] = [h for h in _notification_handlers if h["name"] != name]
+
+
+def _load_channel(filepath):
+    """Load a single channel plugin from a .py file."""
+    basename = os.path.basename(filepath)
+    mod_name = basename[:-3]  # strip .py
+
+    print(f"[channels] loading {basename}...")
+
+    try:
+        spec = importlib.util.spec_from_file_location(f"channel_{mod_name}", filepath)
+        if not spec or not spec.loader:
+            print(f"[channels] skip {basename}: could not create module spec")
+            return False
+
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        channel = getattr(mod, "CHANNEL", None)
+        if not isinstance(channel, dict):
+            print(f"[channels] skip {basename}: no CHANNEL dict found")
+            return False
+
+        name = channel.get("name")
+        if not name or not isinstance(name, str):
+            print(f"[channels] skip {basename}: CHANNEL.name is required")
+            return False
+
+        send_fn = channel.get("send")
+        if not callable(send_fn):
+            print(f"[channels] skip {basename}: CHANNEL.send must be callable")
+            return False
+
+        # resolve credentials
+        cred_keys = channel.get("credentials", [])
+        creds = _resolve_channel_creds(name, cred_keys) if cred_keys else {}
+
+        # check required creds are present
+        missing = [k for k in cred_keys if not creds.get(k)]
+        if missing:
+            print(f"[channels] skip {name}: missing credentials: {', '.join(missing)}")
+            return False
+
+        # call setup() if provided
+        setup_fn = channel.get("setup")
+        if callable(setup_fn):
+            try:
+                result = setup_fn(creds)
+                if isinstance(result, dict) and not result.get("ok", True):
+                    print(f"[channels] skip {name}: setup failed: {result.get('error', '?')}")
+                    return False
+            except Exception as e:
+                print(f"[channels] skip {name}: setup() raised: {e}")
+                return False
+
+        # register notification handler (wraps send_fn)
+        def _make_handler(fn):
+            def handler(text):
+                try:
+                    return fn(text)
+                except Exception as e:
+                    return {"sent": False, "error": str(e)}
+            return handler
+
+        register_notification_handler(f"channel:{name}", _make_handler(send_fn))
+
+        # start poll thread if provided
+        poll_fn = channel.get("poll")
+        stop_event = threading.Event()
+        poll_thread = None
+
+        if callable(poll_fn):
+            relay_fn = ChannelRelay(name)
+
+            def _poll_wrapper(_fn, _relay, _stop, _creds):
+                try:
+                    _fn(_relay, _stop, _creds)
+                except Exception as e:
+                    print(f"[channels] {name} poll() crashed: {e}")
+
+            poll_thread = threading.Thread(
+                target=_poll_wrapper,
+                args=(poll_fn, relay_fn, stop_event, creds),
+                daemon=True,
+            )
+            poll_thread.start()
+
+        with _channels_lock:
+            _loaded_channels[name] = {"module": mod, "channel": channel, "creds": creds}
+            _channel_stop_events[name] = stop_event
+            if poll_thread:
+                _channel_threads[name] = poll_thread
+
+        has_poll = "poll" if callable(poll_fn) else "send-only"
+        print(f"[channels] loaded: {name} v{channel.get('version', '?')} ({has_poll})")
+        return True
+
+    except Exception as e:
+        print(f"[channels] error loading {basename}: {e}")
+        return False
+
+
+def _unload_channel(name):
+    """Unload a channel plugin: teardown, stop poll, deregister."""
+    with _channels_lock:
+        entry = _loaded_channels.pop(name, None)
+        stop_event = _channel_stop_events.pop(name, None)
+        thread = _channel_threads.pop(name, None)
+
+    if not entry:
+        return
+
+    # call teardown() if provided
+    teardown_fn = entry["channel"].get("teardown")
+    if callable(teardown_fn):
+        try:
+            teardown_fn()
+        except Exception as e:
+            print(f"[channels] {name} teardown() error: {e}")
+
+    # stop poll thread
+    if stop_event:
+        stop_event.set()
+    if thread:
+        thread.join(timeout=5)
+
+    # deregister from notification bus
+    _deregister_notification_handler(f"channel:{name}")
+
+    print(f"[channels] unloaded: {name}")
+
+
+def _load_all_channels():
+    """Discover and load all channel plugins from /data/channels/."""
+    os.makedirs(CHANNELS_DIR, exist_ok=True)
+    plugins = sorted(glob.glob(os.path.join(CHANNELS_DIR, "*.py")))
+    loaded = 0
+    for filepath in plugins:
+        basename = os.path.basename(filepath)
+        if basename.startswith("_"):
+            continue
+        try:
+            if _load_channel(filepath):
+                loaded += 1
+        except Exception as e:
+            print(f"[channels] error loading {basename}: {e}")
+    if loaded:
+        print(f"[channels] {loaded} channel(s) loaded")
+    else:
+        print("[channels] no channel plugins found")
+
+
+def _reload_channels():
+    """Unload all channels and reload from disk. Returns list of loaded names."""
+    with _channels_lock:
+        names = list(_loaded_channels.keys())
+    for name in names:
+        _unload_channel(name)
+    _load_all_channels()
+    with _channels_lock:
+        return list(_loaded_channels.keys())
+
+
 # ── session watcher: persistence + API helpers + loop ────────────────────────
 
 def _load_watcher_state():
@@ -1992,6 +2753,9 @@ def start_telegram_gateway(bot_token):
 
     _load_telegram_sessions()
 
+    # register telegram with the notification bus
+    register_notification_handler("telegram", _telegram_notify_handler)
+
     # generate an initial pairing code
     _generate_and_store_pair_code()
 
@@ -2181,6 +2945,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.handle_telegram_status()
         elif path == "/api/reminders":
             self.handle_list_reminders()
+        elif path == "/api/channels":
+            self.handle_list_channels()
         elif not is_configured():
             self.send_response(302)
             self.send_header("Location", "/setup")
@@ -2203,6 +2969,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.handle_auth_recover()
         elif path == "/api/reminders":
             self.handle_create_reminder()
+        elif path == "/api/channels/reload":
+            self.handle_reload_channels()
         else:
             self.proxy_to_goose()
 
@@ -2469,6 +3237,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                 start_goose_web()
                 start_session_watcher()
                 start_reminder_engine()
+                start_cron_scheduler()
             threading.Thread(target=_restart, daemon=True).start()
 
             resp = {"success": True, "message": "saved. agent is restarting..."}
@@ -2719,6 +3488,36 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         else:
             self.send_json(404, {"error": "reminder not found or already fired"})
 
+    # ── channel plugin endpoints ──
+
+    def handle_list_channels(self):
+        """GET /api/channels — list loaded channel plugins (localhost only)."""
+        if not self._check_rate_limit(api_limiter):
+            return
+        if not self._check_local_or_auth():
+            return
+        with _channels_lock:
+            channels = []
+            for name, entry in _loaded_channels.items():
+                ch = entry["channel"]
+                channels.append({
+                    "name": name,
+                    "version": ch.get("version", 0),
+                    "has_poll": callable(ch.get("poll")),
+                    "has_setup": callable(ch.get("setup")),
+                    "credentials": ch.get("credentials", []),
+                })
+        self.send_json(200, {"channels": channels, "count": len(channels)})
+
+    def handle_reload_channels(self):
+        """POST /api/channels/reload — hot-reload all channel plugins (localhost only)."""
+        if not self._check_rate_limit(api_limiter):
+            return
+        if not self._check_local_or_auth():
+            return
+        names = _reload_channels()
+        self.send_json(200, {"reloaded": True, "channels": names, "count": len(names)})
+
     # ── auth recovery endpoint ──
 
     def handle_auth_recover(self):
@@ -2968,6 +3767,12 @@ def main():
         # start reminder engine (lightweight timers, bypasses goose scheduler)
         start_reminder_engine()
 
+        # start cron scheduler (reads goose schedule.json, fires jobs via goose web)
+        start_cron_scheduler()
+
+        # load channel plugins from /data/channels/
+        _load_all_channels()
+
         # start telegram if token is available but apply_config didn't handle it
         # (env-var-only deployments without setup.json)
         tg_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -2989,17 +3794,23 @@ def main():
     threading.Thread(target=_rate_limiter_cleanup, daemon=True).start()
 
     def shutdown(_sig, _frame):
-        global _telegram_running, _reminder_engine_running
+        global _telegram_running, _reminder_engine_running, _cron_scheduler_running
         print("[gateway] shutting down...")
         # stop accepting new connections first
         threading.Thread(target=server.shutdown, daemon=True).start()
+        # unload all channel plugins (stop threads, call teardown)
+        with _channels_lock:
+            channel_names = list(_loaded_channels.keys())
+        for ch_name in channel_names:
+            _unload_channel(ch_name)
         # terminate goose web and clean up PID
         stop_goose_web()
         _remove_pid("goose_web")
-        # stop telegram polling thread, session watcher, and reminder engine
+        # stop telegram polling thread, session watcher, reminder engine, cron scheduler
         _telegram_running = False
         _session_watcher_running = False
         _reminder_engine_running = False
+        _cron_scheduler_running = False
         _remove_pid("telegram")
         print("[gateway] shutdown complete")
 

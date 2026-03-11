@@ -1289,7 +1289,36 @@ def _telegram_poll_loop(bot_token):
                 paired_ids = get_paired_chat_ids()
 
                 if chat_id in paired_ids:
-                    # paired user — relay message to goose web
+                    # ── handle local slash commands before relaying ──
+                    lower = text.lower()
+
+                    if lower == "/help":
+                        help_text = (
+                            "🪿 *GooseClaw Commands*\n\n"
+                            "*Session:*\n"
+                            "/clear — wipe conversation history\n"
+                            "/compact — summarize history to save tokens\n"
+                            "/newsession — start a fresh session (keeps goose history)\n\n"
+                            "*MCP Prompts:*\n"
+                            "/prompts — list available extension prompts\n"
+                            "/prompt <name> — run a prompt\n\n"
+                            "/help — this message"
+                        )
+                        send_telegram_message(bot_token, chat_id, help_text)
+                        continue
+
+                    if lower == "/newsession":
+                        with _telegram_sessions_lock:
+                            old = _telegram_sessions.pop(chat_id, None)
+                        _save_telegram_sessions()
+                        send_telegram_message(
+                            bot_token, chat_id,
+                            "🔄 New session started. Conversation history is fresh."
+                        )
+                        print(f"[telegram] new session forced for chat {chat_id} (old: {old})")
+                        continue
+
+                    # ── relay to goose web ──
                     _send_typing_action(bot_token, chat_id)
                     session_id = _get_session_id(chat_id)
 

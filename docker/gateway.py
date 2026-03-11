@@ -1632,8 +1632,8 @@ def _fire_cron_job(job):
         f"{instructions}"
     )
 
-    # relay to goose web
-    response_text, error = _do_ws_relay(prompt, session_id)
+    # relay to goose web (10 min timeout — cron jobs do heavy tool use)
+    response_text, error = _do_ws_relay(prompt, session_id, timeout=600)
 
     if error:
         print(f"[cron] job {job_id} failed: {error}")
@@ -2296,10 +2296,10 @@ def _create_goose_session():
 
 # ── minimal WebSocket client (stdlib only, no external deps) ────────────────
 
-def _ws_connect(host, port, path, auth_token=None):
+def _ws_connect(host, port, path, auth_token=None, timeout=300):
     """Open a WebSocket connection. Returns the raw socket or raises."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(120)
+    sock.settimeout(timeout)
     sock.connect((host, port))
 
     # generate a random 16-byte key for the handshake
@@ -2461,10 +2461,11 @@ def _relay_to_goose_web(user_text, session_id, chat_id=None):
     return text, err
 
 
-def _do_ws_relay(user_text, session_id):
+def _do_ws_relay(user_text, session_id, timeout=300):
     """Connect to goose web via WebSocket, send a message, collect the response.
 
     Returns (response_text, error_string).
+    timeout: socket timeout in seconds (default 300s = 5 min).
     """
     ws_path = f"/ws?token={urllib.parse.quote(str(_INTERNAL_GOOSE_TOKEN))}"
     t0 = time.time()
@@ -2472,7 +2473,7 @@ def _do_ws_relay(user_text, session_id):
 
     sock = None
     try:
-        sock = _ws_connect("127.0.0.1", GOOSE_WEB_PORT, ws_path, auth_token=_INTERNAL_GOOSE_TOKEN)
+        sock = _ws_connect("127.0.0.1", GOOSE_WEB_PORT, ws_path, auth_token=_INTERNAL_GOOSE_TOKEN, timeout=timeout)
         t_connect = time.time()
         print(f"[relay] ws connected in {t_connect - t0:.1f}s")
 

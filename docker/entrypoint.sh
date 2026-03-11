@@ -443,11 +443,15 @@ mkdir -p "$GCLAW_HOME/.config"
 rm -rf "$GCLAW_HOME/.config/goose"
 ln -sf "$CONFIG_DIR" "$GCLAW_HOME/.config/goose"
 
-# goose data directories
-mkdir -p "$GCLAW_HOME/.local/share/goose/sessions" "$GCLAW_HOME/.local/state/goose/logs"
-mkdir -p "$DATA_DIR/sessions"
-# always symlink so goose writes sessions.db to the persistent volume
-ln -sf "$DATA_DIR/sessions/sessions.db" "$GCLAW_HOME/.local/share/goose/sessions/sessions.db"
+# goose data directories — persist everything to the Railway volume
+mkdir -p "$DATA_DIR/goose_data/sessions" "$DATA_DIR/goose_data/scheduled_recipes"
+mkdir -p "$GCLAW_HOME/.local/state/goose/logs"
+
+# symlink the entire goose share directory to the persistent volume
+# this covers sessions.db, schedule.json, and scheduled_recipes/
+rm -rf "$GCLAW_HOME/.local/share/goose"
+mkdir -p "$GCLAW_HOME/.local/share"
+ln -sf "$DATA_DIR/goose_data" "$GCLAW_HOME/.local/share/goose"
 
 # fix ownership: gooseclaw needs write access to /data and its own home
 chown -R gooseclaw:gooseclaw "$DATA_DIR" "$GCLAW_HOME"

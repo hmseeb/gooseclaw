@@ -709,6 +709,263 @@ body::after {
   .btn-row { flex-wrap: wrap; }
 }
 
+/* ── model cards ── */
+.model-cards-section { margin-bottom: 16px; }
+.model-cards-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.model-cards-header h3 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.model-cards-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.model-card {
+  flex: 1 1 calc(50% - 4px);
+  min-width: 160px;
+  max-width: calc(50% - 4px);
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+  position: relative;
+}
+.model-card:hover {
+  border-color: var(--border-mid);
+  background: var(--bg-card-hover);
+}
+.model-card.active {
+  border-color: var(--border-accent);
+  background: var(--bg-card-selected);
+}
+.model-card-provider {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-bottom: 2px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.model-card-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-family: 'JetBrains Mono', monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.model-card-badges {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+.model-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.model-badge.default {
+  background: rgba(124, 58, 237, 0.15);
+  color: var(--accent-bright);
+}
+.model-badge.channel {
+  background: rgba(52, 211, 153, 0.1);
+  color: var(--success);
+}
+.model-card-actions {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: none;
+}
+.model-card:hover .model-card-actions { display: flex; gap: 4px; }
+.model-card-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 2px;
+  font-size: 14px;
+  line-height: 1;
+  border-radius: 4px;
+  transition: all 0.15s;
+}
+.model-card-btn:hover { color: var(--error); background: var(--error-bg); }
+.model-card-btn.switch-btn:hover { color: var(--accent-bright); background: rgba(124, 58, 237, 0.1); }
+.add-model-btn {
+  flex: 1 1 calc(50% - 4px);
+  min-width: 160px;
+  max-width: calc(50% - 4px);
+  background: transparent;
+  border: 1px dashed var(--border-mid);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--text-tertiary);
+  font-size: 13px;
+  font-family: 'DM Sans', sans-serif;
+}
+.add-model-btn:hover {
+  border-color: var(--accent);
+  color: var(--text-secondary);
+  background: rgba(124, 58, 237, 0.04);
+}
+.add-model-form {
+  display: none;
+  background: var(--bg-card);
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  margin-top: 10px;
+}
+.add-model-form.show { display: block; }
+.add-model-form .field { margin-bottom: 10px; }
+.add-model-form .field label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+.add-model-form .field input,
+.add-model-form .field select {
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13px;
+  outline: none;
+}
+.add-model-form .field input:focus,
+.add-model-form .field select:focus {
+  border-color: var(--border-accent);
+  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.1);
+}
+.add-model-form .field select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%239ca3af' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 28px;
+  cursor: pointer;
+}
+.add-model-form .field select option { background: var(--bg-elevated); }
+.add-model-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+.add-model-form-actions button {
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: 'DM Sans', sans-serif;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.add-model-form-actions .cancel-btn {
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-tertiary);
+}
+.add-model-form-actions .cancel-btn:hover { border-color: var(--border-mid); color: var(--text-secondary); }
+.add-model-form-actions .save-btn {
+  background: var(--accent);
+  border: none;
+  color: white;
+  font-weight: 600;
+}
+.add-model-form-actions .save-btn:hover { background: var(--accent-bright); }
+.add-model-form-actions .save-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.channel-routing { margin-top: 12px; display: none; }
+.channel-routing.show { display: block; }
+.channel-routing-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  padding: 8px 0;
+}
+.channel-routing-header h3 {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.channel-routing-toggle {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  transition: transform 0.2s;
+}
+.channel-routing.expanded .channel-routing-toggle { transform: rotate(180deg); }
+.channel-routing-body { display: none; padding-top: 4px; }
+.channel-routing.expanded .channel-routing-body { display: block; }
+.channel-route-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-subtle);
+  gap: 12px;
+}
+.channel-route-row:last-child { border-bottom: none; }
+.channel-route-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.channel-route-select select {
+  padding: 5px 28px 5px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 12px;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%239ca3af' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  cursor: pointer;
+  max-width: 200px;
+}
+.channel-route-select select option { background: var(--bg-elevated); }
+.channel-route-select select:focus {
+  border-color: var(--border-accent);
+  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.1);
+}
+
 /* ── settings dashboard ── */
 .dashboard-field {
   display: flex;
@@ -1226,32 +1483,42 @@ body::after {
       <a class="update-link" href="https://github.com/hmseeb/gooseclaw/releases" target="_blank" rel="noopener">View release →</a>
     </div>
     <div class="dashboard-success" id="dashboardSuccess">Changes saved. Agent is restarting...</div>
+    <!-- model cards section -->
+    <div class="model-cards-section">
+      <div class="model-cards-header">
+        <h3>Models</h3>
+      </div>
+      <div class="model-cards-grid" id="modelCardsGrid"></div>
+      <div class="add-model-form" id="addModelForm">
+        <div class="field">
+          <label>Provider</label>
+          <select id="addModelProvider" onchange="onAddModelProviderChange()"></select>
+        </div>
+        <div class="field" id="addModelKeyField">
+          <label>API Key</label>
+          <input type="password" id="addModelKey" placeholder="enter API key">
+          <div style="font-size:11px;color:var(--text-tertiary);margin-top:3px" id="addModelKeyHint"></div>
+        </div>
+        <div class="field">
+          <label>Model</label>
+          <input type="text" id="addModelName" list="addModelSuggestions" placeholder="loading models...">
+          <datalist id="addModelSuggestions"></datalist>
+        </div>
+        <div class="add-model-form-actions">
+          <button class="cancel-btn" onclick="closeAddModelForm()">Cancel</button>
+          <button class="save-btn" id="addModelSaveBtn" onclick="submitAddModel()">Add</button>
+        </div>
+      </div>
+      <div class="channel-routing" id="channelRouting">
+        <div class="channel-routing-header" onclick="toggleChannelRouting()">
+          <h3>Channel Routing</h3>
+          <span class="channel-routing-toggle">&#9660;</span>
+        </div>
+        <div class="channel-routing-body" id="channelRoutingBody"></div>
+      </div>
+    </div>
+
     <div class="summary-container">
-      <div class="dashboard-field" id="df-provider">
-        <span class="dashboard-field-label">Provider</span>
-        <span class="dashboard-field-value" id="dfv-provider"></span>
-        <div class="dashboard-field-edit" id="dfe-provider">
-          <select id="dfi-provider" onchange="onDashboardProviderChange(this.value)"></select>
-        </div>
-        <button class="dashboard-edit-btn" onclick="startDashboardEdit('provider')">edit</button>
-      </div>
-      <div class="dashboard-field" id="df-cred">
-        <span class="dashboard-field-label">Credentials</span>
-        <span class="dashboard-field-value" id="dfv-cred"></span>
-        <div class="dashboard-field-edit" id="dfe-cred">
-          <input type="password" id="dfi-cred" placeholder="enter new key (leave blank to keep current)">
-        </div>
-        <button class="dashboard-edit-btn" onclick="startDashboardEdit('cred')">edit</button>
-      </div>
-      <div class="dashboard-field" id="df-model">
-        <span class="dashboard-field-label">Model</span>
-        <span class="dashboard-field-value" id="dfv-model"></span>
-        <div class="dashboard-field-edit" id="dfe-model">
-          <input type="text" id="dfi-model" list="dbModelSuggestions" placeholder="model name">
-          <datalist id="dbModelSuggestions"></datalist>
-        </div>
-        <button class="dashboard-edit-btn" onclick="startDashboardEdit('model')">edit</button>
-      </div>
       <div class="dashboard-field" id="df-timezone">
         <span class="dashboard-field-label">Timezone</span>
         <span class="dashboard-field-value" id="dfv-timezone"></span>
@@ -1275,33 +1542,6 @@ body::after {
           <input type="text" id="dfi-authtoken" placeholder="leave blank to keep current">
         </div>
         <button class="dashboard-edit-btn" onclick="startDashboardEdit('authtoken')">edit</button>
-      </div>
-      <div class="dashboard-field" id="df-lead-provider" style="display:none">
-        <span class="dashboard-field-label">Lead Provider</span>
-        <span class="dashboard-field-value" id="dfv-lead-provider"></span>
-        <div class="dashboard-field-edit" id="dfe-lead-provider">
-          <select id="dfi-lead-provider" onchange="onDashboardLeadProviderChange(this.value)">
-            <option value="">Same as main provider</option>
-          </select>
-        </div>
-        <button class="dashboard-edit-btn" onclick="startDashboardEdit('lead-provider')">edit</button>
-      </div>
-      <div class="dashboard-field" id="df-lead-model" style="display:none">
-        <span class="dashboard-field-label">Lead Model</span>
-        <span class="dashboard-field-value" id="dfv-lead-model"></span>
-        <div class="dashboard-field-edit" id="dfe-lead-model">
-          <input type="text" id="dfi-lead-model" list="dbLeadModelSuggestions" placeholder="lead model name">
-          <datalist id="dbLeadModelSuggestions"></datalist>
-        </div>
-        <button class="dashboard-edit-btn" onclick="startDashboardEdit('lead-model')">edit</button>
-      </div>
-      <div class="dashboard-field" id="df-lead-turn-count" style="display:none">
-        <span class="dashboard-field-label">Lead Turns</span>
-        <span class="dashboard-field-value" id="dfv-lead-turn-count"></span>
-        <div class="dashboard-field-edit" id="dfe-lead-turn-count">
-          <input type="number" id="dfi-lead-turn-count" min="1" max="50" placeholder="3">
-        </div>
-        <button class="dashboard-edit-btn" onclick="startDashboardEdit('lead-turn-count')">edit</button>
       </div>
     </div>
     <div id="pair-card-container" style="display:none"></div>
@@ -2060,6 +2300,60 @@ function buildModelStep() {
     </div>`;
   }
   notesEl.innerHTML = noteHtml;
+
+  /* fetch dynamic models from provider API */
+  fetchDynamicModels();
+}
+
+/* ── fetch dynamic models from provider ── */
+async function fetchDynamicModels() {
+  const provider = PROVIDERS[selectedProvider];
+  if (!provider) return;
+
+  /* build credential payload matching validateKey() */
+  const creds = {};
+  if (selectedProvider === 'claude-code') {
+    creds.claude_setup_token = document.getElementById('claudeToken')?.value;
+  } else if (selectedProvider === 'custom') {
+    creds.url = document.getElementById('customUrl')?.value;
+    creds.api_key = document.getElementById('customKey')?.value;
+  } else if (['ollama', 'ramalama', 'lm-studio', 'docker-model-runner'].includes(selectedProvider)) {
+    creds.ollama_host = document.getElementById('ollamaHost')?.value;
+  } else if (selectedProvider === 'azure-openai') {
+    creds.api_key = document.getElementById('azureKey')?.value;
+    creds.azure_endpoint = document.getElementById('azureEndpoint')?.value;
+  } else if (selectedProvider === 'litellm') {
+    creds.api_key = document.getElementById('litellmKey')?.value;
+    creds.litellm_host = document.getElementById('litellmHost')?.value;
+  } else if (selectedProvider === 'github-copilot') {
+    return; /* no model selection needed */
+  } else {
+    creds.api_key = document.getElementById('apiKey')?.value;
+  }
+
+  const hintEl = document.getElementById('modelHint');
+  try {
+    const res = await fetch('/api/setup/models', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({provider: selectedProvider, credentials: creds})
+    });
+    const data = await res.json();
+    if (data.models && data.models.length > 0) {
+      const dl = document.getElementById('modelSuggestions');
+      dl.innerHTML = '';
+      data.models.forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m.id;
+        opt.label = m.name !== m.id ? m.name + ' (' + m.id + ')' : m.id;
+        dl.appendChild(opt);
+      });
+      hintEl.innerHTML = data.models.length + ' models available. type to filter or enter a custom model ID.';
+    }
+    /* if fallback or error, keep the hardcoded list already populated */
+  } catch(e) {
+    /* silently keep hardcoded list */
+  }
 }
 
 /* ── build confirmation summary ── */
@@ -2400,25 +2694,6 @@ function onLeadProviderChange() {
   }
 }
 
-function onDashboardLeadProviderChange(val) {
-  const datalist = document.getElementById('dbLeadModelSuggestions');
-  const modelInput = document.getElementById('dfi-lead-model');
-  if (datalist) {
-    datalist.innerHTML = '';
-    if (val) {
-      const provider = PROVIDERS[val];
-      if (provider && provider.models) {
-        provider.models.forEach(m => {
-          const opt = document.createElement('option');
-          opt.value = m;
-          datalist.appendChild(opt);
-        });
-      }
-      if (modelInput && provider && provider.defaultModel) modelInput.value = provider.defaultModel;
-    }
-  }
-}
-
 /* ── telegram token format validation on blur ── */
 function validateTelegramFormat(input) {
   const errEl = document.getElementById('telegramFormatError');
@@ -2473,24 +2748,11 @@ function showDashboard(config) {
   document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
   document.getElementById('step-dashboard').classList.add('active');
 
-  /* populate provider dropdown */
-  const providerSel = document.getElementById('dfi-provider');
-  providerSel.innerHTML = '';
-  const categoryOrder = ['cloud', 'subscription', 'local', 'enterprise', 'custom'];
-  categoryOrder.forEach(cat => {
-    const providers = Object.entries(PROVIDERS).filter(([, p]) => p.category === cat);
-    if (!providers.length) return;
-    const group = document.createElement('optgroup');
-    group.label = CATEGORIES[cat].label;
-    providers.forEach(([id, p]) => {
-      const opt = document.createElement('option');
-      opt.value = id;
-      opt.textContent = p.name;
-      if (id === config.provider_type) opt.selected = true;
-      group.appendChild(opt);
-    });
-    providerSel.appendChild(group);
-  });
+  /* render model cards */
+  renderModelCards(config);
+
+  /* populate add-model provider dropdown */
+  populateAddModelProviders();
 
   /* populate timezone dropdown for dashboard */
   const tzSel = document.getElementById('dfi-timezone');
@@ -2514,24 +2776,6 @@ function showDashboard(config) {
   } catch(e) {
     commonTZdb.forEach(tz => { const o = document.createElement('option'); o.value = tz; o.textContent = tz; if (tz === (config.timezone || 'UTC')) o.selected = true; tzSel.appendChild(o); });
   }
-
-  /* populate model datalist for dashboard */
-  const pt = config.provider_type;
-  const provider = PROVIDERS[pt];
-  const dbDatalist = document.getElementById('dbModelSuggestions');
-  dbDatalist.innerHTML = '';
-  if (provider && provider.models) {
-    provider.models.forEach(m => {
-      const opt = document.createElement('option');
-      opt.value = m;
-      dbDatalist.appendChild(opt);
-    });
-  }
-  const modelInput = document.getElementById('dfi-model');
-  if (modelInput) modelInput.value = config.model || (provider && provider.defaultModel) || '';
-
-  /* set credential field label and placeholder based on provider type */
-  updateDashboardCredField(pt);
 
   /* render current values */
   renderDashboardValues(config);
@@ -2561,45 +2805,6 @@ async function checkForUpdates() {
 }
 
 function renderDashboardValues(config) {
-  const pt = config.provider_type;
-  const provider = PROVIDERS[pt];
-
-  /* provider */
-  const pfv = document.getElementById('dfv-provider');
-  if (pfv) pfv.textContent = provider ? `${provider.icon} ${provider.name}` : pt;
-
-  /* credentials */
-  const cfv = document.getElementById('dfv-cred');
-  if (cfv) {
-    if (pt === 'github-copilot') {
-      cfv.textContent = 'Device flow (no key)';
-      cfv.className = 'dashboard-field-value muted';
-      /* hide cred edit for github-copilot */
-      const editBtn = document.querySelector('#df-cred .dashboard-edit-btn');
-      if (editBtn) editBtn.style.display = 'none';
-    } else if (pt === 'claude-code') {
-      const tok = config.claude_setup_token;
-      cfv.textContent = tok ? tok : 'Not set';
-      cfv.className = 'dashboard-field-value' + (tok ? '' : ' muted');
-    } else if (pt === 'azure-openai') {
-      const k = config.azure_key;
-      cfv.textContent = k ? k : 'Not set';
-      cfv.className = 'dashboard-field-value' + (k ? '' : ' muted');
-    } else if (pt === 'custom') {
-      const u = config.custom_url;
-      cfv.textContent = u ? u : 'Not set';
-      cfv.className = 'dashboard-field-value' + (u ? '' : ' muted');
-    } else {
-      const k = config.api_key;
-      cfv.textContent = k ? k : 'Not set';
-      cfv.className = 'dashboard-field-value' + (k ? '' : ' muted');
-    }
-  }
-
-  /* model */
-  const mfv = document.getElementById('dfv-model');
-  if (mfv) mfv.textContent = config.model || (provider && provider.defaultModel) || 'default';
-
   /* timezone */
   const tfv = document.getElementById('dfv-timezone');
   if (tfv) tfv.textContent = config.timezone || 'UTC';
@@ -2625,116 +2830,6 @@ function renderDashboardValues(config) {
     afv.className = 'dashboard-field-value' + (at ? '' : ' muted');
   }
 
-  /* lead/worker multi-model settings */
-  const lp = config.lead_provider || '';
-  const lpField = document.getElementById('df-lead-provider');
-  const lmField = document.getElementById('df-lead-model');
-  const ltcField = document.getElementById('df-lead-turn-count');
-  if (lp) {
-    const lpProvider = PROVIDERS[lp];
-    /* show the dashboard fields */
-    if (lpField) lpField.style.display = '';
-    if (lmField) lmField.style.display = '';
-    if (ltcField) ltcField.style.display = '';
-    /* set values */
-    const lpfv = document.getElementById('dfv-lead-provider');
-    if (lpfv) lpfv.textContent = lpProvider ? `${lpProvider.icon} ${lpProvider.name}` : lp;
-    const lmfv = document.getElementById('dfv-lead-model');
-    if (lmfv) lmfv.textContent = config.lead_model || (lpProvider && lpProvider.defaultModel) || 'default';
-    const ltcfv = document.getElementById('dfv-lead-turn-count');
-    if (ltcfv) ltcfv.textContent = config.lead_turn_count || '3';
-    /* populate dashboard lead provider select */
-    const lpSel = document.getElementById('dfi-lead-provider');
-    if (lpSel) {
-      lpSel.innerHTML = '<option value="">Same as main provider</option>';
-      const categoryOrder = ['cloud', 'subscription', 'local', 'enterprise'];
-      categoryOrder.forEach(cat => {
-        Object.entries(PROVIDERS).forEach(([id, p]) => {
-          if (p.category !== cat || p.category === 'custom') return;
-          const opt = document.createElement('option');
-          opt.value = id;
-          opt.textContent = p.name;
-          if (id === lp) opt.selected = true;
-          lpSel.appendChild(opt);
-        });
-      });
-    }
-    /* populate lead model datalist */
-    const dbLeadDatalist = document.getElementById('dbLeadModelSuggestions');
-    if (dbLeadDatalist && lpProvider && lpProvider.models) {
-      dbLeadDatalist.innerHTML = '';
-      lpProvider.models.forEach(m => {
-        const opt = document.createElement('option');
-        opt.value = m;
-        dbLeadDatalist.appendChild(opt);
-      });
-    }
-    const lmInput = document.getElementById('dfi-lead-model');
-    if (lmInput) lmInput.value = config.lead_model || '';
-    const ltcInput = document.getElementById('dfi-lead-turn-count');
-    if (ltcInput) ltcInput.value = config.lead_turn_count || '';
-  } else {
-    /* hide lead fields when not configured */
-    if (lpField) lpField.style.display = 'none';
-    if (lmField) lmField.style.display = 'none';
-    if (ltcField) ltcField.style.display = 'none';
-  }
-}
-
-function updateDashboardCredField(pt) {
-  const credInput = document.getElementById('dfi-cred');
-  if (!credInput) return;
-  if (pt === 'claude-code') {
-    credInput.placeholder = 'new Claude setup token (sk-ant-oat01-...)';
-    credInput.type = 'password';
-  } else if (pt === 'azure-openai') {
-    credInput.placeholder = 'new Azure API key (leave blank to keep current)';
-    credInput.type = 'password';
-  } else if (pt === 'custom') {
-    credInput.placeholder = 'new endpoint URL (leave blank to keep current)';
-    credInput.type = 'text';
-  } else if (pt === 'ollama' || pt === 'ramalama' || pt === 'lm-studio' || pt === 'docker-model-runner') {
-    credInput.placeholder = 'host URL (e.g. http://host.docker.internal:11434)';
-    credInput.type = 'text';
-  } else if (pt === 'github-copilot') {
-    credInput.placeholder = 'no credentials needed';
-    credInput.disabled = true;
-  } else {
-    const provider = PROVIDERS[pt];
-    credInput.placeholder = `new API key${provider && provider.keyPlaceholder ? ' (' + provider.keyPlaceholder + ')' : ''} — leave blank to keep current`;
-    credInput.type = 'password';
-    credInput.disabled = false;
-  }
-  /* show "already set" placeholder when a key is known to be saved.
-     savedKeysSet[pt] is the canonical boolean indicator from the server (no
-     partial key leakage). Fall back to checking savedKeys[pt] for string
-     presence (backwards-compatible with older API responses). */
-  const saved = savedKeys[pt];
-  const isSet = savedKeysSet[pt] === true || (saved && typeof saved === 'string');
-  if (isSet) {
-    credInput.value = '';  /* never pre-fill masked value */
-    /* override placeholder text to communicate that a key is already stored */
-    if (!credInput.disabled) {
-      credInput.placeholder = 'key already set — leave blank to keep current';
-    }
-  }
-}
-
-function onDashboardProviderChange(newPt) {
-  updateDashboardCredField(newPt);
-  /* update model datalist */
-  const provider = PROVIDERS[newPt];
-  const dbDatalist = document.getElementById('dbModelSuggestions');
-  dbDatalist.innerHTML = '';
-  if (provider && provider.models) {
-    provider.models.forEach(m => {
-      const opt = document.createElement('option');
-      opt.value = m;
-      dbDatalist.appendChild(opt);
-    });
-  }
-  const modelInput = document.getElementById('dfi-model');
-  if (modelInput && provider) modelInput.value = provider.defaultModel || '';
 }
 
 function startDashboardEdit(field) {
@@ -2748,45 +2843,6 @@ async function saveDashboardChanges() {
 
   /* collect all current config, overriding with edited values */
   const config = { ...dashboardConfig };
-
-  /* provider */
-  const providerField = document.getElementById('df-provider');
-  const newPt = document.getElementById('dfi-provider')?.value;
-  if (providerField && providerField.classList.contains('editing') && newPt) {
-    config.provider_type = newPt;
-  }
-
-  /* credentials */
-  const credField = document.getElementById('df-cred');
-  const newCred = document.getElementById('dfi-cred')?.value?.trim();
-  const pt = config.provider_type;
-  if (credField && credField.classList.contains('editing') && newCred) {
-    if (pt === 'claude-code') {
-      config.claude_setup_token = newCred;
-      savedKeys[pt] = newCred;
-    } else if (pt === 'ollama' || pt === 'ramalama' || pt === 'lm-studio' || pt === 'docker-model-runner') {
-      config.ollama_host = newCred;
-      savedKeys[pt] = newCred;
-    } else if (pt === 'azure-openai') {
-      config.azure_key = newCred;
-      if (!savedKeys[pt]) savedKeys[pt] = {};
-      savedKeys[pt].key = newCred;
-    } else if (pt === 'custom') {
-      config.custom_url = newCred;
-      if (!savedKeys[pt]) savedKeys[pt] = {};
-      savedKeys[pt].url = newCred;
-    } else {
-      config.api_key = newCred;
-      savedKeys[pt] = newCred;
-    }
-  }
-
-  /* model */
-  const modelField = document.getElementById('df-model');
-  const newModel = document.getElementById('dfi-model')?.value?.trim();
-  if (modelField && modelField.classList.contains('editing') && newModel) {
-    config.model = newModel;
-  }
 
   /* timezone */
   const tzField = document.getElementById('df-timezone');
@@ -2807,30 +2863,6 @@ async function saveDashboardChanges() {
   const newAt = document.getElementById('dfi-authtoken')?.value?.trim();
   if (atField && atField.classList.contains('editing') && newAt) {
     config.web_auth_token = newAt;
-  }
-
-  /* lead provider */
-  const lpField = document.getElementById('df-lead-provider');
-  if (lpField && lpField.classList.contains('editing')) {
-    const newLp = document.getElementById('dfi-lead-provider')?.value || '';
-    config.lead_provider = newLp;
-    if (!newLp) {
-      config.lead_model = '';
-      config.lead_turn_count = '';
-    }
-  }
-
-  /* lead model */
-  const lmField = document.getElementById('df-lead-model');
-  if (lmField && lmField.classList.contains('editing')) {
-    config.lead_model = document.getElementById('dfi-lead-model')?.value?.trim() || '';
-  }
-
-  /* lead turn count */
-  const ltcField = document.getElementById('df-lead-turn-count');
-  if (ltcField && ltcField.classList.contains('editing')) {
-    const ltcVal = document.getElementById('dfi-lead-turn-count')?.value?.trim() || '';
-    config.lead_turn_count = ltcVal ? parseInt(ltcVal, 10) : '';
   }
 
   /* persist saved keys */
@@ -2859,6 +2891,308 @@ async function saveDashboardChanges() {
     }
   } catch(e) {
     alert('Could not save configuration');
+  }
+}
+
+/* ── model cards ── */
+function renderModelCards(config) {
+  const grid = document.getElementById('modelCardsGrid');
+  if (!grid) return;
+
+  const models = config.models || [];
+  const routes = config.channel_routes || {};
+  const hasTelegram = !!(config.telegram_bot_token_set || config.telegram_bot_token);
+
+  /* build reverse route map: model_id -> [channel names] */
+  const routeMap = {};
+  for (const [ch, mid] of Object.entries(routes)) {
+    if (!routeMap[mid]) routeMap[mid] = [];
+    routeMap[mid].push(ch);
+  }
+
+  let html = '';
+  models.forEach(m => {
+    const prov = PROVIDERS[m.provider];
+    const icon = prov ? prov.icon : '';
+    const provName = prov ? prov.name : m.provider;
+    const isDefault = m.is_default;
+    const channels = routeMap[m.id] || [];
+
+    html += `<div class="model-card${isDefault ? ' active' : ''}" onclick="activateModel('${m.id}')" title="Click to set as default">
+      <div class="model-card-actions">
+        ${!isDefault ? `<button class="model-card-btn" onclick="event.stopPropagation();removeModel('${m.id}')" title="Remove">&#x2715;</button>` : ''}
+      </div>
+      <div class="model-card-provider">${icon} ${provName}</div>
+      <div class="model-card-name">${m.model}</div>
+      <div class="model-card-badges">
+        ${isDefault ? '<span class="model-badge default">default</span>' : ''}
+        ${channels.map(ch => `<span class="model-badge channel">${ch}</span>`).join('')}
+      </div>
+    </div>`;
+  });
+
+  html += `<button class="add-model-btn" onclick="openAddModelForm()">+ Add Model</button>`;
+  grid.innerHTML = html;
+
+  /* show channel routing section if 2+ models */
+  const routingEl = document.getElementById('channelRouting');
+  if (routingEl) {
+    if (models.length >= 2) {
+      routingEl.classList.add('show');
+      renderChannelRouting(config, hasTelegram);
+    } else {
+      routingEl.classList.remove('show');
+    }
+  }
+}
+
+async function activateModel(modelId) {
+  const models = dashboardConfig.models || [];
+  const current = models.find(m => m.is_default);
+  if (current && current.id === modelId) return;
+
+  try {
+    const resp = await fetch('/api/setup/models/activate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({id: modelId})
+    });
+    const data = await resp.json();
+    if (data.success) {
+      /* update local state */
+      models.forEach(m => m.is_default = (m.id === modelId));
+      renderModelCards(dashboardConfig);
+      const successEl = document.getElementById('dashboardSuccess');
+      if (successEl) { successEl.classList.add('show'); }
+      pollDashboardRestart();
+    } else {
+      alert(data.error || 'Failed to activate model');
+    }
+  } catch(e) {
+    alert('Could not reach server');
+  }
+}
+
+async function removeModel(modelId) {
+  if (!confirm('Remove this model?')) return;
+  try {
+    const resp = await fetch('/api/setup/models/remove', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({id: modelId})
+    });
+    const data = await resp.json();
+    if (data.success) {
+      dashboardConfig.models = data.models;
+      renderModelCards(dashboardConfig);
+      const successEl = document.getElementById('dashboardSuccess');
+      if (successEl) { successEl.classList.add('show'); }
+      pollDashboardRestart();
+    } else {
+      alert(data.error || 'Failed to remove model');
+    }
+  } catch(e) {
+    alert('Could not reach server');
+  }
+}
+
+/* ── add model form ── */
+function populateAddModelProviders() {
+  const sel = document.getElementById('addModelProvider');
+  if (!sel) return;
+  sel.innerHTML = '';
+  const categoryOrder = ['cloud', 'subscription', 'local', 'enterprise', 'custom'];
+  categoryOrder.forEach(cat => {
+    const providers = Object.entries(PROVIDERS).filter(([, p]) => p.category === cat);
+    if (!providers.length) return;
+    const group = document.createElement('optgroup');
+    group.label = CATEGORIES[cat].label;
+    providers.forEach(([id, p]) => {
+      const opt = document.createElement('option');
+      opt.value = id;
+      opt.textContent = `${p.icon} ${p.name}`;
+      group.appendChild(opt);
+    });
+    sel.appendChild(group);
+  });
+}
+
+function openAddModelForm() {
+  document.getElementById('addModelForm').classList.add('show');
+  onAddModelProviderChange();
+}
+
+function closeAddModelForm() {
+  document.getElementById('addModelForm').classList.remove('show');
+  document.getElementById('addModelKey').value = '';
+  document.getElementById('addModelName').value = '';
+}
+
+async function onAddModelProviderChange() {
+  const provId = document.getElementById('addModelProvider').value;
+  const prov = PROVIDERS[provId];
+  const keyField = document.getElementById('addModelKeyField');
+  const keyInput = document.getElementById('addModelKey');
+  const hintEl = document.getElementById('addModelKeyHint');
+  const nameInput = document.getElementById('addModelName');
+  const dl = document.getElementById('addModelSuggestions');
+
+  /* show/hide key field based on provider type */
+  const localProviders = ['ollama', 'lm-studio', 'docker-model-runner', 'ramalama'];
+  const noKeyProviders = ['github-copilot'];
+  if (localProviders.includes(provId) || noKeyProviders.includes(provId)) {
+    keyField.style.display = 'none';
+  } else {
+    keyField.style.display = '';
+    keyInput.placeholder = prov ? (prov.keyPlaceholder || 'enter API key') : 'enter API key';
+  }
+
+  /* auto-fill key from saved_keys */
+  const hasKey = savedKeysSet[provId];
+  if (hasKey) {
+    keyInput.value = '';
+    hintEl.textContent = 'Key already saved for this provider. leave blank to reuse.';
+  } else {
+    keyInput.value = '';
+    hintEl.textContent = prov && prov.keyUrl ? `Get key at ${prov.keyUrl}` : '';
+  }
+
+  /* pre-fill default model */
+  nameInput.value = prov ? (prov.defaultModel || '') : '';
+
+  /* populate static model suggestions */
+  dl.innerHTML = '';
+  if (prov && prov.models) {
+    prov.models.forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m;
+      dl.appendChild(opt);
+    });
+  }
+
+  /* fetch dynamic models */
+  const creds = {};
+  if (!localProviders.includes(provId) && !noKeyProviders.includes(provId)) {
+    creds.api_key = keyInput.value || undefined;
+  }
+  if (localProviders.includes(provId)) {
+    creds.ollama_host = '';
+  }
+  try {
+    nameInput.placeholder = 'loading models...';
+    const res = await fetch('/api/setup/models', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({provider: provId, credentials: creds})
+    });
+    const data = await res.json();
+    if (data.models && data.models.length > 0) {
+      dl.innerHTML = '';
+      data.models.forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m.id;
+        opt.label = m.name !== m.id ? m.name : m.id;
+        dl.appendChild(opt);
+      });
+      nameInput.placeholder = `${data.models.length} models available`;
+    } else {
+      nameInput.placeholder = prov ? (prov.defaultModel || 'model name') : 'model name';
+    }
+  } catch(e) {
+    nameInput.placeholder = prov ? (prov.defaultModel || 'model name') : 'model name';
+  }
+}
+
+async function submitAddModel() {
+  const provId = document.getElementById('addModelProvider').value;
+  const key = document.getElementById('addModelKey').value.trim();
+  const model = document.getElementById('addModelName').value.trim();
+  if (!model) { alert('Model name is required'); return; }
+
+  const btn = document.getElementById('addModelSaveBtn');
+  btn.disabled = true;
+  btn.textContent = 'Adding...';
+
+  try {
+    const payload = {provider: provId, model: model};
+    if (key) payload.api_key = key;
+    const resp = await fetch('/api/setup/models/add', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const data = await resp.json();
+    if (data.success) {
+      dashboardConfig.models = dashboardConfig.models || [];
+      dashboardConfig.models.push(data.model);
+      closeAddModelForm();
+      renderModelCards(dashboardConfig);
+      const successEl = document.getElementById('dashboardSuccess');
+      if (successEl) { successEl.classList.add('show'); }
+      pollDashboardRestart();
+    } else {
+      alert(data.error || 'Failed to add model');
+    }
+  } catch(e) {
+    alert('Could not reach server');
+  }
+  btn.disabled = false;
+  btn.textContent = 'Add';
+}
+
+/* ── channel routing ── */
+function toggleChannelRouting() {
+  document.getElementById('channelRouting').classList.toggle('expanded');
+}
+
+function renderChannelRouting(config, hasTelegram) {
+  const body = document.getElementById('channelRoutingBody');
+  if (!body) return;
+  const models = config.models || [];
+  const routes = config.channel_routes || {};
+
+  const channels = [{id: 'web', label: 'Web', icon: '\uD83D\uDCAC'}];
+  if (hasTelegram) channels.push({id: 'telegram', label: 'Telegram', icon: '\u2708\uFE0F'});
+
+  let html = '';
+  channels.forEach(ch => {
+    const currentRoute = routes[ch.id] || '';
+    const defaultModel = models.find(m => m.is_default);
+    const defaultLabel = defaultModel ? `default (${defaultModel.model})` : 'default';
+
+    html += `<div class="channel-route-row">
+      <span class="channel-route-label">${ch.icon} ${ch.label}</span>
+      <span class="channel-route-select">
+        <select onchange="updateChannelRoute('${ch.id}', this.value)">
+          <option value=""${!currentRoute ? ' selected' : ''}>${defaultLabel}</option>
+          ${models.map(m => `<option value="${m.id}"${currentRoute === m.id ? ' selected' : ''}>${(PROVIDERS[m.provider]?.icon || '') + ' ' + m.model}</option>`).join('')}
+        </select>
+      </span>
+    </div>`;
+  });
+  body.innerHTML = html;
+}
+
+async function updateChannelRoute(channel, modelId) {
+  const routes = dashboardConfig.channel_routes || {};
+  if (modelId) {
+    routes[channel] = modelId;
+  } else {
+    delete routes[channel];
+  }
+  try {
+    const resp = await fetch('/api/setup/models/route', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({channel_routes: routes})
+    });
+    const data = await resp.json();
+    if (data.success) {
+      dashboardConfig.channel_routes = data.channel_routes;
+      renderModelCards(dashboardConfig);
+    }
+  } catch(e) {
+    alert('Could not save routing');
   }
 }
 

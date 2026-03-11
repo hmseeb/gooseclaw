@@ -132,6 +132,12 @@ _telegram_sessions_file = os.path.join(DATA_DIR, "telegram_sessions.json")
 _telegram_sessions = {}  # chat_id (str) -> session_id (str)
 _telegram_sessions_lock = threading.Lock()
 
+# ── per-channel model routing state ────────────────────────────────────────
+# Tracks which model was last set on each goose session so we avoid
+# redundant update_provider calls.
+_session_model_cache = {}   # session_id (str) -> model_config_id (str)
+_session_model_lock = threading.Lock()
+
 # ── notification bus (channel-agnostic delivery) ─────────────────────────────
 #
 # Any channel (telegram, slack, whatsapp, etc.) registers a handler via
@@ -686,7 +692,101 @@ def validate_setup_config(config):
         except (ValueError, TypeError):
             errors.append("lead_turn_count must be an integer")
 
+    # models array validation
+    models = config.get("models")
+    if models is not None:
+        if not isinstance(models, list):
+            errors.append("models must be an array")
+        else:
+            seen_ids = set()
+            default_count = 0
+            for i, m in enumerate(models):
+                if not isinstance(m, dict):
+                    errors.append(f"models[{i}] must be an object")
+                    continue
+                mid = m.get("id", "")
+                if not mid:
+                    errors.append(f"models[{i}] missing id")
+                elif mid in seen_ids:
+                    errors.append(f"duplicate model id: {mid}")
+                else:
+                    seen_ids.add(mid)
+                if not m.get("provider"):
+                    errors.append(f"models[{i}] missing provider")
+                if not m.get("model"):
+                    errors.append(f"models[{i}] missing model")
+                if m.get("is_default"):
+                    default_count += 1
+            if models and default_count == 0:
+                errors.append("models array must have exactly one default")
+            if default_count > 1:
+                errors.append("only one model can be default")
+
+    # channel_routes validation
+    channel_routes = config.get("channel_routes")
+    if channel_routes is not None:
+        if not isinstance(channel_routes, dict):
+            errors.append("channel_routes must be an object")
+        else:
+            valid_channels = ("web", "telegram")
+            model_ids = {m.get("id") for m in (models or []) if isinstance(m, dict)}
+            for ch, mid in channel_routes.items():
+                if ch not in valid_channels:
+                    errors.append(f"unknown channel in channel_routes: {ch!r}")
+                if mid and mid not in model_ids:
+                    errors.append(f"channel_routes[{ch!r}] references unknown model id: {mid!r}")
+
     return len(errors) == 0, errors
+
+
+def migrate_config_models(config):
+    """Ensure config has a models array. Converts old single-model configs."""
+    if not isinstance(config, dict):
+        return config
+    if "models" in config and isinstance(config.get("models"), list):
+        return config  # already migrated
+
+    provider = config.get("provider_type", "")
+    model = config.get("model", "") or default_models.get(provider, "")
+    if not provider:
+        return config
+
+    config["models"] = [{
+        "id": f"{provider}_{model}".replace("/", "_").replace(".", "_")[:64],
+        "provider": provider,
+        "model": model,
+        "is_default": True,
+    }]
+    config.setdefault("channel_routes", {})
+    return config
+
+
+def get_active_model(config):
+    """Return the default model dict from the models array, or None."""
+    for m in config.get("models", []):
+        if m.get("is_default"):
+            return m
+    return None
+
+
+def get_model_for_channel(config, channel):
+    """Return the model dict assigned to a channel, falling back to default."""
+    routes = config.get("channel_routes", {})
+    model_id = routes.get(channel)
+    if model_id:
+        for m in config.get("models", []):
+            if m.get("id") == model_id:
+                return m
+    return get_active_model(config)
+
+
+def _sync_active_model_to_config(config):
+    """Keep legacy provider_type/model fields in sync with the active model."""
+    active = get_active_model(config)
+    if active:
+        config["provider_type"] = active["provider"]
+        config["model"] = active["model"]
+    return config
 
 
 def load_setup():
@@ -1073,6 +1173,153 @@ def dispatch_validation(provider, credentials):
     return {"valid": False, "error": f"Unknown provider: {provider!r}"}
 
 
+# ── dynamic model fetching ──────────────────────────────────────────────────
+
+def fetch_provider_models(provider, credentials):
+    """Fetch available models from a provider's API. Returns {models: [{id, name}], fallback?, error?}."""
+    try:
+        if provider == "anthropic":
+            key = credentials.get("ANTHROPIC_API_KEY") or credentials.get("api_key", "")
+            if not key:
+                return {"models": [], "fallback": True}
+            headers = {"x-api-key": key, "anthropic-version": "2023-06-01"}
+            status, body = http_get("https://api.anthropic.com/v1/models", headers=headers)
+            if status != 200:
+                return {"models": [], "fallback": True, "error": f"HTTP {status}"}
+            data = json.loads(body)
+            models = [{"id": m["id"], "name": m.get("display_name", m["id"])} for m in data.get("data", [])]
+            return {"models": sorted(models, key=lambda m: m["name"])}
+
+        if provider == "google":
+            key = credentials.get("GOOGLE_API_KEY") or credentials.get("api_key", "")
+            if not key:
+                return {"models": [], "fallback": True}
+            url = f"https://generativelanguage.googleapis.com/v1beta/models?key={urllib.parse.quote(key)}"
+            status, body = http_get(url)
+            if status != 200:
+                return {"models": [], "fallback": True, "error": f"HTTP {status}"}
+            data = json.loads(body)
+            models = []
+            for m in data.get("models", []):
+                if "generateContent" in m.get("supportedGenerationMethods", []):
+                    mid = m.get("name", "").replace("models/", "")
+                    models.append({"id": mid, "name": m.get("displayName", mid)})
+            return {"models": sorted(models, key=lambda m: m["name"])}
+
+        if provider == "azure-openai":
+            key = credentials.get("AZURE_OPENAI_API_KEY") or credentials.get("api_key", "")
+            endpoint = credentials.get("AZURE_OPENAI_ENDPOINT") or credentials.get("azure_endpoint") or credentials.get("endpoint", "")
+            if not key or not endpoint:
+                return {"models": [], "fallback": True}
+            url = f"{endpoint.rstrip('/')}/openai/models?api-version=2024-02-01"
+            status, body = http_get(url, headers={"api-key": key})
+            if status != 200:
+                return {"models": [], "fallback": True, "error": f"HTTP {status}"}
+            data = json.loads(body)
+            models = []
+            for m in data.get("data", []):
+                caps = m.get("capabilities", {})
+                if caps.get("chat_completion") is True or caps.get("chat_completion") == "true":
+                    models.append({"id": m["id"], "name": m["id"]})
+            return {"models": sorted(models, key=lambda m: m["id"])}
+
+        # Local providers (ollama, lm-studio, docker-model-runner, ramalama)
+        if provider in ("ollama", "lm-studio", "docker-model-runner", "ramalama"):
+            host = credentials.get("OLLAMA_HOST") or credentials.get("ollama_host") or credentials.get("host") or credentials.get("url")
+            defaults = {
+                "ollama": "http://localhost:11434",
+                "lm-studio": "http://localhost:1234",
+                "docker-model-runner": "http://localhost:12434",
+                "ramalama": "http://localhost:8080",
+            }
+            host = host or defaults.get(provider, "http://localhost:8080")
+            if provider == "ollama":
+                url = f"{host.rstrip('/')}/api/tags"
+                status, body = http_get(url)
+                if status != 200:
+                    return {"models": [], "fallback": True, "error": f"HTTP {status}"}
+                data = json.loads(body)
+                models = [{"id": m["name"], "name": m["name"]} for m in data.get("models", [])]
+            else:
+                url = f"{host.rstrip('/')}/v1/models"
+                status, body = http_get(url)
+                if status != 200:
+                    return {"models": [], "fallback": True, "error": f"HTTP {status}"}
+                data = json.loads(body)
+                models = [{"id": m["id"], "name": m["id"]} for m in data.get("data", [])]
+            return {"models": sorted(models, key=lambda m: m["id"])}
+
+        # LiteLLM
+        if provider == "litellm":
+            key = credentials.get("LITELLM_API_KEY") or credentials.get("api_key", "")
+            host = credentials.get("LITELLM_HOST") or credentials.get("litellm_host") or credentials.get("host", "")
+            if not host:
+                return {"models": [], "fallback": True}
+            headers = {"Authorization": f"Bearer {key}"} if key else {}
+            status, body = http_get(f"{host.rstrip('/')}/v1/models", headers=headers)
+            if status != 200:
+                return {"models": [], "fallback": True, "error": f"HTTP {status}"}
+            data = json.loads(body)
+            models = [{"id": m["id"], "name": m["id"]} for m in data.get("data", [])]
+            return {"models": sorted(models, key=lambda m: m["id"])}
+
+        # OpenAI-compatible providers
+        openai_compat = {
+            "openai": "https://api.openai.com",
+            "groq": "https://api.groq.com/openai",
+            "openrouter": "https://openrouter.ai/api",
+            "mistral": "https://api.mistral.ai",
+            "xai": "https://api.x.ai",
+            "deepseek": "https://api.deepseek.com",
+            "together": "https://api.together.xyz",
+            "cerebras": "https://api.cerebras.ai",
+            "venice": "https://api.venice.ai/api",
+        }
+        if provider in openai_compat:
+            key = credentials.get(env_map[provider][0]) or credentials.get("api_key", "")
+            if not key:
+                return {"models": [], "fallback": True}
+            headers = {"Authorization": f"Bearer {key}"}
+            status, body = http_get(f"{openai_compat[provider]}/v1/models", headers=headers)
+            if status != 200:
+                return {"models": [], "fallback": True, "error": f"HTTP {status}"}
+            data = json.loads(body)
+            raw = data.get("data", [])
+            # provider-specific filtering
+            if provider == "openai":
+                skip = ("dall-e", "tts", "whisper", "embedding", "davinci", "babbage")
+                raw = [m for m in raw if not any(s in m.get("id", "") for s in skip)]
+            elif provider == "mistral":
+                raw = [m for m in raw if "embed" not in m.get("id", "")]
+            elif provider == "together":
+                raw = [m for m in raw if m.get("type", "chat") == "chat"]
+            models = [{"id": m["id"], "name": m.get("name", m["id"])} for m in raw]
+            return {"models": sorted(models, key=lambda m: m["id"])}
+
+        # Custom provider
+        if provider == "custom":
+            key = credentials.get("api_key") or credentials.get("custom_key", "")
+            url = credentials.get("url") or credentials.get("custom_url", "")
+            if not url:
+                return {"models": [], "fallback": True}
+            headers = {"Authorization": f"Bearer {key}"} if key else {}
+            try:
+                status, body = http_get(f"{url.rstrip('/')}/v1/models", headers=headers)
+                if status != 200:
+                    return {"models": [], "fallback": True}
+                data = json.loads(body)
+                models = [{"id": m["id"], "name": m["id"]} for m in data.get("data", [])]
+                return {"models": sorted(models, key=lambda m: m["id"])}
+            except Exception:
+                return {"models": [], "fallback": True}
+
+        # Providers with no list endpoint
+        return {"models": [], "fallback": True}
+
+    except (ConnectionError, json.JSONDecodeError, KeyError, TypeError) as e:
+        return {"models": [], "fallback": True, "error": str(e)}
+
+
 # ── goose web subprocess management ─────────────────────────────────────────
 
 def _setup_claude_cli():
@@ -1245,6 +1492,14 @@ def apply_config(config):
             lines.append(f"GOOSE_LEAD_MODEL: {lead_model}")
         if lead_turn_count:
             lines.append(f"GOOSE_LEAD_TURN_COUNT: {lead_turn_count}")
+
+    # set env vars for all saved provider keys (needed for per-channel model routing)
+    saved_keys = config.get("saved_keys", {})
+    for prov_id, key_val in saved_keys.items():
+        if prov_id in env_map and isinstance(key_val, str) and key_val and key_val != "********":
+            env_vars = env_map.get(prov_id, [])
+            if env_vars:
+                os.environ.setdefault(env_vars[0], key_val)
 
     # write base config + preserved sections atomically
     content = "\n".join(lines) + "\n"
@@ -2736,14 +2991,63 @@ def _send_typing_action(bot_token, chat_id):
         pass  # non-critical
 
 
-def _relay_to_goose_web(user_text, session_id, chat_id=None):
+def _update_goose_session_provider(session_id, model_config):
+    """Call POST /agent/update_provider on goose web to hot-swap the model on a session.
+
+    model_config is a dict with keys: provider, model.
+    Skips the call if the session already has this model set (cached).
+    """
+    if not _INTERNAL_GOOSE_TOKEN or not session_id or not model_config:
+        return
+
+    mid = model_config.get("id", "")
+    with _session_model_lock:
+        if _session_model_cache.get(session_id) == mid:
+            return  # already set
+    try:
+        provider = model_config.get("provider", "")
+        model = model_config.get("model", "")
+        payload = json.dumps({
+            "provider": provider,
+            "model": model,
+            "session_id": session_id,
+        }).encode()
+        auth_value = base64.b64encode(f"user:{_INTERNAL_GOOSE_TOKEN}".encode()).decode()
+        conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=10)
+        conn.request("POST", "/agent/update_provider", body=payload, headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Basic {auth_value}",
+        })
+        resp = conn.getresponse()
+        resp.read()
+        conn.close()
+        if resp.status in (200, 204):
+            with _session_model_lock:
+                _session_model_cache[session_id] = mid
+            print(f"[routing] updated session {session_id} to {provider}/{model}")
+        else:
+            print(f"[routing] update_provider returned {resp.status} for session {session_id}")
+    except Exception as e:
+        print(f"[routing] failed to update session provider: {e}")
+
+
+def _relay_to_goose_web(user_text, session_id, chat_id=None, channel=None):
     """Send a user message to goose web via WebSocket and return the assistant's text.
 
     Returns (response_text, error_string). On success error_string is empty.
     If chat_id is provided and the session is stale, creates a new session and retries.
+    If channel is provided, applies per-channel model routing before relaying.
     """
     if not _INTERNAL_GOOSE_TOKEN:
         return "", "Goose is not ready yet (no internal token). Please try again in a moment."
+
+    # apply per-channel model routing
+    if channel and session_id:
+        setup = load_setup()
+        if setup and setup.get("channel_routes"):
+            model_cfg = get_model_for_channel(setup, channel)
+            if model_cfg:
+                _update_goose_session_provider(session_id, model_cfg)
 
     text, err = _do_ws_relay(user_text, session_id)
 
@@ -2977,7 +3281,7 @@ def _telegram_poll_loop(bot_token):
                         response_text, error = _relay_to_goose_web(
                             "Please summarize our conversation so far into key points, "
                             "then we can continue from this summary. Be concise.",
-                            session_id, chat_id=chat_id
+                            session_id, chat_id=chat_id, channel="telegram"
                         )
                         if error:
                             send_telegram_message(bot_token, chat_id, f"Error: {error}")
@@ -3001,7 +3305,7 @@ def _telegram_poll_loop(bot_token):
                     typing_thread.start()
 
                     try:
-                        response_text, error = _relay_to_goose_web(text, session_id, chat_id=chat_id)
+                        response_text, error = _relay_to_goose_web(text, session_id, chat_id=chat_id, channel="telegram")
                     finally:
                         typing_stop.set()
                         typing_thread.join(timeout=2)
@@ -3289,6 +3593,16 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.handle_save()
         elif path == "/api/setup/validate":
             self.handle_validate()
+        elif path == "/api/setup/models":
+            self.handle_fetch_models()
+        elif path == "/api/setup/models/add":
+            self.handle_add_model()
+        elif path == "/api/setup/models/remove":
+            self.handle_remove_model()
+        elif path == "/api/setup/models/activate":
+            self.handle_activate_model()
+        elif path == "/api/setup/models/route":
+            self.handle_set_routes()
         elif path == "/api/notify":
             self.handle_notify()
         elif path == "/api/telegram/pair":
@@ -3511,6 +3825,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             return
         setup = load_setup()
         if setup:
+            migrate_config_models(setup)
             safe = {**setup}
 
             # ── Top-level secret masking ─────────────────────────────────────
@@ -3640,6 +3955,204 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         except Exception as e:
             print(f"[gateway] ERROR (handle_validate): {e}", file=sys.stderr)
             self.send_json(500, {"valid": False, "error": "Internal server error. Check server logs.", "code": "INTERNAL_ERROR"})
+
+    def handle_fetch_models(self):
+        """POST /api/setup/models — fetch available models for a provider."""
+        if not self._check_rate_limit(auth_limiter):
+            return
+        body = self._read_body()
+        try:
+            data = json.loads(body)
+            provider = _sanitize_string(data.get("provider", ""))
+            credentials = data.get("credentials", {})
+            if isinstance(credentials, dict):
+                credentials = {k: _sanitize_string(v) for k, v in credentials.items()}
+            result = fetch_provider_models(provider, credentials)
+            self.send_json(200, result)
+        except Exception as e:
+            print(f"[gateway] ERROR (handle_fetch_models): {e}", file=sys.stderr)
+            self.send_json(500, {"models": [], "fallback": True, "error": "Internal server error."})
+
+    # ── model management endpoints ──
+
+    def _save_and_apply(self, config):
+        """Shared helper: sync legacy fields, save, apply, restart goose."""
+        _sync_active_model_to_config(config)
+        save_setup(config)
+        apply_config(config)
+        def _restart():
+            time.sleep(1)
+            start_goose_web()
+            start_session_watcher()
+            start_job_engine()
+            start_cron_scheduler()
+        threading.Thread(target=_restart, daemon=True).start()
+        return True
+
+    def handle_add_model(self):
+        """POST /api/setup/models/add — add a model to the models array."""
+        if not self._check_rate_limit(auth_limiter):
+            return
+        if not check_auth(self):
+            self.send_response(401); self.end_headers(); return
+        body = self._read_body()
+        try:
+            data = json.loads(body)
+            setup = load_setup()
+            if not setup:
+                self.send_json(400, {"error": "not configured yet"}); return
+
+            migrate_config_models(setup)
+            provider = _sanitize_string(data.get("provider", ""))
+            model = _sanitize_string(data.get("model", ""))
+            if not provider or not model:
+                self.send_json(400, {"error": "provider and model are required"}); return
+            if provider not in env_map:
+                self.send_json(400, {"error": f"unknown provider: {provider!r}"}); return
+
+            # generate stable id
+            mid = f"{provider}_{model}".replace("/", "_").replace(".", "_")[:64]
+            # check duplicate
+            for m in setup.get("models", []):
+                if m.get("id") == mid:
+                    self.send_json(409, {"error": "model already exists"}); return
+
+            # save credentials if provided
+            new_key = _sanitize_string(data.get("api_key", ""))
+            if new_key:
+                saved = setup.get("saved_keys", {})
+                saved[provider] = new_key
+                setup["saved_keys"] = saved
+
+            is_first = len(setup.get("models", [])) == 0
+            new_model = {
+                "id": mid,
+                "provider": provider,
+                "model": model,
+                "is_default": is_first,
+            }
+            setup.setdefault("models", []).append(new_model)
+            setup.setdefault("channel_routes", {})
+
+            self._save_and_apply(setup)
+            self.send_json(200, {"success": True, "model": new_model})
+        except Exception as e:
+            print(f"[gateway] ERROR (handle_add_model): {e}", file=sys.stderr)
+            self.send_json(500, {"error": "Internal server error."})
+
+    def handle_remove_model(self):
+        """POST /api/setup/models/remove — remove a model by id."""
+        if not self._check_rate_limit(auth_limiter):
+            return
+        if not check_auth(self):
+            self.send_response(401); self.end_headers(); return
+        body = self._read_body()
+        try:
+            data = json.loads(body)
+            mid = _sanitize_string(data.get("id", ""))
+            setup = load_setup()
+            if not setup:
+                self.send_json(400, {"error": "not configured yet"}); return
+
+            migrate_config_models(setup)
+            models = setup.get("models", [])
+            target = None
+            for m in models:
+                if m.get("id") == mid:
+                    target = m
+                    break
+            if not target:
+                self.send_json(404, {"error": "model not found"}); return
+            if len(models) <= 1:
+                self.send_json(400, {"error": "cannot remove last model"}); return
+
+            was_default = target.get("is_default")
+            models.remove(target)
+
+            # if removed the default, promote the first remaining model
+            if was_default and models:
+                models[0]["is_default"] = True
+
+            # clean up channel_routes pointing to the removed model
+            routes = setup.get("channel_routes", {})
+            for ch, route_mid in list(routes.items()):
+                if route_mid == mid:
+                    del routes[ch]
+
+            self._save_and_apply(setup)
+            self.send_json(200, {"success": True, "models": models})
+        except Exception as e:
+            print(f"[gateway] ERROR (handle_remove_model): {e}", file=sys.stderr)
+            self.send_json(500, {"error": "Internal server error."})
+
+    def handle_activate_model(self):
+        """POST /api/setup/models/activate — set a model as default."""
+        if not self._check_rate_limit(auth_limiter):
+            return
+        if not check_auth(self):
+            self.send_response(401); self.end_headers(); return
+        body = self._read_body()
+        try:
+            data = json.loads(body)
+            mid = _sanitize_string(data.get("id", ""))
+            setup = load_setup()
+            if not setup:
+                self.send_json(400, {"error": "not configured yet"}); return
+
+            migrate_config_models(setup)
+            found = False
+            for m in setup.get("models", []):
+                if m.get("id") == mid:
+                    m["is_default"] = True
+                    found = True
+                else:
+                    m["is_default"] = False
+            if not found:
+                self.send_json(404, {"error": "model not found"}); return
+
+            self._save_and_apply(setup)
+            self.send_json(200, {"success": True})
+        except Exception as e:
+            print(f"[gateway] ERROR (handle_activate_model): {e}", file=sys.stderr)
+            self.send_json(500, {"error": "Internal server error."})
+
+    def handle_set_routes(self):
+        """POST /api/setup/models/route — set channel routing."""
+        if not self._check_rate_limit(auth_limiter):
+            return
+        if not check_auth(self):
+            self.send_response(401); self.end_headers(); return
+        body = self._read_body()
+        try:
+            data = json.loads(body)
+            routes = data.get("channel_routes", {})
+            if not isinstance(routes, dict):
+                self.send_json(400, {"error": "channel_routes must be an object"}); return
+
+            setup = load_setup()
+            if not setup:
+                self.send_json(400, {"error": "not configured yet"}); return
+
+            migrate_config_models(setup)
+            model_ids = {m.get("id") for m in setup.get("models", [])}
+            valid_channels = ("web", "telegram")
+            clean_routes = {}
+            for ch, mid in routes.items():
+                ch = _sanitize_string(ch)
+                if ch not in valid_channels:
+                    continue
+                mid = _sanitize_string(mid) if mid else None
+                if mid and mid not in model_ids:
+                    self.send_json(400, {"error": f"unknown model id: {mid!r}"}); return
+                if mid:
+                    clean_routes[ch] = mid
+
+            setup["channel_routes"] = clean_routes
+            save_setup(setup)
+            self.send_json(200, {"success": True, "channel_routes": clean_routes})
+        except Exception as e:
+            print(f"[gateway] ERROR (handle_set_routes): {e}", file=sys.stderr)
+            self.send_json(500, {"error": "Internal server error."})
 
     # ── notify endpoints ──
 
@@ -4058,6 +4571,20 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             # read body
             content_length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(content_length) if content_length > 0 else None
+
+            # per-channel model routing for web requests
+            if self.command == "POST" and "/reply" in self.path and body:
+                try:
+                    setup = load_setup()
+                    if setup and setup.get("channel_routes", {}).get("web"):
+                        req_data = json.loads(body)
+                        sid = req_data.get("session_id", "")
+                        if sid:
+                            model_cfg = get_model_for_channel(setup, "web")
+                            if model_cfg:
+                                _update_goose_session_provider(sid, model_cfg)
+                except Exception:
+                    pass  # non-fatal, proceed with default model
 
             conn.request(self.command, self.path, body=body, headers=headers)
             resp = conn.getresponse()

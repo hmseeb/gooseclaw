@@ -186,6 +186,16 @@ if tg and not os.environ.get('TELEGRAM_BOT_TOKEN'):
 tz = c.get('timezone', '')
 if tz and not os.environ.get('TZ'):
     print(f'export TZ={shlex.quote(tz)}')
+# lead/worker multi-model settings -> export to env for config.yaml
+lp = c.get('lead_provider', '')
+lm = c.get('lead_model', '')
+ltc = c.get('lead_turn_count', '')
+if lp:
+    print(f'export GOOSE_LEAD_PROVIDER={shlex.quote(lp)}')
+if lm:
+    print(f'export GOOSE_LEAD_MODEL={shlex.quote(lm)}')
+if ltc:
+    print(f'export GOOSE_LEAD_TURN_COUNT={shlex.quote(str(ltc))}')
 " > "$REHYDRATE_FILE" 2>/dev/null
     # source is safe because values are shlex.quote'd by the Python script
     . "$REHYDRATE_FILE"
@@ -199,6 +209,17 @@ fi
 # model override
 if [ -n "${GOOSE_MODEL:-}" ]; then
     echo "GOOSE_MODEL: $GOOSE_MODEL" >> "$CONFIG_DIR/config.yaml"
+fi
+
+# lead/worker multi-model settings
+if [ -n "${GOOSE_LEAD_PROVIDER:-}" ]; then
+    echo "GOOSE_LEAD_PROVIDER: $GOOSE_LEAD_PROVIDER" >> "$CONFIG_DIR/config.yaml"
+fi
+if [ -n "${GOOSE_LEAD_MODEL:-}" ]; then
+    echo "GOOSE_LEAD_MODEL: $GOOSE_LEAD_MODEL" >> "$CONFIG_DIR/config.yaml"
+fi
+if [ -n "${GOOSE_LEAD_TURN_COUNT:-}" ]; then
+    echo "GOOSE_LEAD_TURN_COUNT: $GOOSE_LEAD_TURN_COUNT" >> "$CONFIG_DIR/config.yaml"
 fi
 
 # ─── vault hydration (export stored credentials as env vars) ─────────────

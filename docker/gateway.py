@@ -461,10 +461,24 @@ def validate_setup_config(config):
         errors.append(f"timezone should be in Region/City format (got {tz!r})")
 
     # string field max-length guard (prevent absurdly large values)
-    for field in ("api_key", "claude_setup_token", "custom_key", "custom_url", "model"):
+    for field in ("api_key", "claude_setup_token", "custom_key", "custom_url", "model",
+                  "lead_provider", "lead_model"):
         val = config.get(field, "")
         if isinstance(val, str) and len(val) > 2000:
             errors.append(f"{field} exceeds maximum length (2000 chars)")
+
+    # lead/worker multi-model validation
+    lead_provider = config.get("lead_provider", "")
+    if lead_provider and lead_provider not in env_map:
+        errors.append(f"unknown lead_provider: {lead_provider!r}")
+    lead_turn_count = config.get("lead_turn_count", "")
+    if lead_turn_count:
+        try:
+            tc = int(lead_turn_count)
+            if tc < 1 or tc > 50:
+                errors.append("lead_turn_count must be between 1 and 50")
+        except (ValueError, TypeError):
+            errors.append("lead_turn_count must be an integer")
 
     return len(errors) == 0, errors
 
@@ -937,6 +951,17 @@ def apply_config(config):
 
     if model:
         lines.append(f"GOOSE_MODEL: {model}")
+
+    # lead/worker multi-model settings
+    lead_provider = config.get("lead_provider", "")
+    lead_model = config.get("lead_model", "")
+    lead_turn_count = config.get("lead_turn_count", "")
+    if lead_provider:
+        lines.append(f"GOOSE_LEAD_PROVIDER: {lead_provider}")
+        if lead_model:
+            lines.append(f"GOOSE_LEAD_MODEL: {lead_model}")
+        if lead_turn_count:
+            lines.append(f"GOOSE_LEAD_TURN_COUNT: {lead_turn_count}")
 
     with open(config_path, "w") as f:
         f.write("\n".join(lines) + "\n")

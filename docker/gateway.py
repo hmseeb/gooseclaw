@@ -1499,7 +1499,7 @@ def apply_config(config):
         if prov_id in env_map and isinstance(key_val, str) and key_val and key_val != "********":
             env_vars = env_map.get(prov_id, [])
             if env_vars:
-                os.environ.setdefault(env_vars[0], key_val)
+                os.environ[env_vars[0]] = key_val
 
     # write base config + preserved sections atomically
     content = "\n".join(lines) + "\n"
@@ -4149,6 +4149,19 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
 
             setup["channel_routes"] = clean_routes
             save_setup(setup)
+
+            # propagate env vars for all routed providers so goose can use them
+            saved_keys = setup.get("saved_keys", {})
+            for mid in clean_routes.values():
+                model_cfg = next((m for m in setup.get("models", []) if m.get("id") == mid), None)
+                if model_cfg:
+                    prov = model_cfg.get("provider", "")
+                    key_val = saved_keys.get(prov, "")
+                    if prov in env_map and isinstance(key_val, str) and key_val and key_val != "********":
+                        env_vars = env_map.get(prov, [])
+                        if env_vars:
+                            os.environ[env_vars[0]] = key_val
+
             self.send_json(200, {"success": True, "channel_routes": clean_routes})
         except Exception as e:
             print(f"[gateway] ERROR (handle_set_routes): {e}", file=sys.stderr)

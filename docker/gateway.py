@@ -564,11 +564,28 @@ def get_auth_token():
     return "", False
 
 
+def _make_session_cookie(token):
+    """Create an HMAC-based session cookie value from the auth token."""
+    return hashlib.sha256(f"gooseclaw-session:{token}".encode()).hexdigest()
+
+
 def check_auth(handler):
-    """Check HTTP Basic Auth. Returns True if authorized."""
+    """Check HTTP Basic Auth or session cookie. Returns True if authorized."""
     stored, is_hashed = get_auth_token()
     if not stored:
         return True
+
+    # check session cookie first (avoids re-prompting Basic Auth)
+    cookie_header = handler.headers.get("Cookie", "")
+    if cookie_header:
+        for part in cookie_header.split(";"):
+            part = part.strip()
+            if part.startswith("gooseclaw_session="):
+                cookie_val = part.split("=", 1)[1]
+                # verify cookie matches current token
+                expected = _make_session_cookie(stored)
+                if secrets.compare_digest(cookie_val, expected):
+                    return True
 
     auth_header = handler.headers.get("Authorization", "")
     if auth_header.startswith("Basic "):
@@ -576,8 +593,12 @@ def check_auth(handler):
             decoded = base64.b64decode(auth_header[6:]).decode()
             _, provided = decoded.split(":", 1)
             if is_hashed:
-                return verify_token(provided, stored)
-            return provided == stored
+                if verify_token(provided, stored):
+                    handler._set_session_cookie = True
+                    return True
+            elif provided == stored:
+                handler._set_session_cookie = True
+                return True
         except Exception:
             pass
     return False
@@ -1401,6 +1422,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Security-Policy", csp)
             if os.environ.get("RAILWAY_ENVIRONMENT"):
                 self.send_header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+            # persist auth via session cookie after successful Basic Auth
+            self._inject_session_cookie()
             self.end_headers()
             self.wfile.write(content)
         except FileNotFoundError:
@@ -1770,6 +1793,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             if os.environ.get("RAILWAY_ENVIRONMENT"):
                 if "strict-transport-security" not in proxied_headers:
                     self.send_header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+            # persist auth via session cookie after successful Basic Auth
+            self._inject_session_cookie()
             self.end_headers()
 
             # stream the response body
@@ -1834,6 +1859,20 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0))
         return self.rfile.read(length) if length > 0 else b""
 
+    def _inject_session_cookie(self):
+        """If Basic Auth succeeded this request, set a session cookie so the
+        browser won't re-prompt on subsequent requests."""
+        if getattr(self, "_set_session_cookie", False):
+            stored, _ = get_auth_token()
+            if stored:
+                cookie_val = _make_session_cookie(stored)
+                secure_flag = "; Secure" if os.environ.get("RAILWAY_ENVIRONMENT") else ""
+                self.send_header(
+                    "Set-Cookie",
+                    f"gooseclaw_session={cookie_val}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000{secure_flag}",
+                )
+            self._set_session_cookie = False
+
     def send_json(self, status, data):
         body = json.dumps(data).encode()
         self.send_response(status)
@@ -1855,6 +1894,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             origin == f"http://{host}" or origin == f"https://{host}"
         ):
             self.send_header("Access-Control-Allow-Origin", origin)
+        # persist auth via session cookie after successful Basic Auth
+        self._inject_session_cookie()
         self.end_headers()
         self.wfile.write(body)
 

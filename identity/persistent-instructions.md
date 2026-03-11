@@ -147,6 +147,9 @@ not when they're still meeting the bot for the first time.
 
 ---
 
+## Time Awareness
+- Your timezone is set in user.md. Run `date` to check the current time.
+
 ## Behavioral Rules
 
 These rules are ALWAYS active. No exceptions.

@@ -113,6 +113,7 @@ SECURITY_HEADERS = {
 
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
 CONFIG_DIR = os.path.join(DATA_DIR, "config")
+IDENTITY_DIR = os.path.join(DATA_DIR, "identity")
 SETUP_FILE = os.path.join(CONFIG_DIR, "setup.json")
 APP_DIR = os.environ.get("APP_DIR", "/app")
 SETUP_HTML = os.path.join(APP_DIR, "docker", "setup.html")
@@ -1398,6 +1399,31 @@ def _extract_yaml_sections(content, section_keys):
     return "\n".join(buf) + "\n" if buf else ""
 
 
+def _write_timezone_to_user_md(tz):
+    """Write timezone to the Basics section of identity/user.md."""
+    user_md = os.path.join(IDENTITY_DIR, "user.md")
+    try:
+        with open(user_md, "r") as f:
+            content = f.read()
+    except FileNotFoundError:
+        return
+    # update or insert timezone line under ## Basics
+    tz_line = f"- Timezone: {tz}"
+    if "- Timezone:" in content:
+        content = re.sub(r"- Timezone:.*", tz_line, content)
+    else:
+        # insert after ## Basics and its comment line
+        content = re.sub(
+            r"(## Basics\n<!-- .+? -->\n)",
+            rf"\g<1>{tz_line}\n",
+            content,
+        )
+    with open(user_md, "w") as f:
+        f.write(content)
+    print(f"[config] wrote timezone {tz} to user.md")
+
+
+
 def apply_config(config):
     """Write goose config.yaml and set env vars from setup config."""
     provider_type = config.get("provider_type", "")
@@ -1407,6 +1433,11 @@ def apply_config(config):
 
     # set timezone
     os.environ["TZ"] = tz
+    try:
+        time.tzset()
+    except AttributeError:
+        pass  # not available on Windows
+    _write_timezone_to_user_md(tz)
 
     config_path = os.path.join(CONFIG_DIR, "config.yaml")
 

@@ -1300,7 +1300,7 @@ body::after {
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 7.5L5.5 11L12 3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
           Test
         </button>
-        <button class="btn btn-primary" id="credContinueBtn" disabled onclick="advanceFromCredentials()">
+        <button class="btn btn-primary" id="credContinueBtn" onclick="advanceFromCredentials()">
           Continue
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5.5 3L9.5 7L5.5 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
@@ -2530,16 +2530,13 @@ async function validateKey() {
   btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 7.5L5.5 11L12 3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg> Test';
 }
 
-/* ── update button states based on validationPassed ── */
+/* ── update save button state based on validationPassed ── */
 function updateSaveBtn() {
   const btn = document.getElementById('saveBtn');
   const note = document.getElementById('validationGateNote');
-  if (btn) {
-    btn.disabled = !validationPassed;
-    if (note) note.style.display = validationPassed ? 'none' : '';
-  }
-  const credBtn = document.getElementById('credContinueBtn');
-  if (credBtn) credBtn.disabled = !validationPassed;
+  if (!btn) return;
+  btn.disabled = !validationPassed;
+  if (note) note.style.display = validationPassed ? 'none' : '';
 }
 
 /* ── advance from credentials step with empty-field check ── */
@@ -2626,14 +2623,7 @@ function advanceFromCredentials() {
     }
   }
 
-  /* gate: must test credentials before continuing */
-  if (validationPassed) {
-    goToStep(2);
-  } else {
-    validateKey().then(() => {
-      if (validationPassed) goToStep(2);
-    });
-  }
+  goToStep(2);
 }
 
 /* ── advanced multi-model toggle & helpers ── */

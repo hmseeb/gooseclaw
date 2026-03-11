@@ -49,6 +49,31 @@ if [ -f "$DATA_DIR/sessions/sessions.db" ]; then
     ln -sf "$DATA_DIR/sessions/sessions.db" "$HOME_DIR/.local/share/goose/sessions/sessions.db"
 fi
 
+# preserve gateway state (pairings, configs, pending codes) across restarts
+# — goose writes these to config.yaml at runtime, and we'd lose them on regen
+GATEWAY_STATE=""
+if [ -f "$CONFIG_DIR/config.yaml" ]; then
+    GATEWAY_STATE=$(python3 -c "
+lines = open('$CONFIG_DIR/config.yaml').readlines()
+in_gw = False
+buf = []
+gw_keys = ('gateway_pairings:', 'gateway_configs:', 'gateway_pending_codes:')
+for line in lines:
+    if any(line.startswith(k) for k in gw_keys):
+        in_gw = True
+        buf.append(line)
+    elif in_gw:
+        if line and not line[0].isspace() and not line.strip().startswith('-'):
+            in_gw = False
+            if any(line.startswith(k) for k in gw_keys):
+                in_gw = True
+                buf.append(line)
+        else:
+            buf.append(line)
+print(''.join(buf), end='')
+" 2>/dev/null || true)
+fi
+
 # generate base config.yaml (provider may be added by env vars or setup wizard)
 cat > "$CONFIG_DIR/config.yaml" << YAML
 keyring: false
@@ -344,6 +369,12 @@ extensions:
     bundled: null
     available_tools: []
 EXTENSIONS
+
+# restore preserved gateway state (pairings, sessions, pending codes)
+if [ -n "$GATEWAY_STATE" ]; then
+    echo "$GATEWAY_STATE" >> "$CONFIG_DIR/config.yaml"
+    echo "[init] gateway pairings preserved across restart"
+fi
 
 # ─── template version tracking ────────────────────────────────────────────
 

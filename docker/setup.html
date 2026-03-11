@@ -858,6 +858,30 @@ body::after {
   color: var(--text-secondary);
   background: var(--bg-card);
 }
+.dashboard-update-banner {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.1), rgba(168, 85, 247, 0.1));
+  border: 1px solid rgba(99, 102, 241, 0.25);
+  border-radius: var(--radius-sm);
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  display: none;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.dashboard-update-banner.show { display: flex; }
+.dashboard-update-banner .update-icon { font-size: 18px; flex-shrink: 0; }
+.dashboard-update-banner .update-text { flex: 1; }
+.dashboard-update-banner .update-text strong { color: var(--text-primary); }
+.dashboard-update-banner .update-link {
+  color: rgb(129, 140, 248);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.dashboard-update-banner .update-link:hover { color: rgb(165, 180, 252); }
 .dashboard-success {
   background: var(--success-bg);
   border: 1px solid rgba(52, 211, 153, 0.2);
@@ -1193,6 +1217,14 @@ body::after {
   <!-- settings dashboard (shown when already configured) -->
   <div class="step" id="step-dashboard">
     <div class="step-title">Settings</div>
+    <div class="dashboard-update-banner" id="updateBanner">
+      <span class="update-icon">🆕</span>
+      <span class="update-text">
+        <strong>Update available!</strong>
+        gooseclaw <span id="updateLatestVersion"></span> is out — you're on <span id="updateCurrentVersion"></span>
+      </span>
+      <a class="update-link" href="https://github.com/hmseeb/gooseclaw/releases" target="_blank" rel="noopener">View release →</a>
+    </div>
     <div class="dashboard-success" id="dashboardSuccess">Changes saved. Agent is restarting...</div>
     <div class="summary-container">
       <div class="dashboard-field" id="df-provider">
@@ -2506,6 +2538,26 @@ function showDashboard(config) {
 
   /* fetch live telegram pairing status */
   updateTelegramPairingUI();
+
+  /* check for updates */
+  checkForUpdates();
+}
+
+async function checkForUpdates() {
+  try {
+    const [localRes, remoteRes] = await Promise.all([
+      fetch('/api/version').then(r => r.json()),
+      fetch('https://raw.githubusercontent.com/hmseeb/gooseclaw/main/VERSION').then(r => r.text()),
+    ]);
+    const current = (localRes.version || '').trim();
+    const latest = (remoteRes || '').trim();
+    if (!current || !latest || current === 'unknown') return;
+    if (current !== latest) {
+      document.getElementById('updateCurrentVersion').textContent = 'v' + current;
+      document.getElementById('updateLatestVersion').textContent = 'v' + latest;
+      document.getElementById('updateBanner').classList.add('show');
+    }
+  } catch(e) { /* silently ignore — no internet or rate-limited */ }
 }
 
 function renderDashboardValues(config) {

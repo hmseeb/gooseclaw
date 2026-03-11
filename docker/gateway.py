@@ -1098,18 +1098,68 @@ def _save_telegram_sessions():
 
 
 def _get_session_id(chat_id):
-    """Get or create a session_id for a telegram chat_id."""
+    """Get or create a session_id for a telegram chat_id.
+
+    For new chats, calls POST /agent/start on goose web to get a real session_id.
+    For existing chats, returns the stored session_id.
+    """
     chat_key = str(chat_id)
     with _telegram_sessions_lock:
         sid = _telegram_sessions.get(chat_key)
     if sid:
         return sid
-    sid = str(uuid.uuid4())
+
+    # create a new agent session via goose web
+    sid = _start_agent_session()
+    if not sid:
+        # fallback to random UUID if goose web is unavailable
+        sid = str(uuid.uuid4())
+        print(f"[telegram] warn: could not start agent, using random session {sid}")
+
     with _telegram_sessions_lock:
         _telegram_sessions[chat_key] = sid
     _save_telegram_sessions()
     print(f"[telegram] new session {sid} for chat {chat_key}")
     return sid
+
+
+def _start_agent_session():
+    """Call POST /agent/start on goose web to create a new agent session.
+
+    Returns the session_id string, or None on failure.
+    """
+    if not _INTERNAL_GOOSE_TOKEN:
+        return None
+
+    auth_value = base64.b64encode(f"user:{_INTERNAL_GOOSE_TOKEN}".encode()).decode()
+    body = json.dumps({"working_dir": "/app"}).encode("utf-8")
+
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=15)
+        conn.request("POST", "/agent/start", body=body, headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Basic {auth_value}",
+        })
+        resp = conn.getresponse()
+        resp_body = resp.read().decode("utf-8", errors="replace")
+        conn.close()
+
+        if resp.status != 200:
+            print(f"[telegram] /agent/start returned {resp.status}: {resp_body[:300]}")
+            return None
+
+        data = json.loads(resp_body)
+        sid = data.get("id") or data.get("session_id")
+        if sid:
+            print(f"[telegram] agent started, session_id: {sid}")
+            return str(sid)
+        else:
+            print(f"[telegram] /agent/start response missing id: {resp_body[:300]}")
+            return None
+
+    except Exception as e:
+        print(f"[telegram] /agent/start failed: {e}")
+        return None
 
 
 # ── telegram bot API helpers ────────────────────────────────────────────────
@@ -1128,14 +1178,39 @@ def _send_typing_action(bot_token, chat_id):
         pass  # non-critical
 
 
-def _relay_to_goose_web(user_text, session_id):
+def _relay_to_goose_web(user_text, session_id, chat_id=None):
     """POST a user message to goose web /reply and return the assistant's text.
 
     Returns (response_text, error_string). On success error_string is empty.
+    If chat_id is provided and the session is stale (404), creates a new agent
+    session and retries once.
     """
     if not _INTERNAL_GOOSE_TOKEN:
         return "", "Goose is not ready yet (no internal token). Please try again in a moment."
 
+    text, err = _do_relay(user_text, session_id)
+
+    # if 404, the session was evicted — start a new agent and retry
+    if err and "HTTP 404" in err and chat_id:
+        print(f"[telegram] session {session_id} got 404, creating new agent session")
+        new_sid = _start_agent_session()
+        if new_sid:
+            with _telegram_sessions_lock:
+                _telegram_sessions[str(chat_id)] = new_sid
+            _save_telegram_sessions()
+            print(f"[telegram] retrying with new session {new_sid}")
+            return _do_relay(user_text, new_sid)
+        # couldn't start new agent, return original error
+        return text, err
+
+    return text, err
+
+
+def _do_relay(user_text, session_id):
+    """Internal: POST to goose web /reply and parse the SSE response.
+
+    Returns (response_text, error_string).
+    """
     auth_value = base64.b64encode(f"user:{_INTERNAL_GOOSE_TOKEN}".encode()).decode()
     body = json.dumps({
         "user_message": {
@@ -1310,12 +1385,17 @@ def _telegram_poll_loop(bot_token):
                     if lower == "/newsession":
                         with _telegram_sessions_lock:
                             old = _telegram_sessions.pop(chat_id, None)
+                        # create a fresh agent session
+                        new_sid = _start_agent_session()
+                        if new_sid:
+                            with _telegram_sessions_lock:
+                                _telegram_sessions[chat_id] = new_sid
                         _save_telegram_sessions()
                         send_telegram_message(
                             bot_token, chat_id,
                             "🔄 New session started. Conversation history is fresh."
                         )
-                        print(f"[telegram] new session forced for chat {chat_id} (old: {old})")
+                        print(f"[telegram] new session forced for chat {chat_id} (old: {old}, new: {new_sid})")
                         continue
 
                     # ── relay to goose web ──
@@ -1334,7 +1414,7 @@ def _telegram_poll_loop(bot_token):
                     typing_thread.start()
 
                     try:
-                        response_text, error = _relay_to_goose_web(text, session_id)
+                        response_text, error = _relay_to_goose_web(text, session_id, chat_id=chat_id)
                     finally:
                         typing_stop.set()
                         typing_thread.join(timeout=2)

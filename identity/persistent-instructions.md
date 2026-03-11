@@ -257,8 +257,39 @@ Key rules:
 
 **NEVER use CronCreate or any built-in cron tool. They create idle session jobs that never execute.**
 
-For complex recurring tasks that need AI processing (e.g. morning briefings, research summaries),
-use `goose schedule` CLI via the developer shell tool. For simple "remind me" requests, use `remind` instead.
+### Decision Tree: Which job type to use
+
+When the user asks for a recurring task, follow this decision tree:
+
+1. **Is it a simple reminder/timer?** (e.g. "remind me in 5 min", "nudge me at 3pm")
+   -> Use `remind` CLI. ALWAYS.
+
+2. **Does it need LLM reasoning?** (summarize, analyze, draft, curate, judge, write)
+   -> Use `goose schedule` (AI job). Costs tokens but can think.
+
+3. **Is it a pure data task?** (fetch API, scrape URL, health check, send raw data)
+   -> Use **script job** via gateway API. Zero LLM cost.
+
+When in doubt, ASK the user: "this could be a script job ($0, no AI) or an AI job (uses tokens). which do you prefer?"
+
+### Script Jobs (zero cost, no AI)
+
+Create via gateway API:
+```bash
+curl -s -X POST http://localhost:8080/api/script-jobs \
+  -H "Content-Type: application/json" \
+  -d '{"name": "my-job", "command": "curl -s https://api.example.com | notify", "cron": "0 */6 * * *", "enabled": true}'
+```
+
+- `command`: shell command. pipe through `notify` to deliver output to user.
+- `cron`: standard 5-field cron expression.
+- `timeout`: max seconds (default 120).
+- Manage: GET/POST /api/script-jobs, DELETE /api/script-jobs/<id>, POST /api/script-jobs/<id>/run
+- Persists to /data/script_jobs.json. Survives restarts.
+
+### AI Jobs (goose schedule)
+
+For complex recurring tasks that need AI processing (e.g. morning briefings, research summaries).
 
 When using goose schedule (via shell, NOT CronCreate):
 - Create/update recipe YAML files in /data/recipes/

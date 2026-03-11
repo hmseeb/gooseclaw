@@ -2,6 +2,11 @@
 # loaded once at session start. identity files inlined via @file syntax.
 # absolute paths to /data/identity/ (Railway volume, survives restarts).
 
+# !! CRITICAL: if soul.md below contains "ONBOARDING_NEEDED", you MUST
+# !! run the Onboarding Flow from persistent-instructions.md IMMEDIATELY.
+# !! Do NOT respond casually. Do NOT process the user's message normally.
+# !! Start with the onboarding greeting. This is your highest priority.
+
 # identity files (agent personality + user profile + platform reference)
 @/data/identity/soul.md
 @/data/identity/user.md

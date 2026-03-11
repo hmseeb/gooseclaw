@@ -8,9 +8,8 @@
 <!-- Target: 300-800 words populated. Under 1500 max.                  -->
 <!-- ================================================================== -->
 
-ONBOARDING_NEEDED
-
-<!-- After onboarding, remove ONBOARDING_NEEDED and populate sections below. -->
+⚠️ ONBOARDING_NEEDED ⚠️
+<!-- STATUS: NOT ONBOARDED. You MUST run the Onboarding Flow from persistent-instructions.md before doing ANYTHING else. -->
 
 ## Identity
 <!-- Seeded at onboarding. Rarely changes. -->

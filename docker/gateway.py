@@ -1248,6 +1248,9 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.handle_startup_status()
         elif path == "/api/version":
             self.handle_version()
+        elif path == "/api/debug/sessions":
+            if not check_auth(self): return
+            self.handle_debug_sessions()
         elif path.rstrip("/") == "/setup" or path.startswith("/setup/"):
             self.handle_setup_page()
         elif path == "/api/setup/config":
@@ -1365,6 +1368,68 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             except Exception:
                 pass
         self.send_json(200, {"version": version, "service": "gooseclaw"})
+
+    def handle_debug_sessions(self):
+        """GET /api/debug/sessions — inspect gateway session state (auth required)."""
+        import sqlite3 as _sqlite3
+        result = {"config_path": GOOSE_CONFIG_PATH, "sessions_db": None, "pairings": None, "sessions": [], "errors": []}
+        # read pairings from config
+        try:
+            with open(GOOSE_CONFIG_PATH) as f:
+                content = f.read()
+            # extract gateway_pairings block
+            lines = content.split("\n")
+            in_gw = False
+            gw_lines = []
+            for line in lines:
+                if line.startswith("gateway_pairings:") or line.startswith("gateway_configs:"):
+                    in_gw = True
+                    gw_lines.append(line)
+                elif in_gw:
+                    if line and not line[0].isspace() and not line.strip().startswith("-"):
+                        in_gw = False
+                    else:
+                        gw_lines.append(line)
+            result["pairings"] = "\n".join(gw_lines) if gw_lines else "NONE FOUND"
+        except Exception as e:
+            result["errors"].append(f"config read: {e}")
+        # find sessions.db
+        home = os.environ.get("HOME", "/home/gooseclaw")
+        db_paths = [
+            os.path.join(home, ".local/share/goose/sessions/sessions.db"),
+            os.path.join(DATA_DIR, "sessions/sessions.db"),
+        ]
+        for dbp in db_paths:
+            is_link = os.path.islink(dbp)
+            target = os.readlink(dbp) if is_link else None
+            exists = os.path.exists(dbp)
+            result.setdefault("db_files", []).append({"path": dbp, "exists": exists, "is_symlink": is_link, "target": target})
+            if exists and not result["sessions_db"]:
+                result["sessions_db"] = dbp
+                try:
+                    conn = _sqlite3.connect(dbp)
+                    cur = conn.cursor()
+                    # get all gateway sessions
+                    cur.execute("SELECT id, name, session_type, total_tokens, updated_at FROM sessions WHERE session_type = 'gateway' ORDER BY updated_at DESC LIMIT 10")
+                    for row in cur.fetchall():
+                        sid = row[0]
+                        msg_cur = conn.cursor()
+                        msg_cur.execute("SELECT COUNT(*) FROM messages WHERE session_id = ?", (sid,))
+                        msg_count = msg_cur.fetchone()[0]
+                        # get last 3 messages
+                        msg_cur.execute("SELECT role, substr(content_json, 1, 200), created_timestamp FROM messages WHERE session_id = ? ORDER BY created_timestamp DESC LIMIT 3", (sid,))
+                        recent = [{"role": r[0], "content_preview": r[1], "ts": r[2]} for r in msg_cur.fetchall()]
+                        result["sessions"].append({"id": sid, "name": row[1][:80], "type": row[2], "tokens": row[3], "updated": row[4], "msg_count": msg_count, "recent": recent})
+                    conn.close()
+                except Exception as e:
+                    result["errors"].append(f"db read: {e}")
+        # goose version
+        try:
+            gv = subprocess.check_output(["goose", "--version"], stderr=subprocess.STDOUT, timeout=5).decode().strip()
+            result["goose_version"] = gv
+        except Exception as e:
+            result["goose_version"] = f"error: {e}"
+        self.send_json(200, result)
 
     # ── startup status endpoint ──
 

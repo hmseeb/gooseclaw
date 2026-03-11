@@ -75,7 +75,7 @@ Each task was committed atomically:
 1. **Task 1: Real-time startup status polling on success screen** - `db8cc23` (feat)
 2. **Task 2: Auth recovery UI for locked-out users** - `d191a92` (feat)
 
-**Plan metadata:** TBD (docs: complete plan)
+**Plan metadata:** `67ab74e` (docs: complete plan)
 
 ## Files Created/Modified
 - `docker/setup.html` - Added startup progress UI, pollStartupStatus(), retryStartup(), pollDashboardRestart(), auth recovery section with submitRecovery(), ?recover detection on page load

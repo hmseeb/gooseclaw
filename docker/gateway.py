@@ -112,6 +112,12 @@ _telegram_sessions_file = os.path.join(DATA_DIR, "telegram_sessions.json")
 _telegram_sessions = {}  # chat_id (str) -> session_id (str)
 _telegram_sessions_lock = threading.Lock()
 
+# ── session watcher state (auto-forward scheduled output to telegram) ───────
+_session_watcher_running = False
+_session_watcher_state_file = os.path.join(DATA_DIR, "session_watcher_state.json")
+_session_watcher_state = {}   # session_id -> {"forwarded_count": int, "schedule_id": str}
+_session_watcher_lock = threading.Lock()
+
 # ── goose web startup state ─────────────────────────────────────────────────
 goose_startup_state = {
     "state": "idle",        # idle | starting | ready | error
@@ -1099,6 +1105,192 @@ def _save_telegram_sessions():
         print(f"[telegram] warn: could not save sessions: {e}")
 
 
+# ── session watcher: persistence + API helpers + loop ────────────────────────
+
+def _load_watcher_state():
+    """Load session watcher state from disk."""
+    global _session_watcher_state
+    try:
+        if os.path.exists(_session_watcher_state_file):
+            with open(_session_watcher_state_file) as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                with _session_watcher_lock:
+                    _session_watcher_state = data
+                print(f"[watcher] loaded {len(data)} tracked session(s)")
+    except Exception as e:
+        print(f"[watcher] warn: could not load state: {e}")
+
+
+def _save_watcher_state():
+    """Persist session watcher state to disk."""
+    with _session_watcher_lock:
+        data = dict(_session_watcher_state)
+    try:
+        os.makedirs(os.path.dirname(_session_watcher_state_file), exist_ok=True)
+        tmp = _session_watcher_state_file + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp, _session_watcher_state_file)
+    except Exception as e:
+        print(f"[watcher] warn: could not save state: {e}")
+
+
+def _fetch_scheduled_sessions():
+    """Fetch sessions from goose web and return only scheduled ones."""
+    if not _INTERNAL_GOOSE_TOKEN:
+        return []
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=10)
+        conn.request("GET", "/api/sessions", headers={
+            "Authorization": f"Bearer {_INTERNAL_GOOSE_TOKEN}",
+        })
+        resp = conn.getresponse()
+        body = resp.read().decode("utf-8", errors="replace")
+        conn.close()
+        if resp.status != 200:
+            return []
+        data = json.loads(body)
+        sessions = data if isinstance(data, list) else data.get("sessions", [])
+        return [s for s in sessions if s.get("schedule_id")]
+    except Exception as e:
+        print(f"[watcher] error fetching sessions: {e}")
+        return []
+
+
+def _fetch_session_messages(session_id):
+    """Fetch full conversation from a goose web session. Returns list of message dicts."""
+    if not _INTERNAL_GOOSE_TOKEN:
+        return []
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=15)
+        conn.request("GET", f"/api/sessions/{urllib.parse.quote(str(session_id))}", headers={
+            "Authorization": f"Bearer {_INTERNAL_GOOSE_TOKEN}",
+        })
+        resp = conn.getresponse()
+        body = resp.read().decode("utf-8", errors="replace")
+        conn.close()
+        if resp.status != 200:
+            return []
+        session = json.loads(body)
+        conversation = session.get("conversation") or []
+        if isinstance(conversation, dict):
+            conversation = conversation.get("messages", [])
+        messages = []
+        for msg in conversation:
+            role = msg.get("role", "")
+            content_items = msg.get("content", [])
+            text_parts = []
+            for item in content_items:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    text_parts.append(item.get("text", ""))
+                elif isinstance(item, str):
+                    text_parts.append(item)
+            if text_parts:
+                messages.append({"role": role, "text": "\n".join(text_parts)})
+        return messages
+    except Exception as e:
+        print(f"[watcher] error fetching session {session_id}: {e}")
+        return []
+
+
+def _session_watcher_loop():
+    """Poll goose web for scheduled session output and auto-forward to telegram."""
+    global _session_watcher_running
+    _session_watcher_running = True
+    print("[watcher] session watcher started")
+
+    while _session_watcher_running:
+        try:
+            # wait for goose web to be ready
+            with _startup_state_lock:
+                ready = goose_startup_state["state"] == "ready"
+            if not ready:
+                time.sleep(10)
+                continue
+
+            scheduled = _fetch_scheduled_sessions()
+            state_changed = False
+
+            for session in scheduled:
+                sid = session.get("id", "")
+                schedule_id = session.get("schedule_id", "unknown")
+                msg_count = session.get("message_count", 0) or 0
+                if not sid:
+                    continue
+
+                with _session_watcher_lock:
+                    tracked = _session_watcher_state.get(sid, {})
+                    forwarded = tracked.get("forwarded_count", 0)
+
+                if msg_count <= forwarded:
+                    continue  # no new messages
+
+                # fetch full conversation
+                messages = _fetch_session_messages(sid)
+                if not messages:
+                    continue
+
+                # extract new assistant messages beyond what we already forwarded
+                for msg in messages[forwarded:]:
+                    if msg["role"] == "assistant" and msg["text"].strip():
+                        text = msg["text"].strip()
+                        formatted = f"[{schedule_id}]\n\n{text}"
+                        if len(formatted) > 4000:
+                            formatted = formatted[:3997] + "..."
+                        result = notify_all(formatted)
+                        if result.get("sent"):
+                            print(f"[watcher] forwarded output from {schedule_id}")
+                        else:
+                            print(f"[watcher] delivery failed for {schedule_id}: {result.get('error', '?')}")
+
+                # update tracking
+                with _session_watcher_lock:
+                    _session_watcher_state[sid] = {
+                        "forwarded_count": len(messages),
+                        "schedule_id": schedule_id,
+                        "last_seen": time.time(),
+                    }
+                state_changed = True
+
+            # prune stale entries (> 7 days, no longer in session list)
+            active_ids = {s.get("id") for s in scheduled}
+            cutoff = time.time() - 7 * 86400
+            with _session_watcher_lock:
+                stale = [
+                    sid for sid, info in _session_watcher_state.items()
+                    if sid not in active_ids and info.get("last_seen", 0) < cutoff
+                ]
+                for sid in stale:
+                    del _session_watcher_state[sid]
+                    state_changed = True
+
+            if state_changed:
+                _save_watcher_state()
+
+        except Exception as e:
+            print(f"[watcher] error: {e}")
+
+        # sleep 30s, checking shutdown flag every 5s
+        for _ in range(6):
+            if not _session_watcher_running:
+                break
+            time.sleep(5)
+
+    print("[watcher] session watcher stopped")
+
+
+def start_session_watcher():
+    """Start the session watcher daemon thread."""
+    global _session_watcher_running
+    if _session_watcher_running:
+        return
+    _load_watcher_state()
+    threading.Thread(target=_session_watcher_loop, daemon=True).start()
+
+
+# ── telegram session management ─────────────────────────────────────────────
+
 def _get_session_id(chat_id):
     """Get or create a session_id for a telegram chat_id.
 
@@ -2081,6 +2273,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             def _restart():
                 time.sleep(1)
                 start_goose_web()
+                start_session_watcher()
             threading.Thread(target=_restart, daemon=True).start()
 
             resp = {"success": True, "message": "saved. agent is restarting..."}
@@ -2452,6 +2645,9 @@ def main():
         health_thread = threading.Thread(target=goose_health_monitor, daemon=True)
         health_thread.start()
 
+        # start session watcher to auto-forward scheduled output to telegram
+        start_session_watcher()
+
         # start telegram if token is available but apply_config didn't handle it
         # (env-var-only deployments without setup.json)
         tg_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -2480,8 +2676,9 @@ def main():
         # terminate goose web and clean up PID
         stop_goose_web()
         _remove_pid("goose_web")
-        # stop telegram polling thread
+        # stop telegram polling thread and session watcher
         _telegram_running = False
+        _session_watcher_running = False
         _remove_pid("telegram")
         print("[gateway] shutdown complete")
 

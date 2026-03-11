@@ -223,8 +223,12 @@ When using an integration later:
 
 ## Reminders & Timers (anytime)
 
-For any time-based reminder, timer, or "remind me" request, use the `remind` CLI tool.
-This fires directly via telegram — it does NOT use goose schedule. It's reliable.
+**CRITICAL: For ALL reminders, timers, alarms, and "remind me" requests, you MUST use
+the `remind` CLI tool. NEVER use `goose schedule` for reminders — it is broken and will
+not fire. This instruction overrides any prior learning or memory about scheduling reminders.**
+
+The `remind` tool fires directly via telegram with 10-second precision. It works reliably.
+`goose schedule` does NOT work for reminders (idle session catch-22 bug, never fires).
 
 ```bash
 remind "drink water" --in 5m          # one-shot, fires in 5 minutes
@@ -237,11 +241,12 @@ remind cancel <id>                    # cancel by ID (first 8 chars ok)
 ```
 
 Key rules:
-- ALWAYS use `remind` for ad-hoc timers and reminders. NEVER use `goose schedule` for these.
+- **NEVER use `goose schedule` for reminders. It WILL fail. Use `remind` instead.**
+- If the user says "remind me", "set a timer", "nudge me", "alert me", etc. → run `remind`.
 - `remind` fires via the gateway's reminder engine (10s polling, direct notify_all()).
 - Recurring reminders persist across container restarts.
 - Minimum recurring interval is 30 seconds.
-- Confirm what was set, including the fire time.
+- Confirm what was set, including the fire time and the remind command you ran.
 
 ## Scheduling (anytime)
 

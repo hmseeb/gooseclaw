@@ -31,8 +31,8 @@
 
 ### Gateway Resilience
 
-- [ ] **GATE-01**: Health check thread monitors goose web process and auto-restarts on crash
-- [ ] **GATE-02**: Auto-restart uses exponential backoff (not infinite fast loop)
+- [x] **GATE-01**: Health check thread monitors goose web process and auto-restarts on crash
+- [x] **GATE-02**: Auto-restart uses exponential backoff (not infinite fast loop)
 - [x] **GATE-03**: Web UI shows actual error message when goose web fails (not "refresh in a few seconds")
 - [x] **GATE-04**: goose web stderr is captured and available for debugging
 - [x] **GATE-05**: Gateway proxy returns goose web error details to the browser
@@ -102,8 +102,8 @@
 | PROV-01 | Phase 1 | Complete |
 | PROV-02 | Phase 1 | Complete |
 | PROV-03 | Phase 1 | Complete |
-| PROV-04 | Phase 2 | Pending |
-| PROV-05 | Phase 2 | Pending |
+| PROV-04 | Phase 2 | Complete |
+| PROV-05 | Phase 2 | Complete |
 | PROV-06 | Phase 2 | Complete |
 | CRED-01 | Phase 2 | Complete |
 | CRED-02 | Phase 2 | Complete |
@@ -114,15 +114,15 @@
 | MODL-02 | Phase 1 | Complete |
 | MODL-03 | Phase 1 | Complete |
 | MODL-04 | Phase 1 | Complete |
-| GATE-01 | Phase 3 | Pending |
-| GATE-02 | Phase 3 | Pending |
+| GATE-01 | Phase 3 | Complete |
+| GATE-02 | Phase 3 | Complete |
 | GATE-03 | Phase 3 | Complete |
 | GATE-04 | Phase 3 | Complete |
 | GATE-05 | Phase 3 | Complete |
-| ENV-01 | Phase 2 | Pending |
-| ENV-02 | Phase 2 | Pending |
-| ENV-03 | Phase 2 | Pending |
-| ENV-04 | Phase 2 | Pending |
+| ENV-01 | Phase 2 | Complete |
+| ENV-02 | Phase 2 | Complete |
+| ENV-03 | Phase 2 | Complete |
+| ENV-04 | Phase 2 | Complete |
 | UX-01 | Phase 1 | Complete |
 | UX-02 | Phase 1 | Complete |
 | UX-03 | Phase 1 | Complete |

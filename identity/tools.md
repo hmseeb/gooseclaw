@@ -21,11 +21,15 @@
 | command | what it does |
 |---------|-------------|
 | `notify` | send a message to user's telegram. pipe text or pass as argument |
-| `remind "msg" --in 5m` | set a one-shot reminder (fires via telegram) |
+| `job create "name" --run "cmd" --every 1h` | create a recurring script job |
+| `job create "name" --run "cmd" --cron "0 9 * * *"` | create a cron-scheduled job |
+| `job create "name" --run "cmd" --in 5m` | create a one-shot job |
+| `job list` | list all active jobs |
+| `job cancel <id>` | cancel a job (first 8 chars of ID ok) |
+| `job run <id>` | trigger a job immediately |
+| `remind "msg" --in 5m` | set a text reminder (convenience wrapper over job) |
 | `remind "msg" --at 09:00` | set a reminder at a specific time |
 | `remind "msg" --every 1h` | set a recurring reminder |
-| `remind list` | list active reminders |
-| `remind cancel <id>` | cancel a reminder (first 8 chars of ID ok) |
 | `secret get <path>` | read a credential from vault (e.g. `secret get fireflies.api_key`) |
 | `secret set <path> "<value>"` | store a credential in vault |
 | `secret list` | list all stored credential paths (not values) |
@@ -38,13 +42,15 @@
 - this is how scheduled recipes deliver output. without it, headless session output vanishes.
 - the gateway also exposes POST /api/notify for programmatic use.
 
-## Reminders
+## Jobs
 
-- `remind` sets timers that fire directly via telegram. reliable, no goose sessions involved.
-- uses the gateway's built-in reminder engine (10s tick, direct notify_all).
-- persists to /data/reminders.json — survives container restarts.
-- ALWAYS use `remind` for ad-hoc timers. use `goose schedule` only for complex AI tasks.
-- the gateway also exposes /api/reminders for programmatic use.
+The unified job engine handles both text reminders and script jobs. Zero LLM cost.
+10s tick, persists to /data/jobs.json, survives container restarts.
+
+- **Script jobs**: run shell commands on schedule. use `job create`.
+- **Text reminders**: fire a message via notify. use `remind` (convenience wrapper).
+- ALWAYS use `job`/`remind` for automation. use `goose schedule` only for complex AI tasks.
+- the gateway exposes /api/jobs for programmatic use.
 
 ## Credentials Vault
 
@@ -119,68 +125,42 @@ Resolution order: env vars first, then sidecar JSON. Never put tokens in the .py
 - Broken plugins are logged and skipped. gateway keeps running.
 - `send(text)` MUST return `{"sent": bool, "error": str}`
 - `poll()` runs forever in a thread. check `stop_event.is_set()` to exit cleanly.
-- All registered channels receive notifications from scheduler, reminders, and session watcher automatically.
+- All registered channels receive notifications from scheduler, jobs, and session watcher automatically.
 
-## Script Jobs (zero-LLM-cost tasks)
+### When to use jobs vs AI schedule
 
-Script jobs run shell commands on a cron schedule without using any AI tokens. Use them for tasks that
-don't need LLM reasoning: API calls, data fetching, health checks, cost monitoring, etc.
+| Use case | Tool |
+|----------|------|
+| Fetch data from an API and notify | `job` ($0) |
+| Text reminder (take meds, standup) | `remind` ($0) |
+| Health check / uptime ping | `job` ($0) |
+| Cost monitoring via API | `job` ($0) |
+| Summarize, analyze, or reason about data | `goose schedule` ($$) |
+| Morning briefing with curated insights | `goose schedule` ($$) |
 
-### When to use script jobs vs AI jobs
-
-| Use case | Job type |
-|----------|----------|
-| Fetch data from an API and notify | Script job ($0) |
-| Scrape a URL and send raw output | Script job ($0) |
-| Health check / uptime ping | Script job ($0) |
-| Cost monitoring via API | Script job ($0) |
-| Summarize, analyze, or reason about data | AI job (goose schedule) |
-| Morning briefing with curated insights | AI job (goose schedule) |
-| Anything requiring judgment or writing | AI job (goose schedule) |
-
-### Creating a script job
-
-Via gateway API:
-```bash
-curl -s -X POST http://localhost:8080/api/script-jobs \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "cost-check",
-    "command": "curl -s https://api.example.com/costs | notify",
-    "cron": "0 */6 * * *",
-    "enabled": true
-  }'
-```
-
-### API endpoints
+### Job API endpoints
 
 | method | path | what it does |
 |--------|------|-------------|
-| GET | /api/script-jobs | list all script jobs |
-| POST | /api/script-jobs | create a new script job |
-| DELETE | /api/script-jobs/`<id>` | delete a script job |
-| POST | /api/script-jobs/`<id>`/run | manually trigger a script job now |
+| GET | /api/jobs | list all jobs |
+| POST | /api/jobs | create a job |
+| DELETE | /api/jobs/`<id>` | delete/cancel a job |
+| POST | /api/jobs/`<id>`/run | trigger a job immediately |
 
-### Job format
+### Job types
 
-```json
-{
-  "id": "auto-generated-uuid",
-  "name": "cost-check",
-  "command": "curl -s https://api.example.com/costs | notify",
-  "cron": "0 */6 * * *",
-  "enabled": true,
-  "timeout": 120,
-  "last_run": null
-}
+**Script** (`type: "script"`): runs a shell command.
+```bash
+job create "cost-check" --run "curl -s https://api.example.com/costs | notify" --cron "0 */6 * * *"
 ```
 
-- `command`: any shell command. pipe through `notify` to deliver output to user.
-- `cron`: standard 5-field cron expression (min hour dom month dow).
-- `timeout`: max seconds the command can run (default 120). killed if exceeded.
-- `enabled`: set to false to pause without deleting.
-- persists to /data/script_jobs.json. survives container restarts.
-- max 5 concurrent script jobs at once.
+**Reminder** (`type: "reminder"`): sends text via notify_all.
+```bash
+remind "drink water" --every 1h
+```
+
+- max 5 concurrent jobs at once.
+- `timeout_seconds`: max seconds a script can run (default 300). killed if exceeded.
 
 ## Research Tools (MCP, always available)
 
@@ -208,9 +188,9 @@ Review these before major tasks to avoid repeating past mistakes.
 
 | Layer | File | When loaded | Token cost |
 |-------|------|-------------|------------|
-| Session start | .goosehints (inlines soul.md, user.md, tools.md, memory.md, heartbeat.md, persistent-instructions.md) | once per session | heavier but one-time |
+| Session start | .goosehints (inlines soul.md, user.md, tools.md, memory.md, persistent-instructions.md) | once per session | heavier but one-time |
 | Every turn | turn-rules.md via MOIM | every message | slim (~100 lines) |
-| Every turn | MOIM text | every message | 1 line (remind CLI mandate) |
+| Every turn | MOIM text | every message | 1 line (job/remind CLI mandate) |
 
 Session context has full procedures (onboarding, integrations, scheduling).
 Per-turn rules have only critical guards (file protection, self-improvement triggers, remind mandate).
@@ -227,6 +207,5 @@ All identity and memory files live at /data/identity/:
 | tools.md | platform reference (this file) | developer only | LOCKED |
 | persistent-instructions.md | full procedures and flows | developer only | LOCKED |
 | turn-rules.md | critical per-turn rules | developer only | LOCKED |
-| heartbeat.md | proactive behaviors | agent (scheduled behaviors) | structure-locked |
 | journal/ | session summaries | agent | append only |
 | learnings/ | errors, corrections, feature requests | agent | append only |

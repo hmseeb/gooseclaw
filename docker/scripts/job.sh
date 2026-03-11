@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# remind.sh — convenience wrapper for text reminders via the job engine.
+# job.sh — unified job system (reminders + scripts) via the gateway API.
 #
 # usage:
-#   remind "drink water" --in 5m          # one-shot, fires in 5 minutes
-#   remind "standup" --at "09:00"         # one-shot, fires at next 09:00
-#   remind "drink water" --every 1h       # recurring every hour
-#   remind list                           # list active jobs (all types)
-#   remind cancel <id>                    # cancel a job by ID
+#   job create "cost-check" --run "curl -s api/costs | notify" --every 1h
+#   job create "health" --run "curl -s api/health" --cron "0 9 * * 1-5"
+#   job create "deploy-check" --run "check-deploy.sh" --in 5m
+#   job list                        # list active jobs
+#   job cancel <id>                 # cancel/delete a job by ID
+#   job run <id>                    # trigger a job immediately
 #
-# thin wrapper over `job`. creates reminder-type jobs via /api/jobs.
+# the gateway handles scheduling and delivery. no goose sessions involved.
 
 set -euo pipefail
 
@@ -100,6 +101,7 @@ for j in data.get('jobs', []):
 
 cmd_cancel() {
     local jid="$1"
+    # if short ID provided, try to match against full IDs
     if [[ ${#jid} -lt 36 ]]; then
         FULL_ID=$(curl -s "$API_URL" 2>/dev/null | python3 -c "
 import sys, json
@@ -121,23 +123,57 @@ for j in data.get('jobs', []):
     DELETED=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('deleted', False))" 2>/dev/null || echo "False")
 
     if [[ "$DELETED" == "True" ]]; then
-        echo "[remind] cancelled"
+        echo "[job] deleted"
     else
-        echo "[remind] failed: $RESPONSE" >&2
+        echo "[job] failed: $RESPONSE" >&2
+        exit 1
+    fi
+}
+
+cmd_run() {
+    local jid="$1"
+    if [[ ${#jid} -lt 36 ]]; then
+        FULL_ID=$(curl -s "$API_URL" 2>/dev/null | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+prefix = '$jid'
+for j in data.get('jobs', []):
+    if j['id'].startswith(prefix):
+        print(j['id'])
+        break
+" 2>/dev/null)
+        if [[ -z "$FULL_ID" ]]; then
+            echo "error: no job found matching '$jid'" >&2
+            exit 1
+        fi
+        jid="$FULL_ID"
+    fi
+
+    RESPONSE=$(curl -s -X POST "$API_URL/$jid/run" 2>/dev/null)
+    STARTED=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('started', False))" 2>/dev/null || echo "False")
+
+    if [[ "$STARTED" == "True" ]]; then
+        echo "[job] triggered"
+    else
+        echo "[job] failed: $RESPONSE" >&2
         exit 1
     fi
 }
 
 cmd_create() {
-    local text="$1"
-    shift
-
+    local name=""
+    local command=""
     local delay_seconds=""
     local fire_at=""
     local recurring_seconds=""
+    local cron_expr=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --run)
+                shift
+                command="$1"
+                ;;
             --in)
                 shift
                 delay_seconds=$(parse_duration "$1")
@@ -149,36 +185,62 @@ cmd_create() {
             --every)
                 shift
                 recurring_seconds=$(parse_duration "$1")
-                if [[ -z "$delay_seconds" ]] && [[ -z "$fire_at" ]]; then
-                    delay_seconds="$recurring_seconds"
-                fi
+                ;;
+            --cron)
+                shift
+                cron_expr="$1"
                 ;;
             *)
-                echo "error: unknown flag '$1'" >&2
-                exit 1
+                if [[ -z "$name" ]]; then
+                    name="$1"
+                else
+                    echo "error: unknown flag '$1'" >&2
+                    exit 1
+                fi
                 ;;
         esac
         shift
     done
 
-    if [[ -z "$delay_seconds" ]] && [[ -z "$fire_at" ]]; then
-        echo "error: must specify --in <duration>, --at <HH:MM>, or --every <interval>" >&2
+    if [[ -z "$name" ]]; then
+        echo "error: job name is required" >&2
         exit 1
     fi
 
-    PAYLOAD=$(_TEXT="$text" _DELAY="$delay_seconds" _FIREAT="$fire_at" _RECUR="$recurring_seconds" python3 -c "
+    if [[ -z "$command" ]]; then
+        echo "error: --run <command> is required" >&2
+        exit 1
+    fi
+
+    if [[ -z "$delay_seconds" ]] && [[ -z "$fire_at" ]] && [[ -z "$recurring_seconds" ]] && [[ -z "$cron_expr" ]]; then
+        echo "error: must specify a schedule: --in, --at, --every, or --cron" >&2
+        exit 1
+    fi
+
+    # if --every but no --in/--at, fire first one after the interval
+    if [[ -n "$recurring_seconds" ]] && [[ -z "$delay_seconds" ]] && [[ -z "$fire_at" ]] && [[ -z "$cron_expr" ]]; then
+        delay_seconds="$recurring_seconds"
+    fi
+
+    PAYLOAD=$(_NAME="$name" _CMD="$command" _DELAY="$delay_seconds" _FIREAT="$fire_at" _RECUR="$recurring_seconds" _CRON="$cron_expr" python3 -c "
 import json, os
-text = os.environ['_TEXT']
-d = {'type': 'reminder', 'text': text, 'name': text[:80]}
+d = {
+    'type': 'script',
+    'name': os.environ['_NAME'],
+    'command': os.environ['_CMD'],
+}
 ds = os.environ.get('_DELAY', '')
 fa = os.environ.get('_FIREAT', '')
 rs = os.environ.get('_RECUR', '')
+cr = os.environ.get('_CRON', '')
 if ds:
     d['delay_seconds'] = int(ds)
 elif fa:
     d['fire_at'] = float(fa)
 if rs:
     d['recurring_seconds'] = int(rs)
+if cr:
+    d['cron'] = cr
 print(json.dumps(d))
 ")
 
@@ -189,16 +251,21 @@ print(json.dumps(d))
     CREATED=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('created', False))" 2>/dev/null || echo "False")
 
     if [[ "$CREATED" == "True" ]]; then
-        FIRES_AT=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('fires_at_human', '?'))" 2>/dev/null)
-        FIRES_IN=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('fires_in_seconds', '?'))" 2>/dev/null)
-        RID=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['job']['id'][:8])" 2>/dev/null)
-        if [[ -n "$recurring_seconds" ]]; then
-            echo "[remind] recurring: \"$text\" — first fires $FIRES_AT (in ${FIRES_IN}s), repeats every ${recurring_seconds}s [$RID]"
+        JID=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['job']['id'][:8])" 2>/dev/null)
+        SCHED=""
+        if [[ -n "$cron_expr" ]]; then
+            SCHED="cron=$cron_expr"
         else
-            echo "[remind] set: \"$text\" — fires $FIRES_AT (in ${FIRES_IN}s) [$RID]"
+            FIRES_AT=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('fires_at_human', '?'))" 2>/dev/null)
+            FIRES_IN=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('fires_in_seconds', '?'))" 2>/dev/null)
+            SCHED="fires $FIRES_AT (in ${FIRES_IN}s)"
         fi
+        if [[ -n "$recurring_seconds" ]]; then
+            SCHED="$SCHED, repeats every ${recurring_seconds}s"
+        fi
+        echo "[job] created: \"$name\" — $SCHED [$JID]"
     else
-        echo "[remind] failed: $RESPONSE" >&2
+        echo "[job] failed: $RESPONSE" >&2
         exit 1
     fi
 }
@@ -207,11 +274,13 @@ print(json.dumps(d))
 
 if [[ $# -eq 0 ]]; then
     echo "usage:"
-    echo "  remind \"message\" --in 5m         # fire in 5 minutes"
-    echo "  remind \"message\" --at 09:00      # fire at next 09:00"
-    echo "  remind \"message\" --every 1h      # recurring every hour"
-    echo "  remind list                       # list all jobs"
-    echo "  remind cancel <id>                # cancel by ID (first 8 chars ok)"
+    echo "  job create \"name\" --run \"command\" --every 1h    # recurring script"
+    echo "  job create \"name\" --run \"command\" --cron \"0 9 * * 1-5\"  # cron schedule"
+    echo "  job create \"name\" --run \"command\" --in 5m       # one-shot in 5 minutes"
+    echo "  job create \"name\" --run \"command\" --at 09:00    # one-shot at time"
+    echo "  job list                                         # list active jobs"
+    echo "  job cancel <id>                                  # cancel by ID (first 8 chars ok)"
+    echo "  job run <id>                                     # trigger immediately"
     exit 0
 fi
 
@@ -221,16 +290,24 @@ case "$1" in
         ;;
     cancel)
         if [[ -z "${2:-}" ]]; then
-            echo "usage: remind cancel <id>" >&2
+            echo "usage: job cancel <id>" >&2
             exit 1
         fi
         cmd_cancel "$2"
         ;;
-    *)
-        if [[ $# -lt 2 ]]; then
-            echo "error: need a message and a time flag (--in, --at, or --every)" >&2
+    run)
+        if [[ -z "${2:-}" ]]; then
+            echo "usage: job run <id>" >&2
             exit 1
         fi
+        cmd_run "$2"
+        ;;
+    create)
+        shift
         cmd_create "$@"
+        ;;
+    *)
+        echo "error: unknown command '$1'. use: create, list, cancel, run" >&2
+        exit 1
         ;;
 esac

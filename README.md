@@ -86,7 +86,6 @@ the setup wizard handles provider configuration, so no env vars are required for
 │  │   ├── user.md       ← your profile     │
 │  │   ├── tools.md      ← capabilities     │
 │  │   ├── memory.md     ← learned facts    │
-│  │   ├── heartbeat.md  ← proactive rules  │
 │  │   └── journal/      ← daily logs       │
 │  ├── recipes/          ← scheduled tasks  │
 │  ├── config/           ← goose config     │
@@ -104,7 +103,6 @@ inspired by [OpenClaw](https://github.com/openclaw)'s bootstrap pattern. identit
 | `user.md` | your name, role, timezone, preferences | onboarding, then you |
 | `tools.md` | platform info | template |
 | `memory.md` | long-term facts learned over time | agent |
-| `heartbeat.md` | proactive behaviors | onboarding, then you |
 | `journal/` | daily session logs | agent |
 
 ### onboarding
@@ -117,7 +115,7 @@ on first message, the agent detects that identity files haven't been configured 
 4. how should I talk to you?
 5. what do you want help with?
 
-answers are written to `soul.md`, `user.md`, and `heartbeat.md`. subsequent messages use the populated identity.
+answers are written to `soul.md` and `user.md`. subsequent messages use the populated identity.
 
 ### persistence
 
@@ -167,7 +165,6 @@ cat /data/identity/soul.md
 for deeper customization, fork this repo and modify:
 
 - `identity/persistent-instructions.md` (always-on agent instructions)
-- `identity/heartbeat.md` (proactive behavior definitions)
 
 ## credits
 

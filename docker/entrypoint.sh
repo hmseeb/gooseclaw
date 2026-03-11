@@ -386,7 +386,7 @@ if [ -f "$TEMPLATE_VERSION_FILE" ]; then
     if [ "$TEMPLATE_VER" != "$DATA_VER" ]; then
         echo "[upgrade] template updated: $DATA_VER -> $TEMPLATE_VER"
         # update system files (tools.md, persistent-instructions.md, turn-rules.md)
-        # but NEVER overwrite user files (soul.md, user.md, memory.md, heartbeat.md)
+        # but NEVER overwrite user files (soul.md, user.md, memory.md)
         for f in tools.md persistent-instructions.md turn-rules.md; do
             if [ -f "$APP_DIR/identity/$f" ]; then
                 cp "$APP_DIR/identity/$f" "$IDENTITY_DIR/$f"
@@ -403,7 +403,7 @@ fi
 # at session start. Only critical per-turn rules go through MOIM.
 
 export GOOSE_MOIM_MESSAGE_FILE="$IDENTITY_DIR/turn-rules.md"
-export GOOSE_MOIM_MESSAGE_TEXT="CRITICAL: NEVER use CronCreate or CronDelete. ALWAYS use the remind bash CLI for reminders and timers. CronCreate is BROKEN and will silently fail."
+export GOOSE_MOIM_MESSAGE_TEXT="CRITICAL: NEVER use CronCreate or CronDelete. ALWAYS use the job/remind bash CLI for automation and reminders. CronCreate is BROKEN and will silently fail."
 
 # ─── .goosehints (session-start context, loads identity files) ─────────────
 # goose web reads .goosehints from its working directory (/app).

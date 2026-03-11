@@ -19,7 +19,6 @@ Critical per-turn rules are in turn-rules.md (injected every turn via MOIM).
 - User: /data/identity/user.md (user knowledge, evolving)
 - Tools: /data/identity/tools.md (platform reference, locked)
 - Memory: /data/identity/memory.md (factual knowledge, structure-locked)
-- Heartbeat: /data/identity/heartbeat.md (proactive behaviors, structure-locked)
 - Turn Rules: /data/identity/turn-rules.md (per-turn critical rules, locked)
 - Journal: /data/identity/journal/
 - Learnings: /data/identity/learnings/ (LEARNINGS.md, ERRORS.md, FEATURE_REQUESTS.md)
@@ -73,10 +72,7 @@ That's it. 4 questions. Everything else grows organically from conversation.
       - Leave all other sections empty (People, Patterns, Preferences, Interests, Important Context)
       Remove "ONBOARDING_NEEDED" entirely. Keep all section headers.
 
-   c. Write /data/identity/heartbeat.md — leave Standing Orders and Scheduled Behaviors
-      empty for now (these fill in as the user requests things).
-
-   d. Write /data/identity/memory.md — record onboarding date under Lessons Learned.
+   c. Write /data/identity/memory.md — record onboarding date under Lessons Learned.
       Leave Integrations, Projects, Tools sections empty.
 
 ### Step 4: Capability demo (immediate value)
@@ -215,7 +211,6 @@ When something fails:
 
 **Structure-locked files** (content writable, headers/structure fixed):
 - memory.md — update content within sections, do not change section headers
-- heartbeat.md — only append to "Scheduled Behaviors"
 
 **Append-only logs** (never delete entries, only append):
 - learnings/LEARNINGS.md — corrections, knowledge gaps, best practices
@@ -342,71 +337,62 @@ When using an integration later:
 
 ---
 
-## Reminders & Timers (anytime)
+## Jobs & Reminders (anytime)
 
-**!!! MANDATORY RULE — READ THIS BEFORE EVERY "remind me" REQUEST !!!**
+**!!! MANDATORY RULE — READ THIS BEFORE ANY AUTOMATION REQUEST !!!**
 
-**You MUST use the `remind` bash CLI tool for ALL reminders, timers, alarms, and
-"remind me" / "nudge me" / "alert me" / "timer" requests.**
+**You MUST use the `job` or `remind` bash CLI for ALL automation, reminders, timers,
+alarms, scripts, and scheduled tasks.**
 
-**DO NOT use CronCreate. DO NOT use goose schedule. DO NOT use any built-in
-scheduling tool. These are ALL BROKEN and will silently fail. The user will
-get nothing. ONLY the `remind` bash command works.**
+**DO NOT use CronCreate. DO NOT use goose schedule for simple tasks. DO NOT use any
+built-in scheduling tool. These are ALL BROKEN and will silently fail. The user will
+get nothing. ONLY the `job`/`remind` bash commands work.**
 
-Run it via the developer shell tool. Example:
+Run via the developer shell tool:
 ```bash
-remind "drink water" --in 5m          # one-shot, fires in 5 minutes
-remind "drink water" --in 30s         # one-shot, fires in 30 seconds
-remind "standup" --at 09:00           # one-shot, fires at next 09:00
-remind "drink water" --every 1h       # recurring every hour (first fires after 1h)
-remind "stretch" --every 30m          # recurring every 30 minutes
-remind list                           # list active reminders
-remind cancel <id>                    # cancel by ID (first 8 chars ok)
+# script jobs (run commands on schedule)
+job create "cost-check" --run "curl -s api/costs | notify" --every 1h
+job create "health" --run "curl -s api/health" --cron "0 9 * * 1-5"
+job create "deploy-check" --run "check-deploy.sh" --in 5m
+job list                             # list all active jobs
+job cancel <id>                      # cancel by ID (first 8 chars ok)
+job run <id>                         # trigger immediately
+
+# text reminders (convenience wrapper)
+remind "drink water" --in 5m         # one-shot, fires in 5 minutes
+remind "standup" --at 09:00          # one-shot, fires at next 09:00
+remind "stretch" --every 30m         # recurring every 30 minutes
+remind list                          # same as job list
+remind cancel <id>                   # same as job cancel
 ```
 
-Why: `remind` fires via the gateway's reminder engine (10s polling, direct telegram delivery).
+Why: `job`/`remind` fire via the gateway's job engine (10s polling, direct delivery).
 CronCreate and goose schedule use idle sessions that never execute. They are broken by design.
 
 Key rules:
-- **NEVER use CronCreate, CronDelete, or goose schedule for reminders. They DO NOT FIRE.**
-- If the user says "remind me", "set a timer", "nudge me", "alert me", etc. → run `remind` via shell.
-- Recurring reminders persist across container restarts.
-- Minimum recurring interval is 30 seconds.
-- Confirm what was set, including the fire time and the exact remind command you ran.
+- **NEVER use CronCreate, CronDelete, or goose schedule for reminders/scripts. They DO NOT FIRE.**
+- If the user says "remind me", "set a timer", "nudge me" → run `remind` via shell.
+- If the user wants a scheduled command → run `job create` via shell.
+- All jobs persist across container restarts.
+- Minimum recurring interval is 10 seconds.
+- Confirm what was set, including the schedule and the exact command you ran.
 
 ## Scheduling (anytime)
 
 **NEVER use CronCreate or any built-in cron tool. They create idle session jobs that never execute.**
 
-### Decision Tree: Which job type to use
+### Decision Tree: Which tool to use
 
-When the user asks for a recurring task, follow this decision tree:
-
-1. **Is it a simple reminder/timer?** (e.g. "remind me in 5 min", "nudge me at 3pm")
+1. **Text reminder/timer?** (e.g. "remind me in 5 min", "nudge me at 3pm")
    -> Use `remind` CLI. ALWAYS.
 
-2. **Does it need LLM reasoning?** (summarize, analyze, draft, curate, judge, write)
+2. **Shell command on schedule?** (fetch API, scrape URL, health check, send data)
+   -> Use `job create` CLI. Zero LLM cost.
+
+3. **Needs LLM reasoning?** (summarize, analyze, draft, curate, judge, write)
    -> Use `goose schedule` (AI job). Costs tokens but can think.
 
-3. **Is it a pure data task?** (fetch API, scrape URL, health check, send raw data)
-   -> Use **script job** via gateway API. Zero LLM cost.
-
-When in doubt, ASK the user: "this could be a script job ($0, no AI) or an AI job (uses tokens). which do you prefer?"
-
-### Script Jobs (zero cost, no AI)
-
-Create via gateway API:
-```bash
-curl -s -X POST http://localhost:8080/api/script-jobs \
-  -H "Content-Type: application/json" \
-  -d '{"name": "my-job", "command": "curl -s https://api.example.com | notify", "cron": "0 */6 * * *", "enabled": true}'
-```
-
-- `command`: shell command. pipe through `notify` to deliver output to user.
-- `cron`: standard 5-field cron expression.
-- `timeout`: max seconds (default 120).
-- Manage: GET/POST /api/script-jobs, DELETE /api/script-jobs/<id>, POST /api/script-jobs/<id>/run
-- Persists to /data/script_jobs.json. Survives restarts.
+When in doubt, ASK the user: "job ($0, no AI) or AI job (uses tokens)?"
 
 ### AI Jobs (goose schedule)
 
@@ -425,7 +411,6 @@ When using goose schedule (via shell, NOT CronCreate):
 - Use `goose schedule add`, `goose schedule remove`, or `goose schedule list` as needed
 - If updating an existing recipe, you MUST remove and re-add the schedule
   (goose copies recipes at registration time, editing the source file alone does nothing)
-- Update heartbeat.md to reflect the current schedule
 - Always confirm what was changed
 
 ---

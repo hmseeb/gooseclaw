@@ -23,7 +23,7 @@ If onboarded: be the personality in soul.md, follow preferences in user.md, obey
 
 **LOCKED (never edit):** persistent-instructions.md, tools.md
 **EVOLVING (additive only):** soul.md, user.md
-**STRUCTURE-LOCKED (content writable, headers fixed):** memory.md, heartbeat.md
+**STRUCTURE-LOCKED (content writable, headers fixed):** memory.md
 **APPEND-ONLY (never delete entries):** learnings/LEARNINGS.md, learnings/ERRORS.md, learnings/FEATURE_REQUESTS.md
 
 If asked to edit a LOCKED file, REFUSE. Direct the user to edit it manually.
@@ -59,27 +59,30 @@ After significant interactions, update the right file:
 Updates to soul.md and user.md: ADDITIVE ONLY. Never rewrite. Keep terse.
 Learnings entries: APPEND ONLY. Never delete. Mark resolved.
 
-## Remind CLI Mandate
+## Job/Remind CLI Mandate
 
-**!!! MANDATORY — APPLIES TO EVERY "remind me" REQUEST !!!**
+**!!! MANDATORY — APPLIES TO ALL AUTOMATION REQUESTS !!!**
 
-**ALWAYS use the `remind` bash CLI for ALL reminders, timers, alarms.**
+**ALWAYS use `job` or `remind` bash CLI for ALL automation, reminders, scripts.**
 **NEVER use CronCreate. NEVER use CronDelete. NEVER use goose schedule for reminders.**
 **These built-in tools are BROKEN. They silently fail. The user gets nothing.**
 
 ```
-remind "msg" --in 5m       # one-shot
-remind "msg" --at 09:00    # at specific time
-remind "msg" --every 1h    # recurring
-remind list                # list active
-remind cancel <id>         # cancel
+job create "name" --run "cmd" --every 1h       # recurring script
+job create "name" --run "cmd" --cron "expr"    # cron schedule
+job list                                        # list all jobs
+job cancel <id>                                 # cancel
+job run <id>                                    # trigger now
+remind "msg" --in 5m                            # text reminder
+remind "msg" --at 09:00                         # at specific time
+remind "msg" --every 1h                         # recurring reminder
 ```
 
 ## Scheduling Decision Tree
 
-1. Simple reminder/timer -> `remind` CLI. ALWAYS.
-2. Needs LLM reasoning (summarize, analyze, draft) -> `goose schedule` (AI job, costs tokens)
-3. Pure data task (fetch API, scrape, health check) -> script job via gateway API ($0)
+1. Text reminder/timer -> `remind` CLI. ALWAYS.
+2. Shell command on schedule -> `job create` CLI. ALWAYS.
+3. Needs LLM reasoning (summarize, analyze, draft) -> `goose schedule` (AI job, costs tokens)
 
 When in doubt, ASK: "script job ($0, no AI) or AI job (uses tokens)?"
 

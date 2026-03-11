@@ -7,12 +7,12 @@ on an internal port. Manages the goose web subprocess lifecycle.
 
 Architecture:
   - notification bus: channel-agnostic delivery. telegram/slack/whatsapp register
-    handlers via register_notification_handler(). scheduler, reminders, and session
+    handlers via register_notification_handler(). scheduler, job engine, and session
     watcher all deliver through notify_all() without knowing which channels are active.
   - cron scheduler: reads goose schedule.json, fires jobs in isolated goose web
     sessions, delivers output via notify_all(). replaces goose's built-in scheduler
     which only runs inside `goose gateway` (not `goose web`).
-  - reminder engine: lightweight timers (no AI). 10s tick, direct delivery.
+  - job engine: unified timer + script runner. 10s tick, zero LLM cost.
   - session watcher: polls goose web for scheduled session output, forwards via notify.
 
 API:
@@ -26,15 +26,12 @@ API:
   GET  /api/telegram/status  -> telegram gateway status, paired users, pairing code
   POST /api/telegram/pair    -> generate a new telegram pairing code
   POST /api/auth/recover     -> reset auth token using GOOSECLAW_RECOVERY_SECRET
-  GET  /api/reminders         -> list active reminders
-  POST /api/reminders         -> create a new reminder (delay_seconds or fire_at)
-  DELETE /api/reminders/<id>  -> cancel a reminder
+  GET  /api/jobs              -> list all jobs (reminders + scripts)
+  POST /api/jobs              -> create a job
+  DELETE /api/jobs/<id>       -> cancel/delete a job
+  POST /api/jobs/<id>/run     -> manually trigger a job
   GET  /api/channels          -> list loaded channel plugins
   POST /api/channels/reload   -> hot-reload channel plugins from /data/channels/
-  GET  /api/script-jobs        -> list all script jobs
-  POST /api/script-jobs        -> create a new script job
-  DELETE /api/script-jobs/<id> -> delete a script job
-  POST /api/script-jobs/<id>/run -> manually trigger a script job
 """
 
 import base64
@@ -137,7 +134,7 @@ _telegram_sessions_lock = threading.Lock()
 #
 # Any channel (telegram, slack, whatsapp, etc.) registers a handler via
 # register_notification_handler(). All delivery goes through notify_all().
-# The scheduler, reminder engine, and session watcher don't know or care
+# The scheduler, job engine, and session watcher don't know or care
 # which channels are active.
 #
 # Handler signature: handler_fn(text) -> {"sent": bool, "error": str}
@@ -173,11 +170,13 @@ _session_watcher_state_file = os.path.join(DATA_DIR, "session_watcher_state.json
 _session_watcher_state = {}   # session_id -> {"forwarded_count": int, "schedule_id": str}
 _session_watcher_lock = threading.Lock()
 
-# ── reminder engine state ──────────────────────────────────────────────────
-_reminders_file = os.path.join(DATA_DIR, "reminders.json")
-_reminders = []        # list of reminder dicts
-_reminders_lock = threading.Lock()
-_reminder_engine_running = False
+# ── job engine state ───────────────────────────────────────────────────────
+_JOBS_FILE = os.path.join(DATA_DIR, "jobs.json")
+_JOBS_TICK_SECONDS = 10
+_MAX_CONCURRENT_JOBS = 5
+_jobs = []             # list of job dicts
+_jobs_lock = threading.Lock()
+_job_engine_running = False
 
 # ── goose web startup state ─────────────────────────────────────────────────
 goose_startup_state = {
@@ -1297,216 +1296,220 @@ def _save_telegram_sessions():
         print(f"[telegram] warn: could not save sessions: {e}")
 
 
-# ── reminder engine ──────────────────────────────────────────────────────────
+# ── job engine (unified timer + script runner) ────────────────────────────
 #
-# Lightweight timer system that bypasses goose's scheduler entirely.
-# Background thread checks every 10s, fires notify_all() when due.
-# Supports one-shot and recurring reminders. Persists to /data/reminders.json.
-#
-# Reminder dict shape:
-#   {
-#     "id": str (uuid4),
-#     "text": str,
-#     "fire_at": float (unix timestamp),
-#     "created_at": float,
-#     "recurring_seconds": int or None,
-#     "fired": bool,
-#   }
-
-def _load_reminders():
-    """Load reminders from disk."""
-    global _reminders
-    try:
-        if os.path.exists(_reminders_file):
-            with open(_reminders_file) as f:
-                data = json.load(f)
-            if isinstance(data, list):
-                with _reminders_lock:
-                    _reminders = data
-                active = sum(1 for r in data if not r.get("fired"))
-                print(f"[remind] loaded {len(data)} reminder(s) ({active} active)")
-    except Exception as e:
-        print(f"[remind] warn: could not load reminders: {e}")
-
-
-def _save_reminders():
-    """Persist reminders to disk (atomic write)."""
-    with _reminders_lock:
-        data = list(_reminders)
-    try:
-        os.makedirs(os.path.dirname(_reminders_file), exist_ok=True)
-        tmp = _reminders_file + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(data, f, indent=2)
-        os.replace(tmp, _reminders_file)
-    except Exception as e:
-        print(f"[remind] warn: could not save reminders: {e}")
-
-
-def create_reminder(text, fire_at, recurring_seconds=None):
-    """Create a new reminder. Returns the reminder dict."""
-    reminder = {
-        "id": str(uuid.uuid4()),
-        "text": text,
-        "fire_at": fire_at,
-        "created_at": time.time(),
-        "recurring_seconds": recurring_seconds,
-        "fired": False,
-    }
-    with _reminders_lock:
-        _reminders.append(reminder)
-    _save_reminders()
-    print(f"[remind] created: '{text}' fires at {time.strftime('%H:%M:%S', time.localtime(fire_at))}"
-          + (f" (every {recurring_seconds}s)" if recurring_seconds else " (one-shot)"))
-    return reminder
-
-
-def cancel_reminder(reminder_id):
-    """Cancel a reminder by ID. Returns True if found and cancelled."""
-    with _reminders_lock:
-        for r in _reminders:
-            if r["id"] == reminder_id and not r.get("fired"):
-                r["fired"] = True
-                _save_reminders()
-                print(f"[remind] cancelled: {reminder_id}")
-                return True
-    return False
-
-
-def list_active_reminders():
-    """Return list of active (unfired) reminders."""
-    with _reminders_lock:
-        return [r for r in _reminders if not r.get("fired")]
-
-
-def _reminder_engine_loop():
-    """Background loop: check reminders every 10s, fire when due."""
-    global _reminder_engine_running
-    _reminder_engine_running = True
-    print("[remind] engine started (10s tick)")
-
-    while _reminder_engine_running:
-        now = time.time()
-        to_fire = []
-        changed = False
-
-        with _reminders_lock:
-            for r in _reminders:
-                if r.get("fired"):
-                    continue
-                if r["fire_at"] <= now:
-                    to_fire.append(dict(r))
-                    if r.get("recurring_seconds"):
-                        # advance to next fire time (skip missed ticks)
-                        interval = r["recurring_seconds"]
-                        while r["fire_at"] <= now:
-                            r["fire_at"] += interval
-                        changed = True
-                    else:
-                        r["fired"] = True
-                        changed = True
-
-        # fire outside the lock
-        for r in to_fire:
-            try:
-                emoji = "🔔" if not r.get("recurring_seconds") else "🔁"
-                msg = f"{emoji} Reminder: {r['text']}"
-                result = notify_all(msg)
-                if result.get("sent"):
-                    print(f"[remind] fired: '{r['text']}'")
-                else:
-                    print(f"[remind] delivery failed: {result.get('error', '?')}")
-            except Exception as e:
-                print(f"[remind] error firing reminder: {e}")
-
-        if changed:
-            _save_reminders()
-
-        # prune old fired reminders (> 24h)
-        cutoff = now - 86400
-        with _reminders_lock:
-            before = len(_reminders)
-            _reminders[:] = [
-                r for r in _reminders
-                if not r.get("fired") or r.get("fire_at", 0) > cutoff
-            ]
-            if len(_reminders) < before:
-                changed = True
-        if changed:
-            _save_reminders()
-
-        # sleep 10s, checking shutdown every 2s
-        for _ in range(5):
-            if not _reminder_engine_running:
-                break
-            time.sleep(2)
-
-    print("[remind] engine stopped")
-
-
-def start_reminder_engine():
-    """Start the reminder engine daemon thread."""
-    global _reminder_engine_running
-    if _reminder_engine_running:
-        return
-    _load_reminders()
-    threading.Thread(target=_reminder_engine_loop, daemon=True).start()
-
-
-# ── script job engine (zero-LLM subprocess runner) ───────────────────────────
-#
-# Runs Python/bash scripts as subprocesses on cron schedules.
-# Zero LLM cost. Output captured and delivered via notify_all().
-# Persists to /data/script_jobs.json.
+# Single engine handling both text reminders and script jobs.
+# Text reminders fire via notify_all() directly (no subprocess).
+# Script jobs run as subprocesses with timeout and output capture.
+# Supports cron expressions, one-shot timers, and recurring intervals.
+# Persists to /data/jobs.json. 10s tick.
 #
 # Job dict shape:
 #   {
-#     "id": str,                   # unique, kebab-case
+#     "id": str,                   # unique identifier
 #     "name": str,                 # human-readable label
-#     "command": str,              # shell command or script path
-#     "cron": str,                 # 5-field cron expression
+#     "type": "reminder"|"script", # determines execution path
+#     "text": str|null,            # reminder text (type=reminder)
+#     "command": str|null,         # shell command (type=script)
+#     "cron": str|null,            # 5-field cron expression
+#     "fire_at": float|null,       # unix timestamp for timer-based
+#     "recurring_seconds": int|null, # repeat interval (null = one-shot)
 #     "timeout_seconds": int,      # max execution time (default: 300)
-#     "enabled": bool,             # false = skip
-#     "notify": bool,              # true = send output via notify_all()
+#     "enabled": bool,
+#     "notify": bool,              # send output via notify_all()
 #     "notify_on_error_only": bool,# only notify on non-zero exit
 #     "last_run": str|null,        # ISO timestamp
-#     "last_status": str|null,     # "ok" | "error" | "timeout"
+#     "last_status": str|null,     # "ok"|"error"|"timeout"
 #     "last_output": str|null,     # truncated last output
 #     "currently_running": bool,
 #     "created_at": str,
+#     "fired": bool,               # true = one-shot completed
 #   }
 
-_SCRIPT_JOBS_FILE = os.path.join(DATA_DIR, "script_jobs.json")
-_SCRIPT_TICK_SECONDS = 30
-_MAX_CONCURRENT_SCRIPTS = 5
-_script_engine_running = False
 
-
-def _load_script_jobs():
-    """Read script_jobs.json. Returns list of job dicts."""
+def _load_jobs():
+    """Load jobs from disk."""
+    global _jobs
     try:
-        if os.path.exists(_SCRIPT_JOBS_FILE):
-            with open(_SCRIPT_JOBS_FILE) as f:
+        if os.path.exists(_JOBS_FILE):
+            with open(_JOBS_FILE) as f:
                 data = json.load(f)
             if isinstance(data, list):
-                return data
+                with _jobs_lock:
+                    _jobs = data
+                active = sum(1 for j in data if not j.get("fired") and j.get("enabled", True))
+                print(f"[jobs] loaded {len(data)} job(s) ({active} active)")
     except Exception as e:
-        print(f"[script] warn: could not load script_jobs.json: {e}")
-    return []
+        print(f"[jobs] warn: could not load jobs.json: {e}")
 
 
-def _save_script_jobs(jobs):
-    """Write script_jobs.json atomically."""
+def _save_jobs():
+    """Persist jobs to disk (atomic write)."""
+    with _jobs_lock:
+        data = list(_jobs)
     try:
-        tmp = _SCRIPT_JOBS_FILE + ".tmp"
+        os.makedirs(os.path.dirname(_JOBS_FILE), exist_ok=True)
+        tmp = _JOBS_FILE + ".tmp"
         with open(tmp, "w") as f:
-            json.dump(jobs, f, indent=2)
-        os.replace(tmp, _SCRIPT_JOBS_FILE)
+            json.dump(data, f, indent=2)
+        os.replace(tmp, _JOBS_FILE)
     except Exception as e:
-        print(f"[script] warn: could not save script_jobs.json: {e}")
+        print(f"[jobs] warn: could not save jobs.json: {e}")
 
 
-def _run_script_job(job):
+def _migrate_legacy_files():
+    """Migrate reminders.json and script_jobs.json into jobs.json on first run."""
+    migrated = False
+    reminders_file = os.path.join(DATA_DIR, "reminders.json")
+    script_jobs_file = os.path.join(DATA_DIR, "script_jobs.json")
+
+    # migrate reminders
+    if os.path.exists(reminders_file):
+        try:
+            with open(reminders_file) as f:
+                reminders = json.load(f)
+            if isinstance(reminders, list):
+                for r in reminders:
+                    job = {
+                        "id": r.get("id", str(uuid.uuid4())),
+                        "name": r.get("text", "reminder")[:80],
+                        "type": "reminder",
+                        "text": r.get("text", ""),
+                        "command": None,
+                        "cron": None,
+                        "fire_at": r.get("fire_at"),
+                        "recurring_seconds": r.get("recurring_seconds"),
+                        "timeout_seconds": 300,
+                        "enabled": True,
+                        "notify": True,
+                        "notify_on_error_only": False,
+                        "last_run": None,
+                        "last_status": None,
+                        "last_output": None,
+                        "currently_running": False,
+                        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(r.get("created_at", time.time()))),
+                        "fired": r.get("fired", False),
+                    }
+                    with _jobs_lock:
+                        _jobs.append(job)
+                print(f"[jobs] migrated {len(reminders)} reminder(s) from reminders.json")
+                migrated = True
+            os.rename(reminders_file, reminders_file + ".migrated")
+        except Exception as e:
+            print(f"[jobs] warn: could not migrate reminders.json: {e}")
+
+    # migrate script jobs
+    if os.path.exists(script_jobs_file):
+        try:
+            with open(script_jobs_file) as f:
+                scripts = json.load(f)
+            if isinstance(scripts, list):
+                for s in scripts:
+                    job = {
+                        "id": s.get("id", str(uuid.uuid4())),
+                        "name": s.get("name", s.get("id", "script")),
+                        "type": "script",
+                        "text": None,
+                        "command": s.get("command", ""),
+                        "cron": s.get("cron"),
+                        "fire_at": None,
+                        "recurring_seconds": None,
+                        "timeout_seconds": s.get("timeout_seconds", 300),
+                        "enabled": s.get("enabled", True),
+                        "notify": s.get("notify", True),
+                        "notify_on_error_only": s.get("notify_on_error_only", False),
+                        "last_run": s.get("last_run"),
+                        "last_status": s.get("last_status"),
+                        "last_output": s.get("last_output"),
+                        "currently_running": False,
+                        "created_at": s.get("created_at", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())),
+                        "fired": False,
+                    }
+                    if s.get("env"):
+                        job["env"] = s["env"]
+                    if s.get("working_dir"):
+                        job["working_dir"] = s["working_dir"]
+                    with _jobs_lock:
+                        _jobs.append(job)
+                print(f"[jobs] migrated {len(scripts)} script(s) from script_jobs.json")
+                migrated = True
+            os.rename(script_jobs_file, script_jobs_file + ".migrated")
+        except Exception as e:
+            print(f"[jobs] warn: could not migrate script_jobs.json: {e}")
+
+    if migrated:
+        _save_jobs()
+
+
+def create_job(job_data):
+    """Create a new job. Returns (job_dict, error_string)."""
+    job_id = job_data.get("id") or str(uuid.uuid4())
+
+    with _jobs_lock:
+        if any(j["id"] == job_id for j in _jobs):
+            return None, f"job with id '{job_id}' already exists"
+
+    job_type = job_data.get("type", "script")
+    if job_type == "reminder" and not job_data.get("text"):
+        return None, "text is required for reminder jobs"
+    if job_type == "script" and not job_data.get("command"):
+        return None, "command is required for script jobs"
+
+    job = {
+        "id": job_id,
+        "name": job_data.get("name", job_id),
+        "type": job_type,
+        "text": job_data.get("text"),
+        "command": job_data.get("command"),
+        "cron": job_data.get("cron"),
+        "fire_at": job_data.get("fire_at"),
+        "recurring_seconds": job_data.get("recurring_seconds"),
+        "timeout_seconds": job_data.get("timeout_seconds", 300),
+        "enabled": job_data.get("enabled", True),
+        "notify": job_data.get("notify", True),
+        "notify_on_error_only": job_data.get("notify_on_error_only", False),
+        "last_run": None,
+        "last_status": None,
+        "last_output": None,
+        "currently_running": False,
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "fired": False,
+    }
+    if job_data.get("env"):
+        job["env"] = job_data["env"]
+    if job_data.get("working_dir"):
+        job["working_dir"] = job_data["working_dir"]
+
+    with _jobs_lock:
+        _jobs.append(job)
+    _save_jobs()
+
+    sched = job.get("cron") or (f"fire_at={job.get('fire_at')}" if job.get("fire_at") else "")
+    if job.get("recurring_seconds"):
+        sched += f" (every {job['recurring_seconds']}s)"
+    print(f"[jobs] created: {job['name']} ({job_id}) {sched}")
+    return job, ""
+
+
+def delete_job(job_id):
+    """Delete/cancel a job by ID. Returns True if found."""
+    with _jobs_lock:
+        before = len(_jobs)
+        _jobs[:] = [j for j in _jobs if j["id"] != job_id]
+        found = len(_jobs) < before
+    if found:
+        _save_jobs()
+        print(f"[jobs] deleted: {job_id}")
+    return found
+
+
+def list_active_jobs():
+    """Return list of active (not fired, enabled) jobs."""
+    with _jobs_lock:
+        return [j for j in _jobs if not j.get("fired") and j.get("enabled", True)]
+
+
+def _run_script(job):
     """Execute a script job as a subprocess. Capture output, enforce timeout."""
     job_id = job.get("id", "unknown")
     job_name = job.get("name", job_id)
@@ -1515,7 +1518,7 @@ def _run_script_job(job):
     working_dir = job.get("working_dir", "/data")
     extra_env = job.get("env") or {}
 
-    print(f"[script] firing: {job_name} ({job_id})")
+    print(f"[jobs] firing script: {job_name} ({job_id})")
 
     env = dict(os.environ)
     env.update(extra_env)
@@ -1567,136 +1570,161 @@ def _run_script_job(job):
             msg = f"[{job_name}] {prefix}{full_output}"
             notify_all(msg)
 
-    print(f"[script] {job_name}: {status} ({len(full_output)} chars)")
+    print(f"[jobs] {job_name}: {status} ({len(full_output)} chars)")
     return status, full_output
 
 
-def _script_engine_loop():
-    """Background loop: check script_jobs.json every 30s, fire due jobs."""
-    global _script_engine_running
-    _script_engine_running = True
-    print(f"[script] engine started ({_SCRIPT_TICK_SECONDS}s tick)")
+def _fire_reminder(job):
+    """Fire a text reminder via notify_all. Returns (status, output)."""
+    text = job.get("text", job.get("name", ""))
+    emoji = "\U0001f501" if job.get("recurring_seconds") else "\U0001f514"
+    msg = f"{emoji} Reminder: {text}"
+    try:
+        result = notify_all(msg)
+        if result.get("sent"):
+            print(f"[jobs] fired reminder: '{text}'")
+            return "ok", msg
+        else:
+            print(f"[jobs] reminder delivery failed: {result.get('error', '?')}")
+            return "error", result.get("error", "delivery failed")
+    except Exception as e:
+        print(f"[jobs] reminder error: {e}")
+        return "error", str(e)
 
-    while _script_engine_running:
+
+def _job_engine_loop():
+    """Background loop: check jobs every 10s, fire when due."""
+    global _job_engine_running
+    _job_engine_running = True
+    print(f"[jobs] engine started ({_JOBS_TICK_SECONDS}s tick)")
+
+    while _job_engine_running:
         try:
-            jobs = _load_script_jobs()
-            now = time.localtime()
+            now = time.time()
+            now_local = time.localtime(now)
             save_needed = False
 
-            # count currently running to enforce concurrency limit
-            running_count = sum(1 for j in jobs if j.get("currently_running"))
+            with _jobs_lock:
+                jobs_snapshot = list(_jobs)
 
-            for job in jobs:
+            running_count = sum(1 for j in jobs_snapshot if j.get("currently_running"))
+
+            for job in jobs_snapshot:
                 if not job.get("enabled", True):
+                    continue
+                if job.get("fired"):
                     continue
                 if job.get("currently_running"):
                     continue
-                if running_count >= _MAX_CONCURRENT_SCRIPTS:
-                    print(f"[script] skip {job.get('id', '?')}: max concurrent ({_MAX_CONCURRENT_SCRIPTS}) reached")
-                    break
 
-                cron_expr = job.get("cron", "")
-                if not cron_expr:
+                should_fire = False
+
+                # check cron schedule
+                cron_expr = job.get("cron")
+                if cron_expr:
+                    if _cron_matches_now(cron_expr, now_local):
+                        # double-fire prevention
+                        last_run = job.get("last_run", "")
+                        if last_run:
+                            try:
+                                if "T" in last_run:
+                                    lr_time = last_run.split("T")[1][:5]
+                                    now_time = time.strftime("%H:%M", now_local)
+                                    if lr_time == now_time:
+                                        continue
+                            except Exception:
+                                pass
+                        should_fire = True
+
+                # check fire_at (timer-based)
+                fire_at = job.get("fire_at")
+                if fire_at and not cron_expr:
+                    if fire_at <= now:
+                        should_fire = True
+
+                if not should_fire:
                     continue
 
-                if not _cron_matches_now(cron_expr, now):
-                    continue
+                # script jobs: run in thread (may be slow)
+                if job.get("command"):
+                    if running_count >= _MAX_CONCURRENT_JOBS:
+                        print(f"[jobs] skip {job.get('id', '?')}: max concurrent ({_MAX_CONCURRENT_JOBS}) reached")
+                        break
 
-                # double-fire prevention
-                last_run = job.get("last_run", "")
-                if last_run:
-                    try:
-                        if "T" in last_run:
-                            lr_time = last_run.split("T")[1][:5]
-                            now_time = time.strftime("%H:%M", now)
-                            if lr_time == now_time:
-                                continue
-                    except Exception:
-                        pass
+                    job["currently_running"] = True
+                    running_count += 1
+                    save_needed = True
 
-                job["currently_running"] = True
-                running_count += 1
-                save_needed = True
+                    def _run_threaded(j):
+                        try:
+                            status, output = _run_script(j)
+                            j["last_status"] = status
+                            j["last_output"] = output[:500]
+                        finally:
+                            j["currently_running"] = False
+                            j["last_run"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                            # handle scheduling for next run
+                            if j.get("recurring_seconds") and j.get("fire_at"):
+                                while j["fire_at"] <= time.time():
+                                    j["fire_at"] += j["recurring_seconds"]
+                            elif j.get("fire_at") and not j.get("cron"):
+                                j["fired"] = True
+                            _save_jobs()
 
-                def _run(j, all_jobs):
-                    try:
-                        status, output = _run_script_job(j)
-                        j["last_status"] = status
-                        j["last_output"] = output[:500]
-                    finally:
-                        j["currently_running"] = False
-                        j["last_run"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                        _save_script_jobs(all_jobs)
+                    threading.Thread(target=_run_threaded, args=(job,), daemon=True).start()
 
-                threading.Thread(target=_run, args=(job, jobs), daemon=True).start()
+                else:
+                    # reminder: fire inline (instant, no subprocess)
+                    status, output = _fire_reminder(job)
+                    job["last_status"] = status
+                    job["last_output"] = output[:500]
+                    job["last_run"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+                    # handle scheduling for next run
+                    if job.get("recurring_seconds") and job.get("fire_at"):
+                        while job["fire_at"] <= now:
+                            job["fire_at"] += job["recurring_seconds"]
+                    elif job.get("fire_at") and not job.get("cron"):
+                        job["fired"] = True
+
+                    save_needed = True
 
             if save_needed:
-                _save_script_jobs(jobs)
+                _save_jobs()
+
+            # prune old fired one-shot jobs (> 24h)
+            cutoff = now - 86400
+            with _jobs_lock:
+                before = len(_jobs)
+                _jobs[:] = [
+                    j for j in _jobs
+                    if not j.get("fired") or (j.get("last_run") and j["last_run"] > time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(cutoff)))
+                ]
+                if len(_jobs) < before:
+                    save_needed = True
+            if save_needed:
+                _save_jobs()
 
         except Exception as e:
-            print(f"[script] error: {e}")
+            print(f"[jobs] error: {e}")
 
-        for _ in range(6):
-            if not _script_engine_running:
+        # sleep 10s, checking shutdown every 2s
+        for _ in range(5):
+            if not _job_engine_running:
                 break
-            time.sleep(5)
+            time.sleep(2)
 
-    print("[script] engine stopped")
+    print("[jobs] engine stopped")
 
 
-def start_script_engine():
-    """Start the script job engine daemon thread."""
-    global _script_engine_running
-    if _script_engine_running:
+def start_job_engine():
+    """Start the job engine daemon thread."""
+    global _job_engine_running
+    if _job_engine_running:
         return
-    threading.Thread(target=_script_engine_loop, daemon=True).start()
-
-
-def create_script_job(job_data):
-    """Create a new script job. Returns the job dict."""
-    jobs = _load_script_jobs()
-
-    # check for duplicate ID
-    job_id = job_data.get("id", "")
-    if any(j["id"] == job_id for j in jobs):
-        return None, f"job with id '{job_id}' already exists"
-
-    job = {
-        "id": job_id,
-        "name": job_data.get("name", job_id),
-        "command": job_data.get("command", ""),
-        "cron": job_data.get("cron", ""),
-        "timeout_seconds": job_data.get("timeout_seconds", 300),
-        "enabled": job_data.get("enabled", True),
-        "notify": job_data.get("notify", True),
-        "notify_on_error_only": job_data.get("notify_on_error_only", False),
-        "last_run": None,
-        "last_status": None,
-        "last_output": None,
-        "currently_running": False,
-        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-    }
-    if job_data.get("env"):
-        job["env"] = job_data["env"]
-    if job_data.get("working_dir"):
-        job["working_dir"] = job_data["working_dir"]
-
-    jobs.append(job)
-    _save_script_jobs(jobs)
-    print(f"[script] created: {job['name']} ({job_id}) cron={job['cron']}")
-    return job, ""
-
-
-def delete_script_job(job_id):
-    """Delete a script job by ID. Returns True if found."""
-    jobs = _load_script_jobs()
-    before = len(jobs)
-    jobs = [j for j in jobs if j["id"] != job_id]
-    if len(jobs) < before:
-        _save_script_jobs(jobs)
-        print(f"[script] deleted: {job_id}")
-        return True
-    return False
+    _load_jobs()
+    _migrate_legacy_files()
+    threading.Thread(target=_job_engine_loop, daemon=True).start()
 
 
 # ── cron scheduler (channel-agnostic, reads goose schedule.json) ─────────────
@@ -3208,12 +3236,10 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.handle_notify_status()
         elif path == "/api/telegram/status":
             self.handle_telegram_status()
-        elif path == "/api/reminders":
-            self.handle_list_reminders()
+        elif path == "/api/jobs":
+            self.handle_list_jobs()
         elif path == "/api/channels":
             self.handle_list_channels()
-        elif path == "/api/script-jobs":
-            self.handle_list_script_jobs()
         elif not is_configured():
             self.send_response(302)
             self.send_header("Location", "/setup")
@@ -3234,18 +3260,16 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.handle_telegram_pair()
         elif path == "/api/auth/recover":
             self.handle_auth_recover()
-        elif path == "/api/reminders":
-            self.handle_create_reminder()
-        elif path == "/api/channels/reload":
-            self.handle_reload_channels()
-        elif path == "/api/script-jobs":
-            self.handle_create_script_job()
-        elif path.startswith("/api/script-jobs/") and path.endswith("/run"):
-            job_id = path[len("/api/script-jobs/"):-len("/run")]
+        elif path == "/api/jobs":
+            self.handle_create_job()
+        elif path.startswith("/api/jobs/") and path.endswith("/run"):
+            job_id = path[len("/api/jobs/"):-len("/run")]
             if job_id:
-                self.handle_run_script_job(job_id)
+                self.handle_run_job(job_id)
             else:
                 self.proxy_to_goose()
+        elif path == "/api/channels/reload":
+            self.handle_reload_channels()
         else:
             self.proxy_to_goose()
 
@@ -3255,17 +3279,11 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
     def do_DELETE(self):
         self._request_start = time.time()
         path = urllib.parse.urlparse(self.path).path
-        # DELETE /api/reminders/<id>
-        if path.startswith("/api/reminders/"):
-            reminder_id = path[len("/api/reminders/"):]
-            if reminder_id:
-                self.handle_cancel_reminder(reminder_id)
-                return
-        # DELETE /api/script-jobs/<id>
-        if path.startswith("/api/script-jobs/"):
-            job_id = path[len("/api/script-jobs/"):]
+        # DELETE /api/jobs/<id>
+        if path.startswith("/api/jobs/"):
+            job_id = path[len("/api/jobs/"):]
             if job_id:
-                self.handle_delete_script_job(job_id)
+                self.handle_delete_job(job_id)
                 return
         self.proxy_to_goose()
 
@@ -3517,7 +3535,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                 time.sleep(1)
                 start_goose_web()
                 start_session_watcher()
-                start_reminder_engine()
+                start_job_engine()
                 start_cron_scheduler()
             threading.Thread(target=_restart, daemon=True).start()
 
@@ -3647,7 +3665,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         else:
             self.send_json(500, {"error": "could not generate pairing code. check logs.", "code": None})
 
-    # ── reminder endpoints ──
+    # ── job endpoints ──
 
     def _check_local_or_auth(self):
         """Allow localhost without auth, require auth for remote. Returns True if allowed."""
@@ -3662,16 +3680,24 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             return False
         return True
 
-    def handle_create_reminder(self):
-        """POST /api/reminders — create a new reminder.
+    def handle_create_job(self):
+        """POST /api/jobs — create a new job.
 
         JSON body:
-          text: str (required) — the reminder message
-          delay_seconds: int — fire after N seconds from now
-          fire_at: float — unix timestamp to fire at
-          recurring_seconds: int — repeat interval (0 or null = one-shot)
+          type: "reminder"|"script" (default: "script")
+          text: str — reminder text (required for type=reminder)
+          command: str — shell command (required for type=script)
+          name: str — human-readable label (optional, defaults to text or id)
+          cron: str — 5-field cron expression (optional)
+          delay_seconds: int — fire after N seconds (optional)
+          fire_at: float — unix timestamp to fire at (optional)
+          recurring_seconds: int — repeat interval (optional)
+          timeout_seconds: int — max execution time for scripts (default: 300)
+          enabled: bool (default: true)
+          notify: bool (default: true)
+          notify_on_error_only: bool (default: false)
 
-        Must provide either delay_seconds or fire_at (delay_seconds takes priority).
+        Must provide a schedule: cron, delay_seconds, fire_at, or recurring_seconds.
         """
         if not self._check_rate_limit(api_limiter):
             return
@@ -3683,91 +3709,151 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         body = self._read_body()
         try:
             data = json.loads(body)
-            text = _sanitize_string(data.get("text", ""), max_length=500)
-            if not text:
-                self.send_json(400, {"error": "text field is required"})
-                return
+            job_type = data.get("type", "script")
 
+            # handle delay_seconds -> fire_at conversion
             delay = data.get("delay_seconds")
-            fire_at = data.get("fire_at")
-            recurring = data.get("recurring_seconds")
-
             if delay is not None:
                 try:
                     delay = int(delay)
                     if delay < 1:
                         self.send_json(400, {"error": "delay_seconds must be >= 1"})
                         return
-                    fire_at = time.time() + delay
+                    data["fire_at"] = time.time() + delay
                 except (ValueError, TypeError):
                     self.send_json(400, {"error": "delay_seconds must be an integer"})
                     return
-            elif fire_at is not None:
+
+            # validate fire_at if provided directly
+            fire_at = data.get("fire_at")
+            if fire_at is not None and delay is None:
                 try:
                     fire_at = float(fire_at)
                     if fire_at <= time.time():
                         self.send_json(400, {"error": "fire_at must be in the future"})
                         return
+                    data["fire_at"] = fire_at
                 except (ValueError, TypeError):
                     self.send_json(400, {"error": "fire_at must be a unix timestamp"})
                     return
-            else:
-                self.send_json(400, {"error": "provide either delay_seconds or fire_at"})
-                return
 
+            # validate recurring_seconds
+            recurring = data.get("recurring_seconds")
             if recurring is not None:
                 try:
                     recurring = int(recurring)
-                    if recurring < 30:
-                        self.send_json(400, {"error": "recurring_seconds must be >= 30 (minimum 30s interval)"})
+                    if recurring < 10:
+                        self.send_json(400, {"error": "recurring_seconds must be >= 10"})
                         return
+                    data["recurring_seconds"] = recurring
+                    # if no other schedule, set fire_at to first interval from now
+                    if not data.get("fire_at") and not data.get("cron"):
+                        data["fire_at"] = time.time() + recurring
                 except (ValueError, TypeError):
                     self.send_json(400, {"error": "recurring_seconds must be an integer"})
                     return
-            else:
-                recurring = None
 
-            reminder = create_reminder(text, fire_at, recurring_seconds=recurring)
-            self.send_json(201, {
-                "created": True,
-                "reminder": reminder,
-                "fires_in_seconds": round(fire_at - time.time()),
-                "fires_at_human": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(fire_at)),
-            })
+            # must have at least one scheduling mechanism
+            if not data.get("cron") and not data.get("fire_at"):
+                self.send_json(400, {"error": "provide a schedule: cron, delay_seconds, fire_at, or recurring_seconds"})
+                return
+
+            # sanitize strings
+            if data.get("text"):
+                data["text"] = _sanitize_string(data["text"], max_length=500)
+            if data.get("command"):
+                data["command"] = _sanitize_string(data["command"], max_length=4000)
+            if data.get("cron"):
+                data["cron"] = _sanitize_string(data["cron"], max_length=100)
+            if data.get("name"):
+                data["name"] = _sanitize_string(data["name"], max_length=200)
+            if data.get("id"):
+                data["id"] = _sanitize_string(data["id"], max_length=100)
+
+            # default name for reminders
+            if job_type == "reminder" and not data.get("name") and data.get("text"):
+                data["name"] = data["text"][:80]
+
+            data["type"] = job_type
+            job, err = create_job(data)
+            if err:
+                self.send_json(409, {"error": err})
+            else:
+                response = {"created": True, "job": job}
+                if job.get("fire_at"):
+                    response["fires_in_seconds"] = round(job["fire_at"] - time.time())
+                    response["fires_at_human"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(job["fire_at"]))
+                self.send_json(201, response)
         except json.JSONDecodeError:
             self.send_json(400, {"error": "invalid JSON"})
         except Exception as e:
-            self._internal_error(e, "handle_create_reminder")
+            self._internal_error(e, "handle_create_job")
 
-    def handle_list_reminders(self):
-        """GET /api/reminders — list active reminders."""
+    def handle_list_jobs(self):
+        """GET /api/jobs — list all jobs."""
         if not self._check_rate_limit(api_limiter):
-            return
-        if _is_first_boot():
-            self.send_json(403, {"error": "agent not configured yet"})
             return
         if not self._check_local_or_auth():
             return
-        active = list_active_reminders()
+        active = list_active_jobs()
         now = time.time()
-        for r in active:
-            r["fires_in_seconds"] = round(r["fire_at"] - now)
-            r["fires_at_human"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(r["fire_at"]))
-        self.send_json(200, {"reminders": active, "count": len(active)})
+        for j in active:
+            if j.get("fire_at"):
+                j["fires_in_seconds"] = round(j["fire_at"] - now)
+                j["fires_at_human"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(j["fire_at"]))
+        self.send_json(200, {"jobs": active, "count": len(active)})
 
-    def handle_cancel_reminder(self, reminder_id):
-        """DELETE /api/reminders/<id> — cancel a reminder."""
+    def handle_delete_job(self, job_id):
+        """DELETE /api/jobs/<id> — delete/cancel a job."""
         if not self._check_rate_limit(api_limiter):
-            return
-        if _is_first_boot():
-            self.send_json(403, {"error": "agent not configured yet"})
             return
         if not self._check_local_or_auth():
             return
-        if cancel_reminder(reminder_id):
-            self.send_json(200, {"cancelled": True, "id": reminder_id})
+        if delete_job(job_id):
+            self.send_json(200, {"deleted": True, "id": job_id})
         else:
-            self.send_json(404, {"error": "reminder not found or already fired"})
+            self.send_json(404, {"error": "job not found"})
+
+    def handle_run_job(self, job_id):
+        """POST /api/jobs/<id>/run — trigger immediate run."""
+        if not self._check_rate_limit(api_limiter):
+            return
+        if not self._check_local_or_auth():
+            return
+
+        with _jobs_lock:
+            job = next((j for j in _jobs if j["id"] == job_id), None)
+
+        if not job:
+            self.send_json(404, {"error": "job not found"})
+            return
+        if job.get("currently_running"):
+            self.send_json(409, {"error": "job already running"})
+            return
+
+        if job.get("command"):
+            def _run(j):
+                j["currently_running"] = True
+                _save_jobs()
+                try:
+                    status, output = _run_script(j)
+                    j["last_status"] = status
+                    j["last_output"] = output[:500]
+                finally:
+                    j["currently_running"] = False
+                    j["last_run"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                    _save_jobs()
+
+            threading.Thread(target=_run, args=(job,), daemon=True).start()
+        else:
+            # fire reminder immediately
+            status, output = _fire_reminder(job)
+            job["last_status"] = status
+            job["last_output"] = output[:500]
+            job["last_run"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            _save_jobs()
+
+        self.send_json(202, {"started": True, "job_id": job_id})
 
     # ── channel plugin endpoints ──
 
@@ -3798,93 +3884,6 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             return
         names = _reload_channels()
         self.send_json(200, {"reloaded": True, "channels": names, "count": len(names)})
-
-    # ── script job endpoints ──
-
-    def handle_list_script_jobs(self):
-        """GET /api/script-jobs — list all script jobs with status."""
-        if not self._check_rate_limit(api_limiter):
-            return
-        if not self._check_local_or_auth():
-            return
-        jobs = _load_script_jobs()
-        self.send_json(200, {"jobs": jobs, "count": len(jobs)})
-
-    def handle_create_script_job(self):
-        """POST /api/script-jobs — create a new script job."""
-        if not self._check_rate_limit(api_limiter):
-            return
-        if not self._check_local_or_auth():
-            return
-        body = self._read_body()
-        try:
-            data = json.loads(body)
-            # validate required fields
-            job_id = _sanitize_string(data.get("id", ""), max_length=100)
-            command = _sanitize_string(data.get("command", ""), max_length=4000)
-            cron = _sanitize_string(data.get("cron", ""), max_length=100)
-            if not job_id:
-                self.send_json(400, {"error": "id is required"})
-                return
-            if not command:
-                self.send_json(400, {"error": "command is required"})
-                return
-            if not cron:
-                self.send_json(400, {"error": "cron is required"})
-                return
-            data["id"] = job_id
-            data["command"] = command
-            data["cron"] = cron
-            job, err = create_script_job(data)
-            if err:
-                self.send_json(409, {"error": err})
-            else:
-                self.send_json(201, {"created": True, "job": job})
-        except json.JSONDecodeError:
-            self.send_json(400, {"error": "invalid JSON"})
-        except Exception as e:
-            self._internal_error(e, "handle_create_script_job")
-
-    def handle_delete_script_job(self, job_id):
-        """DELETE /api/script-jobs/<id> — delete a script job."""
-        if not self._check_rate_limit(api_limiter):
-            return
-        if not self._check_local_or_auth():
-            return
-        if delete_script_job(job_id):
-            self.send_json(200, {"deleted": True, "id": job_id})
-        else:
-            self.send_json(404, {"error": "job not found"})
-
-    def handle_run_script_job(self, job_id):
-        """POST /api/script-jobs/<id>/run — trigger immediate run."""
-        if not self._check_rate_limit(api_limiter):
-            return
-        if not self._check_local_or_auth():
-            return
-        jobs = _load_script_jobs()
-        job = next((j for j in jobs if j["id"] == job_id), None)
-        if not job:
-            self.send_json(404, {"error": "job not found"})
-            return
-        if job.get("currently_running"):
-            self.send_json(409, {"error": "job already running"})
-            return
-
-        def _run(j, all_jobs):
-            j["currently_running"] = True
-            _save_script_jobs(all_jobs)
-            try:
-                status, output = _run_script_job(j)
-                j["last_status"] = status
-                j["last_output"] = output[:500]
-            finally:
-                j["currently_running"] = False
-                j["last_run"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                _save_script_jobs(all_jobs)
-
-        threading.Thread(target=_run, args=(job, jobs), daemon=True).start()
-        self.send_json(202, {"started": True, "job_id": job_id})
 
     # ── auth recovery endpoint ──
 
@@ -4132,17 +4131,14 @@ def main():
         # start session watcher to auto-forward scheduled output to telegram
         start_session_watcher()
 
-        # start reminder engine (lightweight timers, bypasses goose scheduler)
-        start_reminder_engine()
+        # start job engine (unified timer + script runner, zero LLM cost)
+        start_job_engine()
 
         # start cron scheduler (reads goose schedule.json, fires jobs via goose web)
         start_cron_scheduler()
 
         # load channel plugins from /data/channels/
         _load_all_channels()
-
-        # start script job engine (zero-LLM-cost subprocess runner)
-        start_script_engine()
 
         # start telegram if token is available but apply_config didn't handle it
         # (env-var-only deployments without setup.json)
@@ -4165,7 +4161,7 @@ def main():
     threading.Thread(target=_rate_limiter_cleanup, daemon=True).start()
 
     def shutdown(_sig, _frame):
-        global _telegram_running, _reminder_engine_running, _cron_scheduler_running, _script_engine_running
+        global _telegram_running, _job_engine_running, _cron_scheduler_running
         print("[gateway] shutting down...")
         # stop accepting new connections first
         threading.Thread(target=server.shutdown, daemon=True).start()
@@ -4177,12 +4173,11 @@ def main():
         # terminate goose web and clean up PID
         stop_goose_web()
         _remove_pid("goose_web")
-        # stop telegram polling thread, session watcher, reminder engine, cron scheduler
+        # stop telegram polling thread, session watcher, job engine, cron scheduler
         _telegram_running = False
         _session_watcher_running = False
-        _reminder_engine_running = False
+        _job_engine_running = False
         _cron_scheduler_running = False
-        _script_engine_running = False
         _remove_pid("telegram")
         print("[gateway] shutdown complete")
 

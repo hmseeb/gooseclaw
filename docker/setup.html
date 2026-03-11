@@ -1300,7 +1300,7 @@ body::after {
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 7.5L5.5 11L12 3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
           Test
         </button>
-        <button class="btn btn-primary" onclick="advanceFromCredentials()">
+        <button class="btn btn-primary" id="credContinueBtn" disabled onclick="advanceFromCredentials()">
           Continue
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5.5 3L9.5 7L5.5 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
@@ -2530,13 +2530,16 @@ async function validateKey() {
   btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 7.5L5.5 11L12 3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg> Test';
 }
 
-/* ── update save button state based on validationPassed ── */
+/* ── update button states based on validationPassed ── */
 function updateSaveBtn() {
   const btn = document.getElementById('saveBtn');
   const note = document.getElementById('validationGateNote');
-  if (!btn) return;
-  btn.disabled = !validationPassed;
-  if (note) note.style.display = validationPassed ? 'none' : '';
+  if (btn) {
+    btn.disabled = !validationPassed;
+    if (note) note.style.display = validationPassed ? 'none' : '';
+  }
+  const credBtn = document.getElementById('credContinueBtn');
+  if (credBtn) credBtn.disabled = !validationPassed;
 }
 
 /* ── advance from credentials step with empty-field check ── */
@@ -2573,12 +2576,10 @@ function advanceFromCredentials() {
       showAlert('error', 'Claude setup token is required');
       return;
     }
-    goToStep(2);
-    return;
   }
 
   /* azure-openai: both key and endpoint required */
-  if (selectedProvider === 'azure-openai') {
+  else if (selectedProvider === 'azure-openai') {
     const key = document.getElementById('azureKey')?.value?.trim() || '';
     const endpoint = document.getElementById('azureEndpoint')?.value?.trim() || '';
     if (!key) {
@@ -2593,42 +2594,46 @@ function advanceFromCredentials() {
       showAlert('error', 'Azure endpoint must start with https://');
       return;
     }
-    goToStep(2);
-    return;
   }
 
   /* custom endpoint: URL required */
-  if (selectedProvider === 'custom') {
+  else if (selectedProvider === 'custom') {
     const url = document.getElementById('customUrl')?.value?.trim() || '';
     if (!url) {
       showAlert('error', 'API endpoint URL is required');
       return;
     }
-    goToStep(2);
-    return;
   }
 
   /* standard API key provider */
-  const apiKey = document.getElementById('apiKey')?.value?.trim() || '';
-  if (!apiKey) {
-    /* allow skipping if reconfiguring and key is already set */
-    if (isReconfigure && savedKeysSet[selectedProvider]) {
-      validationPassed = true;
-      updateSaveBtn();
-      goToStep(2);
+  else {
+    const apiKey = document.getElementById('apiKey')?.value?.trim() || '';
+    if (!apiKey) {
+      /* allow skipping if reconfiguring and key is already set */
+      if (isReconfigure && savedKeysSet[selectedProvider]) {
+        validationPassed = true;
+        updateSaveBtn();
+        goToStep(2);
+        return;
+      }
+      showAlert('error', 'API key is required');
       return;
     }
-    showAlert('error', 'API key is required');
-    return;
+    /* warn about prefix mismatch but don't block */
+    const fmt = validateFormat(selectedProvider, apiKey);
+    if (fmt.warning) {
+      showAlert('info', fmt.warning);
+    }
   }
 
-  /* warn about prefix mismatch but don't block */
-  const fmt = validateFormat(selectedProvider, apiKey);
-  if (fmt.warning) {
-    showAlert('info', fmt.warning);
+  /* gate: must test credentials before continuing */
+  if (validationPassed) {
+    goToStep(2);
+  } else {
+    validateKey().then(() => {
+      if (validationPassed) goToStep(2);
+    });
   }
-
-  goToStep(2);
 }
 
 /* ── advanced multi-model toggle & helpers ── */

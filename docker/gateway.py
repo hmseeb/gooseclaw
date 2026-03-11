@@ -1178,7 +1178,7 @@ def _create_goose_session():
 
 # ── minimal WebSocket client (stdlib only, no external deps) ────────────────
 
-def _ws_connect(host, port, path):
+def _ws_connect(host, port, path, auth_token=None):
     """Open a WebSocket connection. Returns the raw socket or raises."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.settimeout(120)
@@ -1187,6 +1187,11 @@ def _ws_connect(host, port, path):
     # generate a random 16-byte key for the handshake
     ws_key = base64.b64encode(os.urandom(16)).decode()
 
+    # build auth headers — try both Bearer and Basic (goose web accepts both)
+    auth_headers = ""
+    if auth_token:
+        auth_headers = f"Authorization: Bearer {auth_token}\r\n"
+
     request = (
         f"GET {path} HTTP/1.1\r\n"
         f"Host: {host}:{port}\r\n"
@@ -1194,6 +1199,7 @@ def _ws_connect(host, port, path):
         f"Connection: Upgrade\r\n"
         f"Sec-WebSocket-Key: {ws_key}\r\n"
         f"Sec-WebSocket-Version: 13\r\n"
+        f"{auth_headers}"
         f"\r\n"
     )
     sock.sendall(request.encode())
@@ -1342,12 +1348,12 @@ def _do_ws_relay(user_text, session_id):
 
     Returns (response_text, error_string).
     """
-    ws_path = f"/ws?token={urllib.parse.quote(_INTERNAL_GOOSE_TOKEN)}"
+    ws_path = f"/ws?token={urllib.parse.quote(str(_INTERNAL_GOOSE_TOKEN))}"
     print(f"[telegram] WS relay session_id={session_id} text={user_text[:50]!r}")
 
     sock = None
     try:
-        sock = _ws_connect("127.0.0.1", GOOSE_WEB_PORT, ws_path)
+        sock = _ws_connect("127.0.0.1", GOOSE_WEB_PORT, ws_path, auth_token=_INTERNAL_GOOSE_TOKEN)
 
         # send the user message
         msg = json.dumps({

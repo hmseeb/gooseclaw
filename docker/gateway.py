@@ -857,25 +857,36 @@ def _setup_claude_cli():
     if local_bin not in os.environ.get("PATH", ""):
         os.environ["PATH"] = f"{local_bin}:{os.environ.get('PATH', '')}"
 
+    # also check /root/.local/bin (claude may have been installed as root during entrypoint)
+    root_local_bin = "/root/.local/bin"
+    if root_local_bin not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = f"{os.environ.get('PATH', '')}:{root_local_bin}"
+
     # check if already installed
     if subprocess.run(["which", "claude"], capture_output=True).returncode == 0:
         print("[gateway] claude CLI already installed")
     else:
         print("[gateway] installing claude CLI...")
+        is_root = os.getuid() == 0
         try:
             subprocess.run(
                 ["bash", "-c", "curl -fsSL https://claude.ai/install.sh | bash"],
                 check=True, timeout=120,
             )
         except Exception:
-            print("[gateway] native install failed, trying npm...")
-            try:
-                subprocess.run(
-                    ["bash", "-c", "apt-get update -qq && apt-get install -y -qq nodejs npm >/dev/null 2>&1 && npm install -g @anthropic-ai/claude-code 2>/dev/null"],
-                    check=True, timeout=180,
-                )
-            except Exception as e:
-                print(f"[gateway] ERROR: could not install claude CLI: {e}")
+            if is_root:
+                print("[gateway] native install failed, trying npm...")
+                try:
+                    subprocess.run(
+                        ["bash", "-c", "apt-get update -qq && apt-get install -y -qq nodejs npm >/dev/null 2>&1 && npm install -g @anthropic-ai/claude-code 2>/dev/null"],
+                        check=True, timeout=180,
+                    )
+                except Exception as e:
+                    print(f"[gateway] ERROR: could not install claude CLI: {e}")
+                    return
+            else:
+                print("[gateway] ERROR: claude CLI install failed (running as non-root, apt not available)")
+                print("[gateway] claude CLI should be pre-installed by entrypoint.sh")
                 return
 
     # create ~/.claude.json if missing

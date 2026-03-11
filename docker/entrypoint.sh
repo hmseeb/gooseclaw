@@ -386,10 +386,50 @@ else
     echo "[persist] state persists on Railway volume only"
 fi
 
+# ─── prepare non-root runtime ─────────────────────────────────────────────
+# claude CLI refuses --dangerously-skip-permissions as root (security feature),
+# but goose requires that flag for headless operation. solution: run all goose
+# processes as the gooseclaw user.
+
+GCLAW_HOME="/home/gooseclaw"
+
+# claude CLI: copy/symlink to gooseclaw's path
+if [ -f "/root/.local/bin/claude" ] || [ -L "/root/.local/bin/claude" ]; then
+    CLAUDE_REAL=$(readlink -f /root/.local/bin/claude 2>/dev/null || echo /root/.local/bin/claude)
+    mkdir -p "$GCLAW_HOME/.local/bin"
+    # symlink the actual binary (could be large, avoid copying)
+    ln -sf "$CLAUDE_REAL" "$GCLAW_HOME/.local/bin/claude"
+    echo "[runtime] claude CLI linked to $GCLAW_HOME/.local/bin/"
+fi
+
+# claude config files
+mkdir -p "$GCLAW_HOME/.claude"
+cp /root/.claude.json "$GCLAW_HOME/.claude.json" 2>/dev/null || true
+cp -a /root/.claude/* "$GCLAW_HOME/.claude/" 2>/dev/null || true
+
+# goose config: symlink to shared volume
+mkdir -p "$GCLAW_HOME/.config"
+rm -rf "$GCLAW_HOME/.config/goose"
+ln -sf "$CONFIG_DIR" "$GCLAW_HOME/.config/goose"
+
+# goose data directories
+mkdir -p "$GCLAW_HOME/.local/share/goose/sessions" "$GCLAW_HOME/.local/state/goose/logs"
+mkdir -p "$DATA_DIR/sessions"
+# always symlink so goose writes sessions.db to the persistent volume
+ln -sf "$DATA_DIR/sessions/sessions.db" "$GCLAW_HOME/.local/share/goose/sessions/sessions.db"
+
+# fix ownership: gooseclaw needs write access to /data and its own home
+chown -R gooseclaw:gooseclaw "$DATA_DIR" "$GCLAW_HOME"
+
+# set HOME for all child processes
+export HOME="$GCLAW_HOME"
+
+echo "[runtime] non-root user prepared (gooseclaw)"
+
 # ─── start gateway (setup wizard + reverse proxy to goose web) ────────────
 
 echo "[gateway] starting gateway on port ${PORT:-8080}..."
-python3 "$APP_DIR/docker/gateway.py" &
+runuser -u gooseclaw -- python3 "$APP_DIR/docker/gateway.py" &
 GATEWAY_PY_PID=$!
 
 # ─── telegram gateway ─────────────────────────────────────────────────────
@@ -430,7 +470,7 @@ fi
         # check gateway
         if ! kill -0 "$GATEWAY_PY_PID" 2>/dev/null; then
             echo "[watchdog] gateway crashed, restarting..."
-            python3 "$APP_DIR/docker/gateway.py" &
+            runuser -u gooseclaw -- python3 "$APP_DIR/docker/gateway.py" &
             GATEWAY_PY_PID=$!
             echo "[watchdog] gateway restarted (pid $GATEWAY_PY_PID)"
         fi

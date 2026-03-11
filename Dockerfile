@@ -19,13 +19,12 @@ RUN apt-get update && \
 RUN curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh \
     | CONFIGURE=false GOOSE_BIN_DIR=/usr/local/bin bash
 
-# create non-root user for potential non-root deployments
-# NOTE: Container runs as root by default because entrypoint.sh may install
-# the claude CLI via apt at startup. For deployments that do not need the
-# claude CLI installed at runtime, override with: --user gooseclaw
-# Railway sets RAILWAY_RUN_UID=0 (root) which is the expected default here.
+# create non-root user for runtime processes
+# entrypoint.sh runs initial setup as root, then drops to gooseclaw user
+# for gateway.py and all goose/claude processes. This is required because
+# claude CLI refuses --dangerously-skip-permissions when running as root.
 RUN groupadd -r gooseclaw && \
-    useradd -r -g gooseclaw -d /app -s /sbin/nologin gooseclaw
+    useradd -r -g gooseclaw -m -d /home/gooseclaw -s /bin/sh gooseclaw
 
 # app directory
 WORKDIR /app

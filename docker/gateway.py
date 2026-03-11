@@ -1123,6 +1123,42 @@ def _get_session_id(chat_id):
     return sid
 
 
+def _goose_web_headers():
+    """Build auth headers for goose web. Tries both Basic and X-Secret-Key."""
+    auth_value = base64.b64encode(f"user:{_INTERNAL_GOOSE_TOKEN}".encode()).decode()
+    return {
+        "Content-Type": "application/json",
+        "Authorization": f"Basic {auth_value}",
+        "X-Secret-Key": _INTERNAL_GOOSE_TOKEN,
+    }
+
+
+def _probe_goose_web():
+    """Diagnostic: probe goose web routes to figure out what's available."""
+    if not _INTERNAL_GOOSE_TOKEN:
+        print("[telegram] probe: no internal token yet")
+        return
+
+    headers = _goose_web_headers()
+    probes = [
+        ("GET", "/status", None),
+        ("GET", "/sessions", None),
+        ("POST", "/agent/start", json.dumps({"working_dir": "/app"}).encode()),
+        ("POST", "/reply", json.dumps({"user_message": {"role": "user", "content": [{"type": "text", "text": "ping"}]}, "session_id": "test"}).encode()),
+    ]
+
+    for method, path, body in probes:
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=5)
+            conn.request(method, path, body=body, headers=headers)
+            resp = conn.getresponse()
+            resp_body = resp.read().decode("utf-8", errors="replace")[:200]
+            conn.close()
+            print(f"[telegram] probe {method} {path} -> {resp.status}: {resp_body}")
+        except Exception as e:
+            print(f"[telegram] probe {method} {path} -> ERROR: {e}")
+
+
 def _start_agent_session():
     """Call POST /agent/start on goose web to create a new agent session.
 
@@ -1131,30 +1167,29 @@ def _start_agent_session():
     if not _INTERNAL_GOOSE_TOKEN:
         return None
 
-    auth_value = base64.b64encode(f"user:{_INTERNAL_GOOSE_TOKEN}".encode()).decode()
+    headers = _goose_web_headers()
     body = json.dumps({"working_dir": "/app"}).encode("utf-8")
 
     try:
         conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=15)
-        conn.request("POST", "/agent/start", body=body, headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Basic {auth_value}",
-        })
+        conn.request("POST", "/agent/start", body=body, headers=headers)
         resp = conn.getresponse()
         resp_body = resp.read().decode("utf-8", errors="replace")
         conn.close()
 
+        print(f"[telegram] /agent/start -> {resp.status}: {resp_body[:500]}")
+
         if resp.status != 200:
-            print(f"[telegram] /agent/start returned {resp.status}: {resp_body[:300]}")
             return None
 
         data = json.loads(resp_body)
-        sid = data.get("id") or data.get("session_id")
+        # try various possible field names
+        sid = data.get("id") or data.get("session_id") or data.get("session", {}).get("id")
         if sid:
             print(f"[telegram] agent started, session_id: {sid}")
             return str(sid)
         else:
-            print(f"[telegram] /agent/start response missing id: {resp_body[:300]}")
+            print(f"[telegram] /agent/start response keys: {list(data.keys())}")
             return None
 
     except Exception as e:
@@ -1211,7 +1246,8 @@ def _do_relay(user_text, session_id):
 
     Returns (response_text, error_string).
     """
-    auth_value = base64.b64encode(f"user:{_INTERNAL_GOOSE_TOKEN}".encode()).decode()
+    headers = _goose_web_headers()
+    headers["Accept"] = "text/event-stream"
     body = json.dumps({
         "user_message": {
             "role": "user",
@@ -1220,13 +1256,11 @@ def _do_relay(user_text, session_id):
         "session_id": session_id,
     }).encode("utf-8")
 
+    print(f"[telegram] POST /reply session_id={session_id} text={user_text[:50]!r}")
+
     try:
         conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=120)
-        conn.request("POST", "/reply", body=body, headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Basic {auth_value}",
-            "Accept": "text/event-stream",
-        })
+        conn.request("POST", "/reply", body=body, headers=headers)
         resp = conn.getresponse()
         if resp.status != 200:
             err_body = resp.read().decode("utf-8", errors="replace")[:500]
@@ -1477,6 +1511,9 @@ def start_telegram_gateway(bot_token):
         return
 
     _load_telegram_sessions()
+
+    # probe goose web routes for diagnostics
+    _probe_goose_web()
 
     # generate an initial pairing code
     _generate_and_store_pair_code()

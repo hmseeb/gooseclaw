@@ -761,8 +761,9 @@ async function refreshStatus() {
   // telegram
   const tgOk = tg.running === true;
   setDot('dot-tg', tgOk ? 'green' : 'dim');
-  const paired = tg.paired_users || [];
-  document.getElementById('val-tg').textContent = tgOk ? paired.length + ' paired' : 'offline';
+  const pairedCount = tg.paired_users || 0;
+  const pairedIds = tg.paired_chat_ids || [];
+  document.getElementById('val-tg').textContent = tgOk ? pairedCount + ' paired' : 'offline';
 
   // notify
   const nOk = notify.available === true;
@@ -771,10 +772,9 @@ async function refreshStatus() {
 
   // telegram detail
   const usersEl = document.getElementById('tg-users');
-  if (paired.length > 0) {
-    usersEl.innerHTML = paired.map(u => {
-      const name = u.first_name || u.username || u.chat_id;
-      return '<div class="tg-user">' + escHtml(String(name)) + ' <span style="color:var(--text-dim)">#' + u.chat_id + '</span></div>';
+  if (pairedIds.length > 0) {
+    usersEl.innerHTML = pairedIds.map(id => {
+      return '<div class="tg-user">chat <span style="color:var(--text-dim)">#' + escHtml(String(id)) + '</span></div>';
     }).join('');
   } else {
     usersEl.innerHTML = '<span class="tg-user" style="color:var(--text-dim)">no users paired</span>';

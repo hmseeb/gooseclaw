@@ -3249,8 +3249,6 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.handle_version()
         elif path.rstrip("/") == "/setup" or path.startswith("/setup/"):
             self.handle_setup_page()
-        elif path.rstrip("/") == "/admin":
-            self.handle_admin_page()
         elif path == "/api/setup/config":
             self.handle_get_config()
         elif path == "/api/notify/status":
@@ -3261,10 +3259,26 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.handle_list_jobs()
         elif path == "/api/channels":
             self.handle_list_channels()
+        elif path.rstrip("/") == "/admin":
+            # backward compat: redirect /admin to /
+            self.send_response(302)
+            self.send_header("Location", "/")
+            self.end_headers()
+        elif path == "/" or path == "":
+            if not is_configured():
+                self.send_response(302)
+                self.send_header("Location", "/setup")
+                self.end_headers()
+            else:
+                self.handle_admin_page()
         elif not is_configured():
             self.send_response(302)
             self.send_header("Location", "/setup")
             self.end_headers()
+        elif path.startswith("/web"):
+            # strip /web prefix and proxy to goose web
+            self.path = path[4:] or "/"
+            self.proxy_to_goose()
         else:
             self.proxy_to_goose()
 

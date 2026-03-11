@@ -15,7 +15,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Provider UI Expansion** - Redesign wizard with 15+ providers in categories, model selection, and full setup flow steps (completed 2026-03-10)
 - [x] **Phase 2: Validation and Env Plumbing** - Every provider validates credentials, maps env vars correctly, rehydrates on restart, and pre-fills on reconfigure (completed 2026-03-10)
 - [x] **Phase 3: Gateway Resilience and Live Feedback** - goose web is monitored, auto-restarted, errors surfaced to user, real-time startup status, and auth recovery (completed 2026-03-10)
-- [ ] **Phase 4: Advanced Multi-Model Settings** - Lead/worker multi-model configuration for power users
+- [x] **Phase 4: Advanced Multi-Model Settings** - Lead/worker multi-model configuration for power users (completed 2026-03-11)
 - [x] **Phase 5: Production Hardening** - Security, reliability, and deployment quality across gateway, entrypoint, and Dockerfile (completed 2026-03-10)
 
 ## Phase Details
@@ -77,10 +77,10 @@ Plans:
   1. An "Advanced" toggle on the settings step reveals lead/worker multi-model configuration fields
   2. User can set a separate lead provider, lead model, and turn count
   3. Advanced settings are correctly written to config.yaml (GOOSE_LEAD_PROVIDER, GOOSE_LEAD_MODEL, GOOSE_LEAD_TURN_COUNT)
-**Plans:** 1 plan
+**Plans:** 1/1 plans complete
 
 Plans:
-- [ ] 04-01-PLAN.md -- Advanced multi-model UI toggle, lead provider/model/turn count fields, backend persistence, and entrypoint rehydration
+- [x] 04-01-PLAN.md -- Advanced multi-model UI toggle, lead provider/model/turn count fields, backend persistence, and entrypoint rehydration (completed 2026-03-11)
 
 ### Phase 5: Production Hardening
 **Goal**: GooseClaw production endpoints are hardened against common attack vectors, gateway processes recover from failures automatically, and the Docker image builds efficiently
@@ -119,5 +119,5 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 1. Provider UI Expansion | 2/2 | Complete   | 2026-03-10 |
 | 2. Validation and Env Plumbing | 3/3 | Complete   | 2026-03-10 |
 | 3. Gateway Resilience and Live Feedback | 2/2 | Complete   | 2026-03-10 |
-| 4. Advanced Multi-Model Settings | 0/1 | Not started | - |
+| 4. Advanced Multi-Model Settings | 1/1 | Complete   | 2026-03-11 |
 | 5. Production Hardening | 6/6 | Complete   | 2026-03-10 |

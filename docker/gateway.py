@@ -16,6 +16,9 @@ API:
   GET  /api/telegram/status  -> telegram gateway status, paired users, pairing code
   POST /api/telegram/pair    -> generate a new telegram pairing code
   POST /api/auth/recover     -> reset auth token using GOOSECLAW_RECOVERY_SECRET
+  GET  /api/reminders         -> list active reminders
+  POST /api/reminders         -> create a new reminder (delay_seconds or fire_at)
+  DELETE /api/reminders/<id>  -> cancel a reminder
 """
 
 import base64
@@ -117,6 +120,12 @@ _session_watcher_running = False
 _session_watcher_state_file = os.path.join(DATA_DIR, "session_watcher_state.json")
 _session_watcher_state = {}   # session_id -> {"forwarded_count": int, "schedule_id": str}
 _session_watcher_lock = threading.Lock()
+
+# ── reminder engine state ──────────────────────────────────────────────────
+_reminders_file = os.path.join(DATA_DIR, "reminders.json")
+_reminders = []        # list of reminder dicts
+_reminders_lock = threading.Lock()
+_reminder_engine_running = False
 
 # ── goose web startup state ─────────────────────────────────────────────────
 goose_startup_state = {
@@ -1105,6 +1114,162 @@ def _save_telegram_sessions():
         print(f"[telegram] warn: could not save sessions: {e}")
 
 
+# ── reminder engine ──────────────────────────────────────────────────────────
+#
+# Lightweight timer system that bypasses goose's scheduler entirely.
+# Background thread checks every 10s, fires notify_all() when due.
+# Supports one-shot and recurring reminders. Persists to /data/reminders.json.
+#
+# Reminder dict shape:
+#   {
+#     "id": str (uuid4),
+#     "text": str,
+#     "fire_at": float (unix timestamp),
+#     "created_at": float,
+#     "recurring_seconds": int or None,
+#     "fired": bool,
+#   }
+
+def _load_reminders():
+    """Load reminders from disk."""
+    global _reminders
+    try:
+        if os.path.exists(_reminders_file):
+            with open(_reminders_file) as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                with _reminders_lock:
+                    _reminders = data
+                active = sum(1 for r in data if not r.get("fired"))
+                print(f"[remind] loaded {len(data)} reminder(s) ({active} active)")
+    except Exception as e:
+        print(f"[remind] warn: could not load reminders: {e}")
+
+
+def _save_reminders():
+    """Persist reminders to disk (atomic write)."""
+    with _reminders_lock:
+        data = list(_reminders)
+    try:
+        os.makedirs(os.path.dirname(_reminders_file), exist_ok=True)
+        tmp = _reminders_file + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp, _reminders_file)
+    except Exception as e:
+        print(f"[remind] warn: could not save reminders: {e}")
+
+
+def create_reminder(text, fire_at, recurring_seconds=None):
+    """Create a new reminder. Returns the reminder dict."""
+    reminder = {
+        "id": str(uuid.uuid4()),
+        "text": text,
+        "fire_at": fire_at,
+        "created_at": time.time(),
+        "recurring_seconds": recurring_seconds,
+        "fired": False,
+    }
+    with _reminders_lock:
+        _reminders.append(reminder)
+    _save_reminders()
+    print(f"[remind] created: '{text}' fires at {time.strftime('%H:%M:%S', time.localtime(fire_at))}"
+          + (f" (every {recurring_seconds}s)" if recurring_seconds else " (one-shot)"))
+    return reminder
+
+
+def cancel_reminder(reminder_id):
+    """Cancel a reminder by ID. Returns True if found and cancelled."""
+    with _reminders_lock:
+        for r in _reminders:
+            if r["id"] == reminder_id and not r.get("fired"):
+                r["fired"] = True
+                _save_reminders()
+                print(f"[remind] cancelled: {reminder_id}")
+                return True
+    return False
+
+
+def list_active_reminders():
+    """Return list of active (unfired) reminders."""
+    with _reminders_lock:
+        return [r for r in _reminders if not r.get("fired")]
+
+
+def _reminder_engine_loop():
+    """Background loop: check reminders every 10s, fire when due."""
+    global _reminder_engine_running
+    _reminder_engine_running = True
+    print("[remind] engine started (10s tick)")
+
+    while _reminder_engine_running:
+        now = time.time()
+        to_fire = []
+        changed = False
+
+        with _reminders_lock:
+            for r in _reminders:
+                if r.get("fired"):
+                    continue
+                if r["fire_at"] <= now:
+                    to_fire.append(dict(r))
+                    if r.get("recurring_seconds"):
+                        # advance to next fire time (skip missed ticks)
+                        interval = r["recurring_seconds"]
+                        while r["fire_at"] <= now:
+                            r["fire_at"] += interval
+                        changed = True
+                    else:
+                        r["fired"] = True
+                        changed = True
+
+        # fire outside the lock
+        for r in to_fire:
+            try:
+                emoji = "🔔" if not r.get("recurring_seconds") else "🔁"
+                msg = f"{emoji} Reminder: {r['text']}"
+                result = notify_all(msg)
+                if result.get("sent"):
+                    print(f"[remind] fired: '{r['text']}'")
+                else:
+                    print(f"[remind] delivery failed: {result.get('error', '?')}")
+            except Exception as e:
+                print(f"[remind] error firing reminder: {e}")
+
+        if changed:
+            _save_reminders()
+
+        # prune old fired reminders (> 24h)
+        cutoff = now - 86400
+        with _reminders_lock:
+            before = len(_reminders)
+            _reminders[:] = [
+                r for r in _reminders
+                if not r.get("fired") or r.get("fire_at", 0) > cutoff
+            ]
+            if len(_reminders) < before:
+                changed = True
+        if changed:
+            _save_reminders()
+
+        # sleep 10s, checking shutdown every 2s
+        for _ in range(5):
+            if not _reminder_engine_running:
+                break
+            time.sleep(2)
+
+    print("[remind] engine stopped")
+
+
+def start_reminder_engine():
+    """Start the reminder engine daemon thread."""
+    global _reminder_engine_running
+    if _reminder_engine_running:
+        return
+    _load_reminders()
+    threading.Thread(target=_reminder_engine_loop, daemon=True).start()
+
+
 # ── session watcher: persistence + API helpers + loop ────────────────────────
 
 def _load_watcher_state():
@@ -1997,6 +2162,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.handle_notify_status()
         elif path == "/api/telegram/status":
             self.handle_telegram_status()
+        elif path == "/api/reminders":
+            self.handle_list_reminders()
         elif not is_configured():
             self.send_response(302)
             self.send_header("Location", "/setup")
@@ -2017,6 +2184,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.handle_telegram_pair()
         elif path == "/api/auth/recover":
             self.handle_auth_recover()
+        elif path == "/api/reminders":
+            self.handle_create_reminder()
         else:
             self.proxy_to_goose()
 
@@ -2024,6 +2193,14 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         self.proxy_to_goose()
 
     def do_DELETE(self):
+        self._request_start = time.time()
+        path = urllib.parse.urlparse(self.path).path
+        # DELETE /api/reminders/<id>
+        if path.startswith("/api/reminders/"):
+            reminder_id = path[len("/api/reminders/"):]
+            if reminder_id:
+                self.handle_cancel_reminder(reminder_id)
+                return
         self.proxy_to_goose()
 
     def do_OPTIONS(self):
@@ -2274,6 +2451,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                 time.sleep(1)
                 start_goose_web()
                 start_session_watcher()
+                start_reminder_engine()
             threading.Thread(target=_restart, daemon=True).start()
 
             resp = {"success": True, "message": "saved. agent is restarting..."}
@@ -2401,6 +2579,128 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(200, {"code": code, "message": "send this code to your telegram bot"})
         else:
             self.send_json(500, {"error": "could not generate pairing code. check logs.", "code": None})
+
+    # ── reminder endpoints ──
+
+    def _check_local_or_auth(self):
+        """Allow localhost without auth, require auth for remote. Returns True if allowed."""
+        client_ip = self.client_address[0] if self.client_address else ""
+        is_local = client_ip in ("127.0.0.1", "::1", "localhost")
+        if is_local:
+            return True
+        if not check_auth(self):
+            self.send_response(401)
+            self.send_header("WWW-Authenticate", 'Basic realm="gooseclaw"')
+            self.end_headers()
+            return False
+        return True
+
+    def handle_create_reminder(self):
+        """POST /api/reminders — create a new reminder.
+
+        JSON body:
+          text: str (required) — the reminder message
+          delay_seconds: int — fire after N seconds from now
+          fire_at: float — unix timestamp to fire at
+          recurring_seconds: int — repeat interval (0 or null = one-shot)
+
+        Must provide either delay_seconds or fire_at (delay_seconds takes priority).
+        """
+        if not self._check_rate_limit(api_limiter):
+            return
+        if _is_first_boot():
+            self.send_json(403, {"error": "agent not configured yet"})
+            return
+        if not self._check_local_or_auth():
+            return
+        body = self._read_body()
+        try:
+            data = json.loads(body)
+            text = _sanitize_string(data.get("text", ""), max_length=500)
+            if not text:
+                self.send_json(400, {"error": "text field is required"})
+                return
+
+            delay = data.get("delay_seconds")
+            fire_at = data.get("fire_at")
+            recurring = data.get("recurring_seconds")
+
+            if delay is not None:
+                try:
+                    delay = int(delay)
+                    if delay < 1:
+                        self.send_json(400, {"error": "delay_seconds must be >= 1"})
+                        return
+                    fire_at = time.time() + delay
+                except (ValueError, TypeError):
+                    self.send_json(400, {"error": "delay_seconds must be an integer"})
+                    return
+            elif fire_at is not None:
+                try:
+                    fire_at = float(fire_at)
+                    if fire_at <= time.time():
+                        self.send_json(400, {"error": "fire_at must be in the future"})
+                        return
+                except (ValueError, TypeError):
+                    self.send_json(400, {"error": "fire_at must be a unix timestamp"})
+                    return
+            else:
+                self.send_json(400, {"error": "provide either delay_seconds or fire_at"})
+                return
+
+            if recurring is not None:
+                try:
+                    recurring = int(recurring)
+                    if recurring < 30:
+                        self.send_json(400, {"error": "recurring_seconds must be >= 30 (minimum 30s interval)"})
+                        return
+                except (ValueError, TypeError):
+                    self.send_json(400, {"error": "recurring_seconds must be an integer"})
+                    return
+            else:
+                recurring = None
+
+            reminder = create_reminder(text, fire_at, recurring_seconds=recurring)
+            self.send_json(201, {
+                "created": True,
+                "reminder": reminder,
+                "fires_in_seconds": round(fire_at - time.time()),
+                "fires_at_human": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(fire_at)),
+            })
+        except json.JSONDecodeError:
+            self.send_json(400, {"error": "invalid JSON"})
+        except Exception as e:
+            self._internal_error(e, "handle_create_reminder")
+
+    def handle_list_reminders(self):
+        """GET /api/reminders — list active reminders."""
+        if not self._check_rate_limit(api_limiter):
+            return
+        if _is_first_boot():
+            self.send_json(403, {"error": "agent not configured yet"})
+            return
+        if not self._check_local_or_auth():
+            return
+        active = list_active_reminders()
+        now = time.time()
+        for r in active:
+            r["fires_in_seconds"] = round(r["fire_at"] - now)
+            r["fires_at_human"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(r["fire_at"]))
+        self.send_json(200, {"reminders": active, "count": len(active)})
+
+    def handle_cancel_reminder(self, reminder_id):
+        """DELETE /api/reminders/<id> — cancel a reminder."""
+        if not self._check_rate_limit(api_limiter):
+            return
+        if _is_first_boot():
+            self.send_json(403, {"error": "agent not configured yet"})
+            return
+        if not self._check_local_or_auth():
+            return
+        if cancel_reminder(reminder_id):
+            self.send_json(200, {"cancelled": True, "id": reminder_id})
+        else:
+            self.send_json(404, {"error": "reminder not found or already fired"})
 
     # ── auth recovery endpoint ──
 
@@ -2648,6 +2948,9 @@ def main():
         # start session watcher to auto-forward scheduled output to telegram
         start_session_watcher()
 
+        # start reminder engine (lightweight timers, bypasses goose scheduler)
+        start_reminder_engine()
+
         # start telegram if token is available but apply_config didn't handle it
         # (env-var-only deployments without setup.json)
         tg_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -2669,16 +2972,17 @@ def main():
     threading.Thread(target=_rate_limiter_cleanup, daemon=True).start()
 
     def shutdown(_sig, _frame):
-        global _telegram_running
+        global _telegram_running, _reminder_engine_running
         print("[gateway] shutting down...")
         # stop accepting new connections first
         threading.Thread(target=server.shutdown, daemon=True).start()
         # terminate goose web and clean up PID
         stop_goose_web()
         _remove_pid("goose_web")
-        # stop telegram polling thread and session watcher
+        # stop telegram polling thread, session watcher, and reminder engine
         _telegram_running = False
         _session_watcher_running = False
+        _reminder_engine_running = False
         _remove_pid("telegram")
         print("[gateway] shutdown complete")
 

@@ -39,10 +39,11 @@ COPY identity/ /app/identity/
 COPY VERSION /app/VERSION
 
 # make scripts executable
-RUN chmod +x /app/docker/entrypoint.sh /app/docker/gateway.py /app/scripts/persist.sh /app/docker/scripts/notify.sh /app/docker/scripts/secret.sh
+RUN chmod +x /app/docker/entrypoint.sh /app/docker/gateway.py /app/scripts/persist.sh /app/docker/scripts/notify.sh /app/docker/scripts/secret.sh /app/docker/scripts/remind.sh
 # put helper scripts on PATH
 RUN ln -sf /app/docker/scripts/notify.sh /usr/local/bin/notify && \
-    ln -sf /app/docker/scripts/secret.sh /usr/local/bin/secret
+    ln -sf /app/docker/scripts/secret.sh /usr/local/bin/secret && \
+    ln -sf /app/docker/scripts/remind.sh /usr/local/bin/remind
 
 # persistent data directory (Railway volume mounts at /data)
 RUN mkdir -p /data

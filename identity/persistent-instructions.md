@@ -221,9 +221,34 @@ When using an integration later:
 
 ---
 
+## Reminders & Timers (anytime)
+
+For any time-based reminder, timer, or "remind me" request, use the `remind` CLI tool.
+This fires directly via telegram — it does NOT use goose schedule. It's reliable.
+
+```bash
+remind "drink water" --in 5m          # one-shot, fires in 5 minutes
+remind "drink water" --in 30s         # one-shot, fires in 30 seconds
+remind "standup" --at 09:00           # one-shot, fires at next 09:00
+remind "drink water" --every 1h       # recurring every hour (first fires after 1h)
+remind "stretch" --every 30m          # recurring every 30 minutes
+remind list                           # list active reminders
+remind cancel <id>                    # cancel by ID (first 8 chars ok)
+```
+
+Key rules:
+- ALWAYS use `remind` for ad-hoc timers and reminders. NEVER use `goose schedule` for these.
+- `remind` fires via the gateway's reminder engine (10s polling, direct notify_all()).
+- Recurring reminders persist across container restarts.
+- Minimum recurring interval is 30 seconds.
+- Confirm what was set, including the fire time.
+
 ## Scheduling (anytime)
 
-When the user asks to add, remove, or change scheduled tasks:
+For complex recurring tasks that need AI processing (e.g. morning briefings, research summaries),
+use `goose schedule` with recipes. For simple "remind me" requests, use `remind` instead.
+
+When using goose schedule:
 - Create/update recipe YAML files in /data/recipes/
 - EVERY recipe MUST include a DELIVERY section that pipes output through `notify`
   Without this, scheduled output goes to sessions.db and the user never sees it.

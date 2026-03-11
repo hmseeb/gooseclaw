@@ -1868,9 +1868,9 @@ def _telegram_poll_loop(bot_token):
                         help_text = (
                             "🪿 *GooseClaw Commands*\n\n"
                             "*Session:*\n"
-                            "/clear — wipe conversation history\n"
-                            "/compact — summarize history to save tokens\n"
-                            "/newsession — start a fresh session (keeps goose history)\n\n"
+                            "/clear — wipe conversation and start fresh\n"
+                            "/newsession — same as /clear\n"
+                            "/compact — summarize history to save tokens\n\n"
                             "*MCP Prompts:*\n"
                             "/prompts — list available extension prompts\n"
                             "/prompt <name> — run a prompt\n\n"
@@ -1879,20 +1879,37 @@ def _telegram_poll_loop(bot_token):
                         send_telegram_message(bot_token, chat_id, help_text)
                         continue
 
-                    if lower == "/newsession":
+                    if lower in ("/newsession", "/clear"):
                         with _telegram_sessions_lock:
                             old = _telegram_sessions.pop(chat_id, None)
-                        # create a fresh agent session
-                        new_sid = _create_goose_session()
-                        if new_sid:
-                            with _telegram_sessions_lock:
-                                _telegram_sessions[chat_id] = new_sid
+                        # generate a fresh session ID directly — goose web auto-creates
+                        # sessions on first message. _create_goose_session() unreliably
+                        # returns the existing session via GET / redirect, so we bypass it.
+                        new_sid = time.strftime("%Y%m%d_%H%M%S")
+                        with _telegram_sessions_lock:
+                            _telegram_sessions[chat_id] = new_sid
                         _save_telegram_sessions()
+                        label = "cleared" if lower == "/clear" else "started"
                         send_telegram_message(
                             bot_token, chat_id,
-                            "🔄 New session started. Conversation history is fresh."
+                            f"🔄 Session {label}. Conversation history is fresh."
                         )
-                        print(f"[telegram] new session forced for chat {chat_id} (old: {old}, new: {new_sid})")
+                        print(f"[telegram] session reset for chat {chat_id} (old: {old}, new: {new_sid})")
+                        continue
+
+                    if lower == "/compact":
+                        # relay /compact to goose as a regular message — it handles summarization
+                        _send_typing_action(bot_token, chat_id)
+                        session_id = _get_session_id(chat_id)
+                        response_text, error = _relay_to_goose_web(
+                            "Please summarize our conversation so far into key points, "
+                            "then we can continue from this summary. Be concise.",
+                            session_id, chat_id=chat_id
+                        )
+                        if error:
+                            send_telegram_message(bot_token, chat_id, f"Error: {error}")
+                        else:
+                            send_telegram_message(bot_token, chat_id, f"📝 Compacted:\n\n{response_text}")
                         continue
 
                     # ── relay to goose web ──

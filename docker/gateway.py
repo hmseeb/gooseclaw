@@ -35,6 +35,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from http.server import ThreadingHTTPServer
 
 # ── rate limiting ────────────────────────────────────────────────────────────
@@ -100,10 +101,14 @@ PROXY_TIMEOUT = int(os.environ.get("GOOSECLAW_PROXY_TIMEOUT", "60"))
 
 goose_process = None
 goose_lock = threading.Lock()
-telegram_process = None
+telegram_process = None  # kept for backwards compat; no longer a subprocess
 telegram_lock = threading.Lock()
 telegram_pair_code = None
 telegram_pair_lock = threading.Lock()
+_telegram_running = False  # True while the Python polling thread is active
+_telegram_sessions_file = os.path.join(DATA_DIR, "telegram_sessions.json")
+_telegram_sessions = {}  # chat_id (str) -> session_id (str)
+_telegram_sessions_lock = threading.Lock()
 
 # ── goose web startup state ─────────────────────────────────────────────────
 goose_startup_state = {
@@ -1057,75 +1062,319 @@ def apply_config(config):
 
 
 def _is_goose_gateway_running():
-    """Check if a goose gateway process is already running (from entrypoint or previous start)."""
+    """Check if the Python telegram polling thread is running."""
+    return _telegram_running, []
+
+
+# ── telegram session persistence ────────────────────────────────────────────
+
+def _load_telegram_sessions():
+    """Load telegram session mapping from disk."""
+    global _telegram_sessions
     try:
-        result = subprocess.run(
-            ["pgrep", "-f", "goose gateway start.*telegram"],
-            capture_output=True, text=True, timeout=5
-        )
-        pids = [p.strip() for p in result.stdout.strip().split("\n") if p.strip()]
-        return len(pids) > 0, pids
+        if os.path.exists(_telegram_sessions_file):
+            with open(_telegram_sessions_file) as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                with _telegram_sessions_lock:
+                    _telegram_sessions = data
+                print(f"[telegram] loaded {len(data)} session(s) from {_telegram_sessions_file}")
+    except Exception as e:
+        print(f"[telegram] warn: could not load sessions: {e}")
+
+
+def _save_telegram_sessions():
+    """Persist telegram session mapping to disk."""
+    with _telegram_sessions_lock:
+        data = dict(_telegram_sessions)
+    try:
+        os.makedirs(os.path.dirname(_telegram_sessions_file), exist_ok=True)
+        tmp = _telegram_sessions_file + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp, _telegram_sessions_file)
+    except Exception as e:
+        print(f"[telegram] warn: could not save sessions: {e}")
+
+
+def _get_session_id(chat_id):
+    """Get or create a session_id for a telegram chat_id."""
+    chat_key = str(chat_id)
+    with _telegram_sessions_lock:
+        sid = _telegram_sessions.get(chat_key)
+    if sid:
+        return sid
+    sid = str(uuid.uuid4())
+    with _telegram_sessions_lock:
+        _telegram_sessions[chat_key] = sid
+    _save_telegram_sessions()
+    print(f"[telegram] new session {sid} for chat {chat_key}")
+    return sid
+
+
+# ── telegram bot API helpers ────────────────────────────────────────────────
+
+def _send_typing_action(bot_token, chat_id):
+    """Send 'typing' chat action to telegram."""
+    try:
+        url = f"https://api.telegram.org/bot{bot_token}/sendChatAction"
+        payload = urllib.parse.urlencode({
+            "chat_id": chat_id,
+            "action": "typing",
+        }).encode()
+        req = urllib.request.Request(url, data=payload)
+        urllib.request.urlopen(req, timeout=5)
     except Exception:
-        return False, []
+        pass  # non-critical
+
+
+def _relay_to_goose_web(user_text, session_id):
+    """POST a user message to goose web /reply and return the assistant's text.
+
+    Returns (response_text, error_string). On success error_string is empty.
+    """
+    if not _INTERNAL_GOOSE_TOKEN:
+        return "", "Goose is not ready yet (no internal token). Please try again in a moment."
+
+    auth_value = base64.b64encode(f"user:{_INTERNAL_GOOSE_TOKEN}".encode()).decode()
+    body = json.dumps({
+        "user_message": {
+            "role": "user",
+            "content": [{"type": "text", "text": user_text}],
+        },
+        "session_id": session_id,
+    }).encode("utf-8")
+
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=120)
+        conn.request("POST", "/reply", body=body, headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Basic {auth_value}",
+            "Accept": "text/event-stream",
+        })
+        resp = conn.getresponse()
+        if resp.status != 200:
+            err_body = resp.read().decode("utf-8", errors="replace")[:500]
+            conn.close()
+            return "", f"Goose returned HTTP {resp.status}: {err_body}"
+
+        # Parse the SSE stream
+        collected_text = []
+        buf = b""
+        while True:
+            chunk = resp.read(4096)
+            if not chunk:
+                break
+            buf += chunk
+            # process complete lines
+            while b"\n" in buf:
+                line_bytes, buf = buf.split(b"\n", 1)
+                line = line_bytes.decode("utf-8", errors="replace").strip()
+                if not line.startswith("data: "):
+                    continue
+                data_str = line[6:]  # strip "data: " prefix
+                try:
+                    event = json.loads(data_str)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                etype = event.get("type", "")
+                if etype == "Message":
+                    msg = event.get("message", {})
+                    if msg.get("role") == "assistant":
+                        for part in msg.get("content", []):
+                            if part.get("type") == "text":
+                                collected_text.append(part.get("text", ""))
+                elif etype == "Finish":
+                    break
+
+        conn.close()
+        full_text = "".join(collected_text).strip()
+        if not full_text:
+            return "(No response from goose)", ""
+        return full_text, ""
+
+    except (ConnectionRefusedError, OSError) as e:
+        return "", f"Cannot reach goose web: {e}"
+    except Exception as e:
+        return "", f"Error communicating with goose: {e}"
+
+
+# ── pairing helpers (self-contained, no Rust subprocess) ────────────────────
+
+def _add_pairing_to_config(chat_id):
+    """Add a telegram pairing entry to goose config.yaml (gateway_pairings section)."""
+    config_path = GOOSE_CONFIG_PATH
+    chat_str = str(chat_id)
+    try:
+        content = ""
+        if os.path.exists(config_path):
+            with open(config_path) as f:
+                content = f.read()
+
+        # check if already paired
+        if chat_str in content:
+            # crude check — good enough since chat IDs are unique numeric strings
+            return
+
+        pairing_entry = (
+            f"  - platform: telegram\n"
+            f"    user_id: '{chat_str}'\n"
+            f"    state: paired\n"
+        )
+        if "gateway_pairings:" in content:
+            # append to existing section
+            content = content.replace("gateway_pairings:\n", "gateway_pairings:\n" + pairing_entry, 1)
+        else:
+            content = content.rstrip("\n") + "\ngateway_pairings:\n" + pairing_entry
+
+        tmp = config_path + ".tmp"
+        with open(tmp, "w") as f:
+            f.write(content)
+        os.replace(tmp, config_path)
+        print(f"[telegram] paired chat_id {chat_str}")
+    except Exception as e:
+        print(f"[telegram] warn: could not write pairing: {e}")
 
 
 def _generate_and_store_pair_code():
-    """Generate a telegram pairing code and store it in the global."""
+    """Generate a random 6-char alphanumeric pairing code and store globally."""
     global telegram_pair_code
-    try:
-        result = subprocess.run(
-            ["goose", "gateway", "pair", "telegram"],
-            capture_output=True, text=True, timeout=10
-        )
-        output = result.stdout + result.stderr
-        import re
-        match = re.search(r'[A-Z0-9]{6}', output)
-        if match:
-            code = match.group()
-            with telegram_pair_lock:
-                telegram_pair_code = code
-            print(f"[gateway] telegram pairing code: {code}")
-            return code
-        else:
-            print(f"[gateway] telegram pair output: {output.strip()}")
-    except Exception as e:
-        print(f"[gateway] could not generate pair code: {e}")
-    return None
+    # generate a 6-character uppercase alphanumeric code
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    code = "".join(secrets.choice(alphabet) for _ in range(6))
+    with telegram_pair_lock:
+        telegram_pair_code = code
+    print(f"[telegram] pairing code: {code}")
+    return code
+
+
+# ── telegram polling loop ───────────────────────────────────────────────────
+
+def _telegram_poll_loop(bot_token):
+    """Long-poll telegram for updates and relay messages to goose web.
+
+    Runs in a daemon thread. Handles pairing and message relay.
+    """
+    global _telegram_running, telegram_pair_code
+    offset = 0
+    _telegram_running = True
+    print("[telegram] polling loop started")
+
+    while _telegram_running:
+        try:
+            url = (
+                f"https://api.telegram.org/bot{bot_token}/getUpdates"
+                f"?offset={offset}&timeout=30&allowed_updates=[\"message\"]"
+            )
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=40) as resp:
+                data = json.loads(resp.read())
+
+            if not data.get("ok"):
+                print(f"[telegram] getUpdates not ok: {data}")
+                time.sleep(5)
+                continue
+
+            for update in data.get("result", []):
+                offset = update["update_id"] + 1
+                msg = update.get("message")
+                if not msg:
+                    continue
+
+                chat_id = str(msg.get("chat", {}).get("id", ""))
+                text = msg.get("text", "").strip()
+                if not chat_id or not text:
+                    continue
+
+                paired_ids = get_paired_chat_ids()
+
+                if chat_id in paired_ids:
+                    # paired user — relay message to goose web
+                    _send_typing_action(bot_token, chat_id)
+                    session_id = _get_session_id(chat_id)
+
+                    # send typing indicator periodically in a background thread
+                    typing_stop = threading.Event()
+
+                    def _typing_loop(_bt=bot_token, _cid=chat_id):
+                        while not typing_stop.is_set():
+                            _send_typing_action(_bt, _cid)
+                            typing_stop.wait(4)
+
+                    typing_thread = threading.Thread(target=_typing_loop, daemon=True)
+                    typing_thread.start()
+
+                    try:
+                        response_text, error = _relay_to_goose_web(text, session_id)
+                    finally:
+                        typing_stop.set()
+                        typing_thread.join(timeout=2)
+
+                    if error:
+                        send_telegram_message(bot_token, chat_id, f"Error: {error}")
+                    else:
+                        send_telegram_message(bot_token, chat_id, response_text)
+                else:
+                    # unpaired user — check if this is a pairing code
+                    with telegram_pair_lock:
+                        current_code = telegram_pair_code
+
+                    if current_code and text.upper() == current_code.upper():
+                        # valid pairing code — pair this chat
+                        _add_pairing_to_config(chat_id)
+                        with telegram_pair_lock:
+                            # consume the code so it can't be reused
+                            telegram_pair_code = None
+                        send_telegram_message(
+                            bot_token, chat_id,
+                            "Paired successfully! You can now send messages to goose through this chat."
+                        )
+                        print(f"[telegram] chat {chat_id} paired via code {current_code}")
+                    else:
+                        send_telegram_message(
+                            bot_token, chat_id,
+                            "You are not paired with this goose instance. "
+                            "Please enter a valid pairing code from the web dashboard."
+                        )
+
+        except urllib.error.HTTPError as e:
+            if e.code == 409:
+                # conflict — another getUpdates call is running; back off
+                print("[telegram] conflict (409), backing off 10s")
+                time.sleep(10)
+            elif e.code == 401:
+                print("[telegram] FATAL: invalid bot token (401). Stopping poll loop.")
+                _telegram_running = False
+                return
+            else:
+                print(f"[telegram] HTTP error {e.code}, retrying in 5s")
+                time.sleep(5)
+        except urllib.error.URLError as e:
+            print(f"[telegram] network error: {e.reason}, retrying in 5s")
+            time.sleep(5)
+        except Exception as e:
+            print(f"[telegram] poll error: {e}, retrying in 5s")
+            time.sleep(5)
+
+    print("[telegram] polling loop stopped")
 
 
 def start_telegram_gateway(bot_token):
-    """Start the telegram gateway process if not already running."""
-    global telegram_process
+    """Start the Python telegram polling thread if not already running."""
+    global _telegram_running
 
-    with telegram_lock:
-        # check our tracked process first
-        if telegram_process and telegram_process.poll() is None:
-            print("[gateway] telegram gateway already running (tracked pid)")
-            return
-
-    # check for any goose gateway process (may have been started by entrypoint or previous run)
-    running, pids = _is_goose_gateway_running()
-    if running:
-        print(f"[gateway] telegram gateway already running (external pids: {pids})")
+    if _telegram_running:
+        print("[telegram] polling already running")
         return
 
-    _check_stale_pid("telegram")
-    print("[gateway] starting telegram gateway...")
-    try:
-        proc = subprocess.Popen(
-            ["goose", "gateway", "start", "--bot-token", bot_token, "telegram"],
-            stdout=sys.stdout, stderr=sys.stderr
-        )
-        with telegram_lock:
-            telegram_process = proc
-        _write_pid("telegram", proc.pid)
-        # generate pairing code after gateway has time to initialize
-        def _delayed_pair():
-            time.sleep(8)
-            _generate_and_store_pair_code()
-        threading.Thread(target=_delayed_pair, daemon=True).start()
-    except Exception as e:
-        print(f"[gateway] failed to start telegram: {e}")
+    _load_telegram_sessions()
+
+    # generate an initial pairing code
+    _generate_and_store_pair_code()
+
+    thread = threading.Thread(target=_telegram_poll_loop, args=(bot_token,), daemon=True)
+    thread.start()
+    print("[telegram] polling thread started")
 
 
 def start_goose_web():
@@ -1665,14 +1914,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(403, {"error": "agent not configured yet"})
             return
         token = get_bot_token()
-        running = False
-        with telegram_lock:
-            tproc = telegram_process
-        if tproc and tproc.poll() is None:
-            running = True
-        else:
-            ext_running, _ = _is_goose_gateway_running()
-            running = ext_running
+        running = _telegram_running
 
         chat_ids = get_paired_chat_ids()
         with telegram_pair_lock:
@@ -1697,23 +1939,13 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             return
 
-        # check if telegram is running
-        running = False
-        with telegram_lock:
-            tproc = telegram_process
-        if tproc and tproc.poll() is None:
-            running = True
-        else:
-            ext_running, _ = _is_goose_gateway_running()
-            running = ext_running
-
-        if not running:
+        if not _telegram_running:
             # try to start telegram first
             token = get_bot_token()
             if token:
                 start_telegram_gateway(token)
-                # wait for it to initialize
-                time.sleep(10)
+                # give the thread a moment to start
+                time.sleep(2)
             else:
                 self.send_json(400, {"error": "no telegram bot token configured", "code": None})
                 return
@@ -1989,21 +2221,15 @@ def main():
     threading.Thread(target=_rate_limiter_cleanup, daemon=True).start()
 
     def shutdown(_sig, _frame):
+        global _telegram_running
         print("[gateway] shutting down...")
         # stop accepting new connections first
         threading.Thread(target=server.shutdown, daemon=True).start()
         # terminate goose web and clean up PID
         stop_goose_web()
         _remove_pid("goose_web")
-        # terminate telegram and clean up PID
-        with telegram_lock:
-            tproc = telegram_process
-        if tproc and tproc.poll() is None:
-            tproc.terminate()
-            try:
-                tproc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                tproc.kill()
+        # stop telegram polling thread
+        _telegram_running = False
         _remove_pid("telegram")
         print("[gateway] shutdown complete")
 

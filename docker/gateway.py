@@ -32,6 +32,7 @@ API:
   POST /api/jobs/<id>/run     -> manually trigger a job
   GET  /api/channels          -> list loaded channel plugins
   POST /api/channels/reload   -> hot-reload channel plugins from /data/channels/
+  GET  /admin                  -> admin dashboard
 """
 
 import base64
@@ -115,6 +116,7 @@ CONFIG_DIR = os.path.join(DATA_DIR, "config")
 SETUP_FILE = os.path.join(CONFIG_DIR, "setup.json")
 APP_DIR = os.environ.get("APP_DIR", "/app")
 SETUP_HTML = os.path.join(APP_DIR, "docker", "setup.html")
+ADMIN_HTML = os.path.join(APP_DIR, "docker", "admin.html")
 PORT = int(os.environ.get("PORT", 8080))
 GOOSE_WEB_PORT = 3001
 PROXY_TIMEOUT = int(os.environ.get("GOOSECLAW_PROXY_TIMEOUT", "60"))
@@ -3247,6 +3249,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.handle_version()
         elif path.rstrip("/") == "/setup" or path.startswith("/setup/"):
             self.handle_setup_page()
+        elif path.rstrip("/") == "/admin":
+            self.handle_admin_page()
         elif path == "/api/setup/config":
             self.handle_get_config()
         elif path == "/api/notify/status":
@@ -3447,6 +3451,44 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(content)
         except FileNotFoundError:
             self.send_error(404, "Setup page not found")
+
+    def handle_admin_page(self):
+        """Serve the admin dashboard. Requires auth."""
+        if not self._check_local_or_auth():
+            return
+        try:
+            with open(ADMIN_HTML, "rb") as f:
+                content = f.read()
+            mtime = os.path.getmtime(ADMIN_HTML)
+            etag = f'"{int(mtime)}"'
+            if self.headers.get("If-None-Match") == etag:
+                self.send_response(304)
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(content)))
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("ETag", etag)
+            for header, value in SECURITY_HEADERS.items():
+                self.send_header(header, value)
+            csp = (
+                "default-src 'self'; "
+                "script-src 'self' 'unsafe-inline'; "
+                "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+                "font-src https://fonts.gstatic.com; "
+                "img-src 'self' data:; "
+                "connect-src 'self'; "
+                "frame-ancestors 'none'"
+            )
+            self.send_header("Content-Security-Policy", csp)
+            if os.environ.get("RAILWAY_ENVIRONMENT"):
+                self.send_header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+            self._inject_session_cookie()
+            self.end_headers()
+            self.wfile.write(content)
+        except FileNotFoundError:
+            self.send_error(404, "Admin page not found")
 
     def handle_get_config(self):
         if load_setup() and not check_auth(self):

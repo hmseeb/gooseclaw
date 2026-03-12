@@ -233,6 +233,8 @@ def _stderr_reader(proc):
     try:
         for raw_line in proc.stderr:
             line = raw_line.decode("utf-8", errors="replace").rstrip("\n")
+            # print to both stdout (Railway captures this) and stderr
+            print(f"[goose-web] {line}")
             print(f"[goose-web] {line}", file=sys.stderr)
             _append_stderr(line)
     except Exception:
@@ -3866,6 +3868,10 @@ def start_goose_web():
 
         print(f"[gateway] starting goose web on 127.0.0.1:{GOOSE_WEB_PORT}")
         print(f"[gateway] cmd: goose web --host 127.0.0.1 --port {GOOSE_WEB_PORT} --auth-token [internal]")
+        # diagnostic: check critical env vars for claude-code provider
+        has_oauth = bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"))
+        goose_mode = os.environ.get("GOOSE_MODE", "NOT SET")
+        print(f"[gateway] env: CLAUDE_CODE_OAUTH_TOKEN={'set' if has_oauth else 'MISSING'} GOOSE_MODE={goose_mode}")
         goose_process = subprocess.Popen(cmd, stdout=sys.stdout, stderr=subprocess.PIPE)
         _write_pid("goose_web", goose_process.pid)
 

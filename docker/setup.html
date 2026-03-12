@@ -1409,7 +1409,7 @@ body::after {
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M8.5 3L4.5 7L8.5 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
         Back
       </button>
-      <button class="btn btn-primary" id="saveBtn" onclick="saveConfig()" disabled>
+      <button class="btn btn-primary" id="saveBtn" onclick="saveConfig()">
         Save &amp; Start Agent
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5.5 3L9.5 7L5.5 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
@@ -2532,11 +2532,7 @@ async function validateKey() {
 
 /* ── update save button state based on validationPassed ── */
 function updateSaveBtn() {
-  const btn = document.getElementById('saveBtn');
-  const note = document.getElementById('validationGateNote');
-  if (!btn) return;
-  btn.disabled = !validationPassed;
-  if (note) note.style.display = validationPassed ? 'none' : '';
+  /* validation is optional — save button always enabled */
 }
 
 /* ── advance from credentials step with empty-field check ── */

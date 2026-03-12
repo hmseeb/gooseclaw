@@ -601,6 +601,54 @@ class TestRegexInjection(unittest.TestCase):
         assert result == cmd  # \b prevents matching "running"
 
 
+# ── _strip_goose_preamble ───────────────────────────────────────────────────
+
+class TestStripGoosePreamble(unittest.TestCase):
+    """Tests for stripping goose startup banner from job output."""
+
+    def test_strips_goose_banner(self):
+        raw = (
+            "   __( O)>  \u25cf new session \u00b7 claude-code default\n"
+            "   \\____)\t20260312_22 \u00b7 /data\n"
+            "     L L\t goose is ready\n"
+            "Let me pull data!\n"
+            "\n"
+            "CRYPTO MARKET REPORT\n"
+            "BTC is at 70k"
+        )
+        result = gateway._strip_goose_preamble(raw)
+        assert "__( O)>" not in result
+        assert "goose is ready" not in result
+        assert "CRYPTO MARKET REPORT" in result
+
+    def test_no_banner_returns_unchanged(self):
+        text = "just normal output\nno banner here"
+        result = gateway._strip_goose_preamble(text)
+        assert result == text
+
+    def test_strips_thinking_before_separator(self):
+        raw = (
+            "   __( O)>  banner\n"
+            "   \\____)\tsession\n"
+            "     L L\t goose is ready\n"
+            "Let me pull all the data simultaneously!\n"
+            "Now I have everything needed. Let me compile.\n"
+            "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+            "Actual report content"
+        )
+        result = gateway._strip_goose_preamble(raw)
+        assert "__( O)>" not in result
+        assert "Actual report content" in result
+
+    def test_empty_string(self):
+        assert gateway._strip_goose_preamble("") == ""
+
+    def test_only_banner(self):
+        raw = "   __( O)>  banner\n   \\____)\tsession\n     L L\t goose is ready\n"
+        result = gateway._strip_goose_preamble(raw)
+        assert result.strip() == ""
+
+
 # ── update_job ──────────────────────────────────────────────────────────────
 
 class TestUpdateJob(unittest.TestCase):

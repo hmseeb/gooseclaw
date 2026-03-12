@@ -2080,6 +2080,47 @@ def _resolve_job_model(job):
     return model_ref, None  # treat as raw model name
 
 
+def _strip_goose_preamble(text):
+    """Strip the goose startup banner and thinking preamble from output.
+
+    Goose prints an ASCII duck banner + session info before actual output.
+    This strips everything up to and including the 'goose is ready' line,
+    plus any short "thinking" lines before the first content separator or
+    substantive content.
+    """
+    if not text:
+        return text
+    lines = text.split("\n")
+    # find the last banner line ("goose is ready" or the duck art)
+    banner_end = -1
+    for i, line in enumerate(lines):
+        if "goose is ready" in line or "__( O)>" in line or "\\____)" in line or (line.strip().startswith("L L") and i < 10):
+            banner_end = i
+    if banner_end == -1:
+        return text  # no banner found
+    # skip past banner
+    rest = lines[banner_end + 1:]
+    # skip short "thinking" lines until we hit a separator or substantial content
+    start = 0
+    for i, line in enumerate(rest):
+        stripped = line.strip()
+        # content separator (─── or === or ---)
+        if stripped and all(c in "\u2500\u2501\u2550=-" for c in stripped) and len(stripped) >= 4:
+            start = i
+            break
+        # substantial content line (long enough, not just "Let me..." filler)
+        if len(stripped) > 80:
+            start = i
+            break
+        # heading-like content (starts with emoji + caps, or markdown #)
+        if stripped and (stripped[0] == "#" or (len(stripped) > 5 and stripped[0].encode("utf-8")[0] > 127)):
+            start = i
+            break
+    else:
+        start = 0  # no separator found, keep everything after banner
+    return "\n".join(rest[start:]).strip()
+
+
 def _run_script(job):
     """Execute a script job as a subprocess. Capture output, enforce timeout."""
     job_id = job.get("id", "unknown")
@@ -2119,6 +2160,10 @@ def _run_script(job):
         output = result.stdout.strip()
         stderr = result.stderr.strip()
         exit_code = result.returncode
+
+        # strip goose startup banner from output
+        if "goose" in command:
+            output = _strip_goose_preamble(output)
 
         if exit_code != 0:
             status = "error"

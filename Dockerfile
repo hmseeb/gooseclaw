@@ -6,7 +6,8 @@ LABEL maintainer="gooseclaw" \
       org.opencontainers.image.title="GooseClaw" \
       org.opencontainers.image.base.name="ubuntu:22.04"
 
-ENV DEBIAN_FRONTEND=noninteractive
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1
 
 # minimal runtime deps
 # python3-yaml pinned via apt; see docker/requirements.txt for pip-based version tracking

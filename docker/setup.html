@@ -807,85 +807,95 @@ body::after {
   transition: all 0.15s;
 }
 .model-card-btn:hover { color: var(--error); background: var(--error-bg); }
-.model-card-btn.edit-btn:hover { color: var(--accent-bright); background: rgba(124, 58, 237, 0.1); }
-.model-card-btn.key-btn:hover { color: #f59e0b; background: rgba(245, 158, 11, 0.1); }
 .model-card-btn.switch-btn:hover { color: var(--accent-bright); background: rgba(124, 58, 237, 0.1); }
-/* inline edit for model name */
-.model-card-edit-inline {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-top: 4px;
-}
-.model-card-edit-inline input {
-  flex: 1;
-  padding: 4px 8px;
-  border-radius: 6px;
-  border: 1px solid var(--border-accent);
+/* click-to-expand edit panel for model cards */
+.model-card-edit-panel {
+  margin-top: 8px;
+  padding: 10px;
   background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+.model-card-edit-panel .field { margin-bottom: 8px; }
+.model-card-edit-panel .field label {
+  display: block;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-bottom: 3px;
+  font-weight: 500;
+}
+.model-card-edit-panel .field input {
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-card);
   color: var(--text-primary);
   font-family: 'JetBrains Mono', monospace;
   font-size: 12px;
   outline: none;
+  box-sizing: border-box;
 }
-.model-card-edit-inline input:focus {
+.model-card-edit-panel .field input:focus {
+  border-color: var(--border-accent);
   box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.1);
 }
-.model-card-edit-inline button {
-  padding: 3px 8px;
-  border-radius: 5px;
-  border: none;
+.model-card-edit-panel .edit-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+.model-card-edit-panel .edit-actions label {
   font-size: 11px;
-  cursor: pointer;
-  font-family: 'DM Sans', sans-serif;
-}
-.model-card-edit-inline .save-edit-btn {
-  background: var(--accent);
-  color: white;
-}
-.model-card-edit-inline .cancel-edit-btn {
-  background: transparent;
-  border: 1px solid var(--border-subtle);
-  color: var(--text-tertiary);
-}
-/* inline key edit for model card */
-.model-card-key-inline {
-  margin-top: 6px;
+  color: var(--text-secondary);
   display: flex;
   align-items: center;
   gap: 4px;
-}
-.model-card-key-inline input {
+  cursor: pointer;
   flex: 1;
-  padding: 4px 8px;
+}
+.model-card-edit-panel .edit-actions button {
+  padding: 5px 14px;
   border-radius: 6px;
-  border: 1px solid rgba(245, 158, 11, 0.4);
-  background: var(--bg-elevated);
-  color: var(--text-primary);
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 11px;
-  outline: none;
-}
-.model-card-key-inline input:focus {
-  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.1);
-}
-.model-card-key-inline button {
-  padding: 3px 8px;
-  border-radius: 5px;
   border: none;
   font-size: 11px;
   cursor: pointer;
-  font-family: 'DM Sans', sans-serif;
+  font-weight: 500;
 }
-.model-card-key-inline .save-key-btn {
-  background: #f59e0b;
-  color: #000;
-  font-weight: 600;
+.model-card-edit-panel .save-btn {
+  background: var(--accent);
+  color: white;
 }
-.model-card-key-inline .cancel-key-btn {
+.model-card-edit-panel .save-btn:hover {
+  background: var(--accent-bright);
+}
+.model-card-edit-panel .cancel-btn {
   background: transparent;
-  border: 1px solid var(--border-subtle);
   color: var(--text-tertiary);
+  border: 1px solid var(--border-subtle) !important;
+}
+.model-card-edit-panel .secret-field-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.model-card-edit-panel .secret-field-wrapper input {
+  flex: 1;
+  padding-right: 36px !important;
+}
+.model-card-edit-panel .secret-toggle-btn {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px;
+  color: var(--text-tertiary);
+  width: 20px;
+  height: 20px;
 }
 /* secret field wrapper with eye toggle */
 .secret-field-wrapper {
@@ -1758,111 +1768,117 @@ function toggleSecretVisibility(btn) {
   }
 }
 
-/* ── inline model name editing ── */
-function startEditModel(modelId, event) {
+/* ── click-to-expand model edit panel ── */
+let _openEditModelId = null;
+
+function toggleModelEdit(modelId, event) {
   event.stopPropagation();
-  const models = dashboardConfig.models || [];
-  const model = models.find(m => m.id === modelId);
-  if (!model) return;
-
-  const card = event.target.closest('.model-card');
-  const nameEl = card.querySelector('.model-card-name');
-  const currentName = model.model;
-
-  nameEl.innerHTML = `<div class="model-card-edit-inline">
-    <input type="text" value="${currentName}" onkeydown="if(event.key==='Enter'){saveEditModel('${modelId}',this);event.stopPropagation()}" onclick="event.stopPropagation()">
-    <button class="save-edit-btn" onclick="event.stopPropagation();saveEditModel('${modelId}',this.previousElementSibling)">&#10003;</button>
-    <button class="cancel-edit-btn" onclick="event.stopPropagation();renderModelCards(dashboardConfig)">&#10005;</button>
-  </div>`;
-  const inp = nameEl.querySelector('input');
-  inp.focus();
-  inp.select();
-}
-
-async function saveEditModel(modelId, inputEl) {
-  const newModel = inputEl.value.trim();
-  if (!newModel) { renderModelCards(dashboardConfig); return; }
-
-  const models = dashboardConfig.models || [];
-  const model = models.find(m => m.id === modelId);
-  if (!model || model.model === newModel) { renderModelCards(dashboardConfig); return; }
-
-  try {
-    const resp = await fetch('/api/setup/models/add', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({id: modelId, provider: model.provider, model: newModel, replace: true})
-    });
-    const data = await resp.json();
-    if (data.success) {
-      model.model = newModel;
-      renderModelCards(dashboardConfig);
-      const successEl = document.getElementById('dashboardSuccess');
-      if (successEl) { successEl.classList.add('show'); }
-      pollDashboardRestart();
-    } else {
-      alert(data.error || 'Failed to update model name');
-      renderModelCards(dashboardConfig);
-    }
-  } catch(e) {
-    alert('Could not reach server');
+  if (_openEditModelId === modelId) {
+    _openEditModelId = null;
     renderModelCards(dashboardConfig);
+    return;
   }
+  _openEditModelId = modelId;
+  renderModelCards(dashboardConfig);
 }
 
-/* ── inline API key editing on model card ── */
-function startEditModelKey(modelId, event) {
-  event.stopPropagation();
-  const card = event.target.closest('.model-card');
-  /* remove any existing key editor */
-  const existing = card.querySelector('.model-card-key-inline');
-  if (existing) { existing.remove(); return; }
-
+async function saveModelEdit(modelId) {
   const models = dashboardConfig.models || [];
-  const model = models.find(m => m.id === modelId);
-  if (!model) return;
-  const prov = PROVIDERS[model.provider];
-  const placeholder = model.provider === 'claude-code'
-    ? 'OAuth token (sk-ant-oat01-...)'
-    : (prov && prov.keyPlaceholder ? prov.keyPlaceholder : 'API key');
-
-  const div = document.createElement('div');
-  div.className = 'model-card-key-inline';
-  div.innerHTML = `
-    <input type="password" placeholder="${placeholder}" onclick="event.stopPropagation()">
-    <button class="save-key-btn" onclick="event.stopPropagation();saveEditModelKey('${modelId}',this.parentElement.querySelector('input'))">Save</button>
-    <button class="cancel-key-btn" onclick="event.stopPropagation();this.parentElement.remove()">&#10005;</button>`;
-  card.appendChild(div);
-  div.querySelector('input').focus();
-}
-
-async function saveEditModelKey(modelId, inputEl) {
-  const key = inputEl.value.trim();
-  if (!key) { inputEl.parentElement.remove(); return; }
-
-  const models = dashboardConfig.models || [];
-  const model = models.find(m => m.id === modelId);
+  const model = models.find(function(m) { return m.id === modelId; });
   if (!model) return;
 
-  try {
-    const payload = {id: modelId, provider: model.provider, model: model.model, api_key: key, replace: true};
-    const resp = await fetch('/api/setup/models/add', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(payload)
-    });
-    const data = await resp.json();
-    if (data.success) {
-      inputEl.parentElement.remove();
-      const successEl = document.getElementById('dashboardSuccess');
-      if (successEl) { successEl.classList.add('show'); }
-      pollDashboardRestart();
-    } else {
-      alert(data.error || 'Failed to update API key');
+  const panel = document.querySelector('.model-card-edit-panel[data-model-id="' + modelId + '"]');
+  if (!panel) return;
+
+  const nameInput = panel.querySelector('.edit-model-name');
+  const keyInput = panel.querySelector('.edit-model-key');
+  const defaultCheck = panel.querySelector('.edit-model-default');
+
+  const newName = nameInput ? nameInput.value.trim() : '';
+  const newKey = keyInput ? keyInput.value.trim() : '';
+  const wantDefault = defaultCheck ? defaultCheck.checked : false;
+
+  let changed = false;
+
+  /* update model name if changed */
+  if (newName && newName !== model.model) {
+    try {
+      const resp = await fetch('/api/setup/models/add', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({id: modelId, provider: model.provider, model: newName, replace: true})
+      });
+      const data = await resp.json();
+      if (data.success) {
+        model.model = newName;
+        changed = true;
+      } else {
+        alert(data.error || 'Failed to update model name');
+        return;
+      }
+    } catch(e) {
+      alert('Could not reach server');
+      return;
     }
-  } catch(e) {
-    alert('Could not reach server');
   }
+
+  /* update API key if changed (not empty and not masked placeholder) */
+  if (newKey && newKey !== '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022') {
+    try {
+      var keyPayload = {id: modelId, provider: model.provider, model: model.model, api_key: newKey, replace: true};
+      var resp2 = await fetch('/api/setup/models/add', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(keyPayload)
+      });
+      var data2 = await resp2.json();
+      if (data2.success) {
+        changed = true;
+      } else {
+        alert(data2.error || 'Failed to update API key');
+        return;
+      }
+    } catch(e) {
+      alert('Could not reach server');
+      return;
+    }
+  }
+
+  /* activate as default if checkbox checked and not already default */
+  if (wantDefault && !model.is_default) {
+    try {
+      var resp3 = await fetch('/api/setup/models/activate', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({id: modelId})
+      });
+      var data3 = await resp3.json();
+      if (data3.success) {
+        models.forEach(function(m) { m.is_default = (m.id === modelId); });
+        changed = true;
+      } else {
+        alert(data3.error || 'Failed to activate model');
+        return;
+      }
+    } catch(e) {
+      alert('Could not reach server');
+      return;
+    }
+  }
+
+  _openEditModelId = null;
+  renderModelCards(dashboardConfig);
+
+  if (changed) {
+    var successEl = document.getElementById('dashboardSuccess');
+    if (successEl) { successEl.classList.add('show'); }
+    pollDashboardRestart();
+  }
+}
+
+function cancelModelEdit(modelId) {
+  _openEditModelId = null;
+  renderModelCards(dashboardConfig);
 }
 
 /* ── per-provider format hints ── */
@@ -3123,20 +3139,35 @@ function startDashboardEdit(field) {
   const fieldEl = document.getElementById(`df-${field}`);
   if (fieldEl) fieldEl.classList.add('editing');
 
+  /* pre-select current timezone value */
+  if (field === 'timezone') {
+    const sel = document.getElementById('dfi-timezone');
+    const current = dashboardConfig.timezone || 'UTC';
+    if (sel) {
+      for (let i = 0; i < sel.options.length; i++) {
+        if (sel.options[i].value === current) { sel.selectedIndex = i; break; }
+      }
+    }
+  }
+
   /* pre-fill secret inputs with masked placeholder when value is set */
   if (field === 'telegram') {
     const inp = document.getElementById('dfi-telegram');
     if (inp) {
       const isSet = dashboardConfig.telegram_bot_token_set || dashboardConfig.telegram_bot_token;
       inp.value = '';
-      inp.placeholder = isSet ? 'clear and re-enter to change' : 'bot token from @BotFather';
+      inp.placeholder = isSet ? '(token saved) enter new token to change' : 'bot token from @BotFather';
     }
   } else if (field === 'authtoken') {
     const inp = document.getElementById('dfi-authtoken');
     if (inp) {
-      const isSet = !!dashboardConfig.web_auth_token;
-      inp.value = '';
-      inp.placeholder = isSet ? 'clear and re-enter to change' : 'leave blank to auto-generate';
+      const at = dashboardConfig.web_auth_token;
+      if (at) {
+        inp.value = at;
+      } else {
+        inp.value = '';
+        inp.placeholder = 'leave blank to auto-generate';
+      }
     }
   }
 }
@@ -3223,10 +3254,9 @@ function renderModelCards(config) {
     const channels = routeMap[m.id] || [];
 
     const needsKey = m.provider !== 'github-copilot' && !['ollama','lm-studio','docker-model-runner','ramalama'].includes(m.provider);
-    html += `<div class="model-card${isDefault ? ' active' : ''}" onclick="activateModel('${m.id}')" title="Click to set as default">
+    const isEditing = _openEditModelId === m.id;
+    html += `<div class="model-card${isDefault ? ' active' : ''}" onclick="toggleModelEdit('${m.id}',event)">
       <div class="model-card-actions">
-        <button class="model-card-btn edit-btn" onclick="startEditModel('${m.id}',event)" title="Edit model name">&#9998;</button>
-        ${needsKey ? `<button class="model-card-btn key-btn" onclick="startEditModelKey('${m.id}',event)" title="Edit API key">&#128273;</button>` : ''}
         ${!isDefault ? `<button class="model-card-btn" onclick="event.stopPropagation();removeModel('${m.id}')" title="Remove">&#x2715;</button>` : ''}
       </div>
       <div class="model-card-provider">${icon} ${provName}</div>
@@ -3234,8 +3264,39 @@ function renderModelCards(config) {
       <div class="model-card-badges">
         ${isDefault ? '<span class="model-badge default">default</span>' : ''}
         ${channels.map(ch => `<span class="model-badge channel">${ch}</span>`).join('')}
-      </div>
-    </div>`;
+      </div>`;
+
+    if (isEditing) {
+      const prov = PROVIDERS[m.provider];
+      const modelSuggestions = (prov && prov.models) ? prov.models : [];
+      const datalistId = 'dl-models-' + m.id;
+      const hasKey = savedKeysSet[m.provider];
+      html += `<div class="model-card-edit-panel" data-model-id="${m.id}" onclick="event.stopPropagation()">
+        <div class="field">
+          <label>Model name</label>
+          <input type="text" class="edit-model-name" value="${m.model}" list="${datalistId}">
+          <datalist id="${datalistId}">${modelSuggestions.map(function(s) { return '<option value="' + s + '">'; }).join('')}</datalist>
+        </div>`;
+      if (needsKey) {
+        const keyPlaceholder = hasKey ? 'Enter new key to update' : (prov && prov.keyPlaceholder ? prov.keyPlaceholder : 'API key');
+        const keyValue = hasKey ? '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022' : '';
+        html += `<div class="field">
+          <label>API key</label>
+          <div class="secret-field-wrapper">
+            <input type="password" class="edit-model-key" value="${keyValue}" placeholder="${keyPlaceholder}">
+            <button type="button" class="secret-toggle-btn" onclick="toggleSecretVisibility(this)" title="Toggle visibility">${EYE_OPEN_SVG}</button>
+          </div>
+        </div>`;
+      }
+      html += `<div class="edit-actions">
+          <label><input type="checkbox" class="edit-model-default"${isDefault ? ' checked' : ''}> Set as default</label>
+          <button class="save-btn" onclick="saveModelEdit('${m.id}')">Save</button>
+          <button class="cancel-btn" onclick="cancelModelEdit('${m.id}')">Cancel</button>
+        </div>
+      </div>`;
+    }
+
+    html += `</div>`;
   });
 
   html += `<button class="add-model-btn" onclick="openAddModelForm()">+ Add Model</button>`;

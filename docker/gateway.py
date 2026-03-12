@@ -1912,6 +1912,97 @@ def create_job(job_data):
     return job, ""
 
 
+def update_job(job_id, updates):
+    """Update an existing job. Returns (updated_job_dict, error_string)."""
+    with _jobs_lock:
+        job = next((j for j in _jobs if j["id"] == job_id), None)
+    if not job:
+        return None, f"job '{job_id}' not found"
+
+    # validate: script jobs must keep a command
+    if job.get("type", "script") == "script" and "command" in updates and not updates["command"]:
+        return None, "command cannot be empty for script jobs"
+    if job.get("type") == "reminder" and "text" in updates and not updates["text"]:
+        return None, "text cannot be empty for reminder jobs"
+
+    # allowed fields to update
+    allowed = {"name", "command", "text", "cron", "fire_at", "recurring_seconds",
+               "timeout_seconds", "enabled", "notify", "notify_on_error_only",
+               "model", "provider", "env", "working_dir"}
+    with _jobs_lock:
+        for key, val in updates.items():
+            if key in allowed:
+                job[key] = val
+    _save_jobs()
+    print(f"[jobs] updated: {job.get('name', job_id)} ({job_id})")
+    return dict(job), ""
+
+
+def humanize_cron(expr):
+    """Convert a 5-field cron expression to a human-readable string."""
+    parts = expr.strip().split()
+    if len(parts) != 5:
+        return expr
+    minute, hour, dom, month, dow = parts
+    months = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+              "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+
+    try:
+        # every minute
+        if all(p == "*" for p in parts):
+            return "every minute"
+
+        # hourly: 0 * * * *
+        if minute != "*" and hour == "*" and dom == "*" and month == "*" and dow == "*":
+            if minute == "0":
+                return "every hour"
+            return f"every hour at :{minute.zfill(2)}"
+
+        # every N hours: 0 */6 * * *
+        if hour.startswith("*/") and dom == "*" and month == "*" and dow == "*":
+            return f"every {hour[2:]}h at :{minute.zfill(2)}"
+
+        # build time string
+        time_str = ""
+        if hour != "*" and minute != "*":
+            time_str = f"{hour.zfill(2)}:{minute.zfill(2)}"
+        elif hour != "*":
+            time_str = f"{hour.zfill(2)}:00"
+
+        # specific date: 14 18 12 3 *
+        if dom != "*" and month != "*":
+            m_idx = int(month)
+            m_name = months[m_idx] if 0 < m_idx <= 12 else month
+            return f"{m_name} {dom} at {time_str}" if time_str else f"{m_name} {dom}"
+
+        # weekday filter
+        if dow != "*" and dom == "*" and month == "*":
+            if dow == "1-5":
+                dow_str = "Mon-Fri"
+            elif dow == "0,6":
+                dow_str = "weekends"
+            else:
+                # try to map individual days
+                day_parts = dow.replace(",", " ").split()
+                mapped = []
+                for d in day_parts:
+                    if d.isdigit() and 0 <= int(d) <= 6:
+                        mapped.append(days[int(d)])
+                    else:
+                        mapped.append(d)
+                dow_str = ",".join(mapped)
+            return f"{dow_str} at {time_str}" if time_str else dow_str
+
+        # daily at time
+        if dom == "*" and month == "*" and dow == "*" and time_str:
+            return f"daily at {time_str}"
+
+        return expr
+    except (ValueError, IndexError):
+        return expr
+
+
 def delete_job(job_id):
     """Delete/cancel a job by ID. Returns True if found."""
     with _jobs_lock:
@@ -4601,6 +4692,13 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.proxy_to_goose()
 
     def do_PUT(self):
+        self._request_start = time.time()
+        path = urllib.parse.urlparse(self.path).path
+        if path.startswith("/api/jobs/"):
+            job_id = path[len("/api/jobs/"):]
+            if job_id:
+                self.handle_update_job(job_id)
+                return
         self.proxy_to_goose()
 
     def do_DELETE(self):
@@ -5475,6 +5573,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             if j.get("fire_at"):
                 j["fires_in_seconds"] = round(j["fire_at"] - now)
                 j["fires_at_human"] = time.strftime("%Y-%m-%d %H:%M:%S %Z", time.localtime(j["fire_at"]))
+            if j.get("cron"):
+                j["cron_human"] = humanize_cron(j["cron"])
         self.send_json(200, {"jobs": active, "count": len(active)})
 
     def handle_delete_job(self, job_id):
@@ -5528,6 +5628,34 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             _save_jobs()
 
         self.send_json(202, {"started": True, "job_id": job_id})
+
+    def handle_update_job(self, job_id):
+        """PUT /api/jobs/<id> — update job fields."""
+        if not self._check_rate_limit(api_limiter):
+            return
+        if _is_first_boot():
+            self.send_json(403, {"error": "agent not configured"})
+            return
+        if not self._check_local_or_auth():
+            return
+        try:
+            body = self._read_body()
+            data = json.loads(body)
+        except (json.JSONDecodeError, Exception):
+            self.send_json(400, {"error": "invalid JSON"})
+            return
+
+        # sanitize string fields
+        for field in ("name", "command", "text", "cron", "model", "provider"):
+            if data.get(field):
+                data[field] = _sanitize_string(data[field], max_length=200)
+
+        updated, err = update_job(job_id, data)
+        if err:
+            status_code = 404 if "not found" in err else 400
+            self.send_json(status_code, {"error": err})
+        else:
+            self.send_json(200, {"updated": True, "job": updated})
 
     # ── channel plugin endpoints ──
 

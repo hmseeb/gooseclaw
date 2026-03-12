@@ -601,6 +601,103 @@ class TestRegexInjection(unittest.TestCase):
         assert result == cmd  # \b prevents matching "running"
 
 
+# ── update_job ──────────────────────────────────────────────────────────────
+
+class TestUpdateJob(unittest.TestCase):
+    """Tests for update_job()."""
+
+    def setUp(self):
+        with gateway._jobs_lock:
+            gateway._jobs.clear()
+        self._save_patcher = patch("gateway._save_jobs")
+        self._save_patcher.start()
+
+    def tearDown(self):
+        self._save_patcher.stop()
+        with gateway._jobs_lock:
+            gateway._jobs.clear()
+
+    def _create(self, **overrides):
+        data = {"command": "echo hi", "fire_at": time.time() + 3600}
+        data.update(overrides)
+        job, _ = gateway.create_job(data)
+        return job
+
+    def test_update_name(self):
+        job = self._create(name="old-name")
+        updated, err = gateway.update_job(job["id"], {"name": "new-name"})
+        assert err == ""
+        assert updated["name"] == "new-name"
+
+    def test_update_command(self):
+        job = self._create(command="echo old")
+        updated, err = gateway.update_job(job["id"], {"command": "echo new"})
+        assert err == ""
+        assert updated["command"] == "echo new"
+
+    def test_update_cron(self):
+        job = self._create()
+        updated, err = gateway.update_job(job["id"], {"cron": "0 */6 * * *"})
+        assert updated["cron"] == "0 */6 * * *"
+
+    def test_update_model_and_provider(self):
+        job = self._create()
+        updated, err = gateway.update_job(job["id"], {"model": "gpt-4o", "provider": "openai"})
+        assert updated["model"] == "gpt-4o"
+        assert updated["provider"] == "openai"
+
+    def test_update_nonexistent_job(self):
+        updated, err = gateway.update_job("no-such-id", {"name": "x"})
+        assert updated is None
+        assert "not found" in err
+
+    def test_update_preserves_other_fields(self):
+        job = self._create(name="keep-me", command="echo keep")
+        updated, _ = gateway.update_job(job["id"], {"name": "changed"})
+        assert updated["command"] == "echo keep"
+
+    def test_update_rejects_empty_command_for_script(self):
+        job = self._create(command="echo hi")
+        updated, err = gateway.update_job(job["id"], {"command": ""})
+        assert updated is None
+        assert "command" in err
+
+
+# ── humanize_cron ───────────────────────────────────────────────────────────
+
+class TestHumanizeCron(unittest.TestCase):
+    """Tests for humanize_cron() display."""
+
+    def test_every_6_hours(self):
+        result = gateway.humanize_cron("0 */6 * * *")
+        assert "every 6h" in result.lower() or "6 hour" in result.lower()
+
+    def test_daily_at_time(self):
+        result = gateway.humanize_cron("30 9 * * *")
+        assert "9:30" in result or "09:30" in result
+
+    def test_specific_date(self):
+        result = gateway.humanize_cron("14 18 12 3 *")
+        assert "Mar" in result
+        assert "18:14" in result
+
+    def test_every_minute(self):
+        result = gateway.humanize_cron("* * * * *")
+        assert "every min" in result.lower() or "every 1m" in result.lower()
+
+    def test_weekday_only(self):
+        result = gateway.humanize_cron("0 9 * * 1-5")
+        assert "Mon" in result or "weekday" in result.lower()
+
+    def test_hourly(self):
+        result = gateway.humanize_cron("0 * * * *")
+        assert "every hour" in result.lower() or "hourly" in result.lower()
+
+    def test_invalid_cron_returns_as_is(self):
+        result = gateway.humanize_cron("not a cron")
+        assert result == "not a cron"
+
+
 # ── _prewarm_session ────────────────────────────────────────────────────────
 
 class TestPrewarmSession(unittest.TestCase):

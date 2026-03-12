@@ -842,7 +842,7 @@ tr:hover td { background: rgba(124, 58, 237, 0.02); }
             <input type="text" id="sched-value" placeholder="0 */6 * * *">
           </div>
         </div>
-        <button class="submit-btn" onclick="createJob()" id="submit-btn">Create Job</button>
+        <button class="submit-btn" onclick="submitJob()" id="submit-btn">Create Job</button>
       </div>
     </div>
 
@@ -966,6 +966,7 @@ function setDot(id, color) {
 async function refreshJobs() {
   const data = await api('/api/jobs');
   const jobs = data.jobs || [];
+  _jobsCache = jobs;
   document.getElementById('job-count').textContent = jobs.length;
 
   const wrap = document.getElementById('jobs-table');
@@ -981,7 +982,8 @@ async function refreshJobs() {
     const statusText = j.last_status || '\u2014';
 
     let sched = '';
-    if (j.cron) sched = j.cron;
+    if (j.cron_human) sched = j.cron_human;
+    else if (j.cron) sched = j.cron;
     else if (j.fires_at_human) sched = j.fires_at_human;
     if (j.recurring_seconds) sched += ' (every ' + formatDuration(j.recurring_seconds) + ')';
 
@@ -991,6 +993,7 @@ async function refreshJobs() {
       + '<td class="schedule-cell">' + escHtml(sched || '\u2014') + '</td>'
       + '<td><span class="status-badge ' + statusCls + '">' + statusText + '</span></td>'
       + '<td class="actions">'
+      + '<button class="action-btn" onclick="editJob(\'' + j.id + '\')" title="edit">edit</button>'
       + '<button class="action-btn trigger" onclick="triggerJob(\'' + j.id + '\')" title="run now">run</button>'
       + '<button class="action-btn danger" onclick="deleteJob(\'' + j.id + '\')" title="delete">del</button>'
       + '</td></tr>';
@@ -1019,8 +1022,13 @@ async function triggerJob(id) {
   }
 }
 
-// ── create job ──
+// ── create/edit job ──
+let editingJobId = null;  // null = create mode, string = edit mode
+let _jobsCache = [];  // cached from last refreshJobs
+
 function toggleCreate() {
+  editingJobId = null;
+  document.getElementById('submit-btn').textContent = 'Create Job';
   document.getElementById('create-panel').classList.toggle('open');
 }
 
@@ -1044,7 +1052,45 @@ function updateSchedFields() {
   };
   label.textContent = map[type][0];
   input.placeholder = map[type][1];
-  input.value = '';
+  if (!editingJobId) input.value = '';
+}
+
+function editJob(id) {
+  const job = _jobsCache.find(j => j.id === id);
+  if (!job) { toast('job not found', 'error'); return; }
+
+  editingJobId = id;
+  document.getElementById('submit-btn').textContent = 'Save Changes';
+
+  // set type
+  setJobType(job.type || 'script');
+
+  // fill fields
+  document.getElementById('job-name').value = job.name || '';
+  document.getElementById('job-command').value = job.command || '';
+  document.getElementById('job-text').value = job.text || '';
+
+  // set schedule
+  if (job.cron) {
+    document.getElementById('sched-type').value = 'cron';
+    updateSchedFields();
+    document.getElementById('sched-value').value = job.cron;
+  } else if (job.recurring_seconds) {
+    document.getElementById('sched-type').value = 'every';
+    updateSchedFields();
+    document.getElementById('sched-value').value = formatDuration(job.recurring_seconds);
+  } else {
+    document.getElementById('sched-type').value = 'in';
+    updateSchedFields();
+  }
+
+  // open panel
+  document.getElementById('create-panel').classList.add('open');
+}
+
+async function submitJob() {
+  if (editingJobId) return saveJob();
+  return createJob();
 }
 
 async function createJob() {
@@ -1099,15 +1145,64 @@ async function createJob() {
 
   if (data.created) {
     toast('job created');
-    document.getElementById('create-panel').classList.remove('open');
-    document.getElementById('job-name').value = '';
-    document.getElementById('job-command').value = '';
-    document.getElementById('job-text').value = '';
-    document.getElementById('sched-value').value = '';
+    resetJobForm();
     refreshJobs();
   } else {
     toast(data.error || 'failed to create', 'error');
   }
+}
+
+async function saveJob() {
+  const btn = document.getElementById('submit-btn');
+  btn.disabled = true;
+
+  const body = {};
+
+  if (currentJobType === 'script') {
+    body.name = document.getElementById('job-name').value.trim();
+    body.command = document.getElementById('job-command').value.trim();
+    if (!body.command) { toast('command required', 'error'); btn.disabled = false; return; }
+  } else {
+    body.text = document.getElementById('job-text').value.trim();
+    if (!body.text) { toast('message required', 'error'); btn.disabled = false; return; }
+  }
+
+  const schedType = document.getElementById('sched-type').value;
+  const schedVal = document.getElementById('sched-value').value.trim();
+  if (schedVal) {
+    if (schedType === 'cron') {
+      body.cron = schedVal;
+    } else if (schedType === 'every') {
+      body.recurring_seconds = parseDuration(schedVal);
+      if (!body.recurring_seconds) { toast('invalid interval', 'error'); btn.disabled = false; return; }
+    }
+  }
+
+  const data = await api('/api/jobs/' + editingJobId, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  btn.disabled = false;
+
+  if (data.updated) {
+    toast('job updated');
+    resetJobForm();
+    refreshJobs();
+  } else {
+    toast(data.error || 'failed to update', 'error');
+  }
+}
+
+function resetJobForm() {
+  editingJobId = null;
+  document.getElementById('create-panel').classList.remove('open');
+  document.getElementById('submit-btn').textContent = 'Create Job';
+  document.getElementById('job-name').value = '';
+  document.getElementById('job-command').value = '';
+  document.getElementById('job-text').value = '';
+  document.getElementById('sched-value').value = '';
 }
 
 // ── channels ──

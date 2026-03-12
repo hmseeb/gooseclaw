@@ -3361,6 +3361,24 @@ def _telegram_poll_loop(bot_token):
                             "Paired successfully! You can now send messages to goose through this chat."
                         )
                         print(f"[telegram] chat {chat_id} paired via code {current_code}")
+
+                        # auto-trigger onboarding if user hasn't onboarded yet
+                        try:
+                            soul_path = os.path.join(IDENTITY_DIR, "soul.md")
+                            with open(soul_path, "r") as _sf:
+                                if "ONBOARDING_NEEDED" in _sf.read():
+                                    sid = _get_session_id(chat_id)
+                                    if sid:
+                                        def _kick_onboarding():
+                                            txt, err = _relay_to_goose_web(
+                                                "I just paired via Telegram. Start the onboarding flow.",
+                                                sid, chat_id=str(chat_id), channel="telegram",
+                                            )
+                                            if txt and not err:
+                                                send_telegram_message(bot_token, chat_id, txt)
+                                        threading.Thread(target=_kick_onboarding, daemon=True).start()
+                        except FileNotFoundError:
+                            pass
                     else:
                         send_telegram_message(
                             bot_token, chat_id,

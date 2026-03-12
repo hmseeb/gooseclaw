@@ -669,8 +669,18 @@ def _edit_telegram_message(bot_token, chat_id, message_id, text):
         with urllib.request.urlopen(req, timeout=10) as resp:
             result = json.loads(resp.read())
             return result.get("ok", False)
-    except Exception:
-        # HTML failed, try plain text
+    except Exception as e:
+        # "message is not modified" means content is already correct — not a real error.
+        # This happens when the final edit sends the same text as the last streaming edit.
+        err_body = ""
+        if hasattr(e, 'read'):
+            try:
+                err_body = e.read().decode()
+            except Exception:
+                pass
+        if "not modified" in str(e) or "not modified" in err_body:
+            return True
+        # HTML actually failed, try plain text
         try:
             payload = urllib.parse.urlencode({
                 "chat_id": chat_id,

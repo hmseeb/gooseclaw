@@ -4027,6 +4027,17 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.handle_health()
         elif path == "/api/health/ready":
             self.handle_health_ready()
+        elif path == "/api/debug/relay":
+            # temporary: test non-streaming relay directly
+            try:
+                sid = _create_goose_session()
+                if not sid:
+                    self.send_json(500, {"error": "could not create session"})
+                    return
+                text, err = _do_ws_relay("say hi in 5 words", sid)
+                self.send_json(200, {"session_id": sid, "response": text, "error": err})
+            except Exception as e:
+                self.send_json(500, {"error": str(e)})
         elif path == "/api/debug/config":
             # temporary debug endpoint to check goose config and claude CLI
             try:

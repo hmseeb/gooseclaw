@@ -2286,7 +2286,7 @@ def _fire_cron_job(job):
     # if the response contains useful output, deliver it
     # (the recipe may have already called notify via shell, but we deliver
     # the response too in case it didn't)
-    if response_text and response_text != "(No response from goose)":
+    if response_text:
         # check if the agent already called notify (contains "notify" tool output)
         # if so, the output was already delivered. deliver anyway as fallback
         # since double-delivery is better than no delivery.
@@ -3176,8 +3176,7 @@ def _relay_to_goose_web(user_text, session_id, chat_id=None, channel=None,
     text, err = relay_fn(user_text, session_id)
 
     # if error or empty response, try creating a new session and retrying
-    is_empty = (not err and (not text or text == "(No response from goose)"))
-    if (err or is_empty) and chat_id:
+    if err and chat_id:
         reason = err if err else "empty response"
         print(f"[telegram] relay failed ({reason}), creating new session")
         new_sid = _create_goose_session()
@@ -3189,6 +3188,44 @@ def _relay_to_goose_web(user_text, session_id, chat_id=None, channel=None,
             return relay_fn(user_text, new_sid)
 
     return text, err
+
+
+def _diagnose_empty_response():
+    """When goose returns 0 content, figure out WHY and return a useful error."""
+    # 1. check goose stderr for recent errors
+    stderr = _get_recent_stderr(10)
+    if stderr:
+        for line in stderr.strip().split("\n"):
+            low = line.lower()
+            if "error" in low or "failed" in low or "unauthorized" in low or "401" in low:
+                return f"Goose error: {line.strip()}"
+
+    # 2. check if goose process is alive
+    if goose_process and goose_process.poll() is not None:
+        return "Goose crashed. Restarting..."
+
+    # 3. test the provider directly (claude-code specific)
+    setup = load_setup()
+    provider = setup.get("provider_type", "") if setup else ""
+    if provider == "claude-code":
+        try:
+            r = subprocess.run(
+                ["claude", "-p", "hi", "--output-format", "text", "--max-turns", "1", "--dangerously-skip-permissions"],
+                capture_output=True, text=True, timeout=15,
+            )
+            if r.returncode != 0:
+                output = (r.stdout.strip() or r.stderr.strip())[:300]
+                if "401" in output or "authentication" in output.lower() or "bearer" in output.lower():
+                    return f"Claude auth failed. Your OAuth token is expired or invalid. Update it in the setup wizard."
+                if "429" in output or "rate" in output.lower():
+                    return f"Claude rate limited. Try again in a minute."
+                return f"Claude CLI failed: {output}"
+        except subprocess.TimeoutExpired:
+            return "Claude CLI timed out. The API may be down."
+        except Exception as e:
+            return f"Could not test Claude CLI: {e}"
+
+    return "No response from goose. Check provider configuration."
 
 
 def _do_ws_relay(user_text, session_id, sock_ref=None):
@@ -3274,7 +3311,7 @@ def _do_ws_relay(user_text, session_id, sock_ref=None):
         full_text = "".join(collected).strip()
         print(f"[relay] done in {elapsed:.1f}s ({len(full_text)} chars) session={session_id}")
         if not full_text:
-            return "(No response from goose)", ""
+            return "", _diagnose_empty_response()
         return full_text, ""
 
     except socket.timeout:
@@ -3479,7 +3516,7 @@ def _do_ws_relay_streaming(user_text, session_id, flush_cb, verbosity="balanced"
         elapsed = time.time() - t0
         print(f"[relay-stream] done in {elapsed:.1f}s ({len(full_text)} chars) session={session_id}")
         if not full_text:
-            return "(No response from goose)", ""
+            return "", _diagnose_empty_response()
         return full_text, ""
 
     except socket.timeout:
@@ -3723,8 +3760,6 @@ def _telegram_poll_loop(bot_token):
                             )
                             if error:
                                 send_telegram_message(bot_token, chat_id, f"Error: {error}")
-                            elif response_text and "(No response from goose)" in response_text:
-                                send_telegram_message(bot_token, chat_id, response_text)
                     except Exception as exc:
                         print(f"[telegram] relay exception for chat {chat_id}: {exc}")
                         try:

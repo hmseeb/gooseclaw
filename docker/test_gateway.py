@@ -649,6 +649,44 @@ class TestStripGoosePreamble(unittest.TestCase):
         assert result.strip() == ""
 
 
+# ── _fire_cron_job preamble stripping ───────────────────────────────────────
+
+class TestFireCronJobStripping(unittest.TestCase):
+    """Verify cron job output gets goose preamble stripped."""
+
+    @patch("gateway.notify_all")
+    @patch("gateway._do_ws_relay")
+    @patch("gateway._load_recipe", return_value="do the thing")
+    def test_cron_output_strips_goose_banner(self, _recipe, mock_relay, mock_notify):
+        raw = (
+            "   __( O)>  banner\n"
+            "   \\____)\tsession\n"
+            "     L L\t goose is ready\n"
+            "Here is the report:\n"
+            "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+            "Actual report content"
+        )
+        mock_relay.return_value = (raw, None)
+        gateway._fire_cron_job({"id": "test-cron", "source": "/test"})
+        # check that notify_all was called without the banner
+        call_args = mock_notify.call_args[0][0]
+        assert "__( O)>" not in call_args
+        assert "goose is ready" not in call_args
+        assert "Actual report content" in call_args
+
+    @patch("gateway.notify_all")
+    @patch("gateway._do_ws_relay")
+    @patch("gateway._load_recipe", return_value="do the thing")
+    def test_cron_output_not_truncated_at_4000(self, _recipe, mock_relay, mock_notify):
+        """Cron output should allow long content (chunking handled by TG sender)."""
+        long_report = "x" * 10000
+        mock_relay.return_value = (long_report, None)
+        gateway._fire_cron_job({"id": "test-cron", "source": "/test"})
+        call_args = mock_notify.call_args[0][0]
+        # should contain the full content, not truncated at 4000
+        assert len(call_args) > 9000
+
+
 # ── update_job ──────────────────────────────────────────────────────────────
 
 class TestUpdateJob(unittest.TestCase):

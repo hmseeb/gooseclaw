@@ -2566,13 +2566,10 @@ def _fire_cron_job(job):
     # (the recipe may have already called notify via shell, but we deliver
     # the response too in case it didn't)
     if response_text:
-        # check if the agent already called notify (contains "notify" tool output)
-        # if so, the output was already delivered. deliver anyway as fallback
-        # since double-delivery is better than no delivery.
-        formatted = f"[{job_id}]\n\n{response_text}"
-        if len(formatted) > 4000:
-            formatted = formatted[:3997] + "..."
-        notify_all(formatted)
+        response_text = _strip_goose_preamble(response_text)
+        if response_text:
+            formatted = f"[{job_id}]\n\n{response_text}"
+            notify_all(formatted)
 
     print(f"[cron] job {job_id} completed")
 

@@ -531,6 +531,14 @@ def _markdown_to_telegram_html(text):
         result.append('<pre>' + '\n'.join(table_buf) + '</pre>')
     text = '\n'.join(result)
 
+    # -- Step 10b: strip formatting tags from inside <pre> blocks --
+    # Telegram rejects HTML with <b>/<i>/etc. nested inside <pre>.
+    def _clean_pre(m):
+        inner = m.group(1)
+        inner = re.sub(r'</?(?:b|i|s|u|a[^>]*)>', '', inner)
+        return f'<pre>{inner}</pre>'
+    text = re.sub(r'<pre>(.*?)</pre>', _clean_pre, text, flags=re.DOTALL)
+
     # -- Step 11: horizontal rules --
     text = re.sub(r'^-{3,}$', '─' * 20, text, flags=re.MULTILINE)
 

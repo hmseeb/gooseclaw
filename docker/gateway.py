@@ -3159,17 +3159,62 @@ def _get_chat_lock(chat_id):
         return _telegram_chat_locks[chat_key]
 
 
+_KNOWN_COMMANDS = {"/help", "/stop", "/clear", "/compact"}
+
+_prewarm_events = {}  # chat_key (str) -> threading.Event (set when prewarm done)
+
+
+def is_known_command(text):
+    """Check if text is a recognized slash command."""
+    if not text or not text.startswith("/"):
+        return False
+    return text.lower().split()[0] in _KNOWN_COMMANDS
+
+
+def _clear_chat(chat_id):
+    """Kill active relay and clear session for a chat. Used by /clear."""
+    chat_key = str(chat_id)
+
+    # kill active relay (same as /stop)
+    with _telegram_active_relays_lock:
+        sock_ref = _telegram_active_relays.pop(chat_key, None)
+    if sock_ref and sock_ref[0]:
+        try:
+            sock_ref[0].close()
+        except Exception:
+            pass
+        # set cancelled flag if present
+        if len(sock_ref) > 1 and hasattr(sock_ref[1], 'set'):
+            sock_ref[1].set()
+
+    # remove session
+    with _telegram_sessions_lock:
+        old = _telegram_sessions.pop(chat_key, None)
+    _save_telegram_sessions()
+    return old
+
+
 def _get_session_id(chat_id):
     """Get or create a session_id for a telegram chat_id.
 
     For new chats, calls POST /agent/start on goose web to get a real session_id.
     For existing chats, returns the stored session_id.
+    If a prewarm is in progress, waits for it instead of creating a duplicate.
     """
     chat_key = str(chat_id)
     with _telegram_sessions_lock:
         sid = _telegram_sessions.get(chat_key)
     if sid:
         return sid
+
+    # check if prewarm is in progress — wait for it instead of creating duplicate
+    evt = _prewarm_events.get(chat_key)
+    if evt:
+        evt.wait(timeout=15)
+        with _telegram_sessions_lock:
+            sid = _telegram_sessions.get(chat_key)
+        if sid:
+            return sid
 
     # create a new agent session via goose web
     sid = _create_goose_session()
@@ -3189,23 +3234,29 @@ def _prewarm_session(chat_id):
     """Create a new goose session in background thread and store it for chat_id.
 
     Called after /clear so the next user message doesn't pay the cold-start cost.
-    Won't overwrite if the user sends a message before the prewarm finishes.
+    Uses _prewarm_events so _get_session_id can wait instead of creating a duplicate.
     """
     chat_key = str(chat_id)
+    evt = threading.Event()
+    _prewarm_events[chat_key] = evt
 
     def _do_prewarm():
-        sid = _create_goose_session()
-        if not sid:
-            print(f"[telegram] prewarm failed for chat {chat_key}")
-            return
-        with _telegram_sessions_lock:
-            # don't clobber if user already sent a message and got a session
-            if chat_key not in _telegram_sessions:
-                _telegram_sessions[chat_key] = sid
-                _save_telegram_sessions()
-                print(f"[telegram] prewarmed session {sid} for chat {chat_key}")
-            else:
-                print(f"[telegram] prewarm skipped, chat {chat_key} already has session")
+        try:
+            sid = _create_goose_session()
+            if not sid:
+                print(f"[telegram] prewarm failed for chat {chat_key}")
+                return
+            with _telegram_sessions_lock:
+                # don't clobber if user already sent a message and got a session
+                if chat_key not in _telegram_sessions:
+                    _telegram_sessions[chat_key] = sid
+                    _save_telegram_sessions()
+                    print(f"[telegram] prewarmed session {sid} for chat {chat_key}")
+                else:
+                    print(f"[telegram] prewarm skipped, chat {chat_key} already has session")
+        finally:
+            evt.set()
+            _prewarm_events.pop(chat_key, None)
 
     t = threading.Thread(target=_do_prewarm, daemon=True)
     t.start()
@@ -4157,13 +4208,9 @@ def _telegram_poll_loop(bot_token):
                     if lower == "/help":
                         help_text = (
                             "🪿 *GooseClaw Commands*\n\n"
-                            "*Session:*\n"
                             "/stop — cancel the current response\n"
                             "/clear — wipe conversation and start fresh\n"
-                            "/compact — summarize history to save tokens\n\n"
-                            "*MCP Prompts:*\n"
-                            "/prompts — list available extension prompts\n"
-                            "/prompt <name> — run a prompt\n\n"
+                            "/compact — summarize history to save tokens\n"
                             "/help — this message"
                         )
                         send_telegram_message(bot_token, chat_id, help_text)
@@ -4175,6 +4222,9 @@ def _telegram_poll_loop(bot_token):
                             sock_ref = _telegram_active_relays.pop(chat_id, None)
                         if sock_ref and sock_ref[0]:
                             try:
+                                # set cancelled flag so relay thread won't send partial text
+                                if len(sock_ref) > 1 and hasattr(sock_ref[1], 'set'):
+                                    sock_ref[1].set()
                                 # send cancel signal before closing so goose aborts sub-agents
                                 sid = None
                                 with _telegram_sessions_lock:
@@ -4197,9 +4247,7 @@ def _telegram_poll_loop(bot_token):
                         continue
 
                     if lower == "/clear":
-                        with _telegram_sessions_lock:
-                            old = _telegram_sessions.pop(chat_id, None)
-                        _save_telegram_sessions()
+                        old = _clear_chat(chat_id)
                         send_telegram_message(
                             bot_token, chat_id,
                             "🔄 Session cleared. Conversation history is fresh."
@@ -4224,6 +4272,14 @@ def _telegram_poll_loop(bot_token):
                             send_telegram_message(bot_token, chat_id, f"📝 Compacted:\n\n{response_text}")
                         continue
 
+                    # ── catch unknown slash commands ──
+                    if lower.startswith("/") and not is_known_command(lower):
+                        send_telegram_message(
+                            bot_token, chat_id,
+                            f"Unknown command: {text.split()[0]}\nSend /help for available commands."
+                        )
+                        continue
+
                     # ── relay to goose web (runs in a background thread) ──
                     # threaded so the poll loop stays responsive for /stop commands.
                     # per-chat lock prevents concurrent relays per user.
@@ -4237,7 +4293,8 @@ def _telegram_poll_loop(bot_token):
                         try:
                             _send_typing_action(_bt, _chat_id)
                             session_id = _get_session_id(_chat_id)
-                            _sock_ref = [None]
+                            _cancelled = threading.Event()
+                            _sock_ref = [None, _cancelled]
 
                             with _telegram_active_relays_lock:
                                 _telegram_active_relays[_chat_id] = _sock_ref
@@ -4262,7 +4319,9 @@ def _telegram_poll_loop(bot_token):
                                         _text, session_id, chat_id=_chat_id, channel="telegram",
                                         sock_ref=_sock_ref,
                                     )
-                                    if error:
+                                    if _cancelled.is_set():
+                                        pass  # /stop was called, don't send anything
+                                    elif error:
                                         send_telegram_message(_bt, _chat_id, f"Error: {error}")
                                     else:
                                         send_telegram_message(_bt, _chat_id, response_text)
@@ -4271,6 +4330,8 @@ def _telegram_poll_loop(bot_token):
                                     _edit_state = {"msg_id": None, "accumulated": "", "overflow": []}
 
                                     def _tg_flush_edit(chunk, _st=_edit_state):
+                                        if _cancelled.is_set():
+                                            return
                                         _st["accumulated"] += chunk
                                         txt = _st["accumulated"]
                                         if _st["msg_id"] is None:
@@ -4294,7 +4355,9 @@ def _telegram_poll_loop(bot_token):
                                         flush_cb=_tg_flush_edit, verbosity=_tg_verbosity,
                                         sock_ref=_sock_ref, flush_interval=2.0,
                                     )
-                                    if _edit_state["msg_id"] and response_text and not error:
+                                    if _cancelled.is_set():
+                                        pass  # /stop was called, don't send final edit
+                                    elif _edit_state["msg_id"] and response_text and not error:
                                         final_text = _edit_state["accumulated"] or response_text
                                         if final_text:
                                             _edit_telegram_message(_bt, _chat_id, _edit_state["msg_id"], final_text)
@@ -4307,10 +4370,11 @@ def _telegram_poll_loop(bot_token):
                                 typing_thread.join(timeout=2)
                         except Exception as exc:
                             print(f"[telegram] relay exception for chat {_chat_id}: {exc}")
-                            try:
-                                send_telegram_message(_bt, _chat_id, f"Error: {exc}")
-                            except Exception:
-                                pass
+                            if not _cancelled.is_set():
+                                try:
+                                    send_telegram_message(_bt, _chat_id, f"Error: {exc}")
+                                except Exception:
+                                    pass
                         finally:
                             with _telegram_active_relays_lock:
                                 _telegram_active_relays.pop(_chat_id, None)
@@ -4417,7 +4481,6 @@ def start_telegram_gateway(bot_token):
             {"command": "stop", "description": "Cancel the current response"},
             {"command": "clear", "description": "Wipe conversation and start fresh"},
             {"command": "compact", "description": "Summarize history to save tokens"},
-            {"command": "prompts", "description": "List available extension prompts"},
             {"command": "help", "description": "Show available commands"},
         ]
         payload = json.dumps({"commands": commands}).encode()

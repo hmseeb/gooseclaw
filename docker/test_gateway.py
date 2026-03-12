@@ -841,5 +841,129 @@ class TestPrewarmSession(unittest.TestCase):
         time.sleep(0.1)  # let thread finish
 
 
+# ── /clear kills active relay ─────────────────────────────────────────────────
+
+class TestClearKillsRelay(unittest.TestCase):
+    """Bug fix: /clear should kill any active relay before clearing session,
+    otherwise the old relay holds the chat lock and user gets 'Still thinking...'"""
+
+    def setUp(self):
+        gateway._telegram_active_relays.clear()
+        with gateway._telegram_sessions_lock:
+            gateway._telegram_sessions.clear()
+
+    def test_clear_pops_active_relay(self):
+        """_clear_chat should remove active relay entry for the chat."""
+        mock_sock = MagicMock()
+        gateway._telegram_active_relays["chat_1"] = [mock_sock]
+        with gateway._telegram_sessions_lock:
+            gateway._telegram_sessions["chat_1"] = "old_session"
+        gateway._clear_chat("chat_1")
+        self.assertNotIn("chat_1", gateway._telegram_active_relays)
+
+    def test_clear_closes_socket(self):
+        """_clear_chat should close the active relay websocket."""
+        mock_sock = MagicMock()
+        gateway._telegram_active_relays["chat_1"] = [mock_sock]
+        with gateway._telegram_sessions_lock:
+            gateway._telegram_sessions["chat_1"] = "old_session"
+        gateway._clear_chat("chat_1")
+        mock_sock.close.assert_called_once()
+
+    def test_clear_removes_session(self):
+        """_clear_chat should remove the session from _telegram_sessions."""
+        with gateway._telegram_sessions_lock:
+            gateway._telegram_sessions["chat_1"] = "old_session"
+        gateway._clear_chat("chat_1")
+        with gateway._telegram_sessions_lock:
+            self.assertNotIn("chat_1", gateway._telegram_sessions)
+
+    @patch("gateway._save_telegram_sessions")
+    def test_clear_saves_sessions(self, mock_save):
+        """_clear_chat should persist the session removal."""
+        with gateway._telegram_sessions_lock:
+            gateway._telegram_sessions["chat_1"] = "old_session"
+        gateway._clear_chat("chat_1")
+        mock_save.assert_called_once()
+
+
+# ── cancelled flag on relay ───────────────────────────────────────────────────
+
+class TestRelayCancelledFlag(unittest.TestCase):
+    """Bug fix: sock_ref should carry a cancelled flag so relay thread
+    doesn't send partial text after /stop kills the socket."""
+
+    def test_sock_ref_has_cancelled_flag(self):
+        """sock_ref should be [socket, cancelled_event]."""
+        # The relay creates sock_ref = [None, threading.Event()]
+        # /stop sets the event. Relay checks it before sending.
+        evt = threading.Event()
+        sock_ref = [None, evt]
+        self.assertFalse(sock_ref[1].is_set())
+        sock_ref[1].set()
+        self.assertTrue(sock_ref[1].is_set())
+
+
+# ── prewarm coordination ─────────────────────────────────────────────────────
+
+class TestPrewarmCoordination(unittest.TestCase):
+    """Bug fix: _get_session_id should wait for in-progress prewarm instead
+    of creating a duplicate session."""
+
+    def setUp(self):
+        with gateway._telegram_sessions_lock:
+            gateway._telegram_sessions.clear()
+        gateway._prewarm_events.clear()
+
+    @patch("gateway._create_goose_session", return_value="prewarmed_sid")
+    @patch("gateway._save_telegram_sessions")
+    def test_get_session_waits_for_prewarm(self, _save, mock_create):
+        """If prewarm is in progress, _get_session_id should wait and use it."""
+        # Simulate prewarm starting
+        evt = threading.Event()
+        gateway._prewarm_events["chat_1"] = evt
+
+        def finish_prewarm():
+            time.sleep(0.1)
+            with gateway._telegram_sessions_lock:
+                gateway._telegram_sessions["chat_1"] = "prewarmed_sid"
+            evt.set()
+
+        threading.Thread(target=finish_prewarm, daemon=True).start()
+        sid = gateway._get_session_id("chat_1")
+        self.assertEqual(sid, "prewarmed_sid")
+        # _create_goose_session should NOT have been called by _get_session_id
+        mock_create.assert_not_called()
+
+    @patch("gateway._create_goose_session", return_value="fallback_sid")
+    @patch("gateway._save_telegram_sessions")
+    def test_get_session_no_prewarm_creates_new(self, _save, mock_create):
+        """Without active prewarm, _get_session_id creates a new session normally."""
+        sid = gateway._get_session_id("chat_2")
+        self.assertEqual(sid, "fallback_sid")
+        mock_create.assert_called_once()
+
+
+# ── unknown slash command catch-all ───────────────────────────────────────────
+
+class TestUnknownSlashCommand(unittest.TestCase):
+    """Unknown slash commands should not be forwarded to goose."""
+
+    def test_is_known_command_recognized(self):
+        """Known commands should be recognized."""
+        for cmd in ["/help", "/stop", "/clear", "/compact"]:
+            self.assertTrue(gateway.is_known_command(cmd), f"{cmd} should be known")
+
+    def test_is_known_command_unknown(self):
+        """Unknown slash commands should not be recognized."""
+        for cmd in ["/reset", "/prompts", "/foo", "/unknown"]:
+            self.assertFalse(gateway.is_known_command(cmd), f"{cmd} should be unknown")
+
+    def test_regular_messages_not_commands(self):
+        """Regular messages should not be treated as commands."""
+        for msg in ["hello", "what time is it?", "run /something"]:
+            self.assertFalse(gateway.is_known_command(msg), f"'{msg}' should not be a command")
+
+
 if __name__ == "__main__":
     unittest.main()

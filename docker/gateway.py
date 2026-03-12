@@ -4043,6 +4043,15 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                     r = subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=10)
                     claude_info["version"] = r.stdout.strip() or r.stderr.strip()
                     claude_info["returncode"] = r.returncode
+                    # test actual generation (lightweight)
+                    r2 = subprocess.run(
+                        ["claude", "-p", "say hi in 3 words", "--output-format", "text", "--dangerously-skip-permissions"],
+                        capture_output=True, text=True, timeout=30,
+                        env={**os.environ, "CLAUDE_CODE_OAUTH_TOKEN": os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "")},
+                    )
+                    claude_info["test_stdout"] = r2.stdout.strip()[:200]
+                    claude_info["test_stderr"] = r2.stderr.strip()[:500]
+                    claude_info["test_returncode"] = r2.returncode
                 except Exception as ce:
                     claude_info["error"] = str(ce)
                 # check goose stderr buffer

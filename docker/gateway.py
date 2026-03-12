@@ -3187,11 +3187,30 @@ def _clear_chat(chat_id):
         except Exception:
             pass
 
-    # remove session
+    # remove ALL sessions — goose web restart invalidates them all
     with _telegram_sessions_lock:
         old = _telegram_sessions.pop(chat_key, None)
+        _telegram_sessions.clear()
     _save_telegram_sessions()
     return old
+
+
+def _restart_goose_and_prewarm(chat_id):
+    """Restart goose web process to kill provider subprocesses, then prewarm.
+
+    Called after /clear in a background thread. Restarts the entire goose web
+    process so the claude-code provider's persistent subprocess dies and
+    conversation history is truly cleared.
+    """
+    chat_key = str(chat_id)
+    print(f"[clear] restarting goose web to clear provider state...")
+    stop_goose_web()
+    ok = start_goose_web()
+    if not ok:
+        print(f"[clear] goose web restart failed! next message will trigger health monitor restart")
+        return
+    print(f"[clear] goose web restarted, prewarming session for chat {chat_key}")
+    _prewarm_session(chat_id)
 
 
 def _get_session_id(chat_id):
@@ -3747,8 +3766,6 @@ def _relay_to_goose_web(user_text, session_id, chat_id=None, channel=None,
     # but NOT if the relay was cancelled (e.g. /stop or /clear killed it)
     cancelled = (sock_ref and len(sock_ref) > 1
                  and hasattr(sock_ref[1], 'is_set') and sock_ref[1].is_set())
-    if err:
-        print(f"[relay-debug] relay error: {err}, cancelled={cancelled}, chat_id={chat_id}")
     if err and chat_id and not cancelled:
         reason = err if err else "empty response"
         print(f"[telegram] relay failed ({reason}), creating new session")
@@ -4260,11 +4277,16 @@ def _telegram_poll_loop(bot_token):
                         old = _clear_chat(chat_id)
                         send_telegram_message(
                             bot_token, chat_id,
-                            "🔄 Session cleared. Conversation history is fresh."
+                            "🔄 Session cleared. Restarting engine, give it ~15s..."
                         )
-                        # pre-warm a new session in background so next message is fast
-                        _prewarm_session(chat_id)
-                        print(f"[telegram] session cleared for chat {chat_id} (old: {old})")
+                        # restart goose web in background to kill claude subprocess
+                        # then prewarm a new session
+                        threading.Thread(
+                            target=_restart_goose_and_prewarm,
+                            args=(chat_id,),
+                            daemon=True,
+                        ).start()
+                        print(f"[telegram] session cleared for chat {chat_id} (old: {old}), restarting goose web")
                         continue
 
                     if lower == "/compact":
@@ -4294,20 +4316,15 @@ def _telegram_poll_loop(bot_token):
                     # threaded so the poll loop stays responsive for /stop commands.
                     # per-chat lock prevents concurrent relays per user.
                     def _do_relay(_text=text, _chat_id=chat_id, _bt=bot_token):
-                        print(f"[relay-debug] _do_relay started for chat {_chat_id}, text={_text[:50]!r}")
                         _memory_touch(_chat_id)
                         _chat_lock = _get_chat_lock(_chat_id)
-                        print(f"[relay-debug] acquiring chat lock for {_chat_id}...")
                         if not _chat_lock.acquire(timeout=2):
                             # another relay is running for this chat
-                            print(f"[relay-debug] chat lock TIMEOUT for {_chat_id}, old relay still running")
                             send_telegram_message(_bt, _chat_id, "Still thinking... send /stop to cancel.")
                             return
-                        print(f"[relay-debug] chat lock acquired for {_chat_id}")
                         try:
                             _send_typing_action(_bt, _chat_id)
                             session_id = _get_session_id(_chat_id)
-                            print(f"[relay-debug] got session {session_id} for chat {_chat_id}")
                             _cancelled = threading.Event()
                             _sock_ref = [None, _cancelled]
 

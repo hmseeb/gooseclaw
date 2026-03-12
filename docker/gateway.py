@@ -2045,9 +2045,9 @@ def _run_script(job):
         status = "error"
         full_output = f"execution error: {e}"
 
-    # truncate
-    if len(full_output) > 4000:
-        full_output = full_output[:3997] + "..."
+    # truncate (send_telegram_message handles chunking, so allow generous limit)
+    if len(full_output) > 16000:
+        full_output = full_output[:15997] + "..."
 
     # notify
     should_notify = job.get("notify", True)

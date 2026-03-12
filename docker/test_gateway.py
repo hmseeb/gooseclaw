@@ -354,10 +354,21 @@ class TestRunScriptOutput(unittest.TestCase):
     @patch("gateway.subprocess.run")
     @patch("gateway._resolve_job_model", return_value=(None, None))
     @patch("gateway._fix_goose_run_recipe", side_effect=lambda x: x)
-    def test_output_truncation(self, _fix, _resolve, mock_run, _notify):
-        mock_run.return_value = MagicMock(returncode=0, stdout="x" * 5000, stderr="")
+    def test_long_output_not_truncated_prematurely(self, _fix, _resolve, mock_run, _notify):
+        """Output up to 16000 chars should pass through to notify_all intact."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="x" * 10000, stderr="")
         status, output = gateway._run_script({"command": "echo big"})
-        assert len(output) <= 4000
+        assert len(output) == 10000  # should NOT be truncated
+
+    @patch("gateway.notify_all")
+    @patch("gateway.subprocess.run")
+    @patch("gateway._resolve_job_model", return_value=(None, None))
+    @patch("gateway._fix_goose_run_recipe", side_effect=lambda x: x)
+    def test_extreme_output_truncated(self, _fix, _resolve, mock_run, _notify):
+        """Output over 16000 chars should be truncated."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="x" * 20000, stderr="")
+        status, output = gateway._run_script({"command": "echo huge"})
+        assert len(output) <= 16000
         assert output.endswith("...")
 
     @patch("gateway.notify_all")

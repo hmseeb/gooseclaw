@@ -1825,8 +1825,8 @@ async function saveModelEdit(modelId) {
     }
   }
 
-  /* update API key if changed (not empty and not masked placeholder) */
-  if (newKey && newKey !== '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022') {
+  /* update API key if user entered a new one */
+  if (newKey) {
     try {
       var keyPayload = {id: modelId, provider: model.provider, model: newName || model.model, api_key: newKey, replace: true};
       var resp2 = await fetch('/api/setup/models/add', {
@@ -3260,12 +3260,12 @@ function renderModelCards(config) {
           <datalist id="${datalistId}">${modelSuggestions.map(function(s) { return '<option value="' + s + '">'; }).join('')}</datalist>
         </div>`;
       if (needsKey) {
-        const keyPlaceholder = hasKey ? 'Enter new key to update' : (prov && prov.keyPlaceholder ? prov.keyPlaceholder : 'API key');
-        const keyValue = hasKey ? '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022' : '';
+        const keyLabel = m.provider === 'claude-code' ? 'OAuth Token' : 'API Key';
+        const keyPlaceholder = hasKey ? 'Key saved. Enter new key to change' : (prov && prov.keyPlaceholder ? prov.keyPlaceholder : 'API key');
         html += `<div class="field">
-          <label>${m.provider === 'claude-code' ? 'OAuth Token' : 'API Key'}</label>
+          <label>${keyLabel}${hasKey ? ' <span style="color:var(--success);font-weight:400">✓ saved</span>' : ''}</label>
           <div class="secret-field-wrapper">
-            <input type="password" class="edit-model-key" value="${keyValue}" placeholder="${keyPlaceholder}">
+            <input type="password" class="edit-model-key" value="" placeholder="${keyPlaceholder}">
             <button type="button" class="secret-toggle-btn" onclick="toggleSecretVisibility(this)" title="Toggle visibility">${EYE_OPEN_SVG}</button>
           </div>
         </div>`;

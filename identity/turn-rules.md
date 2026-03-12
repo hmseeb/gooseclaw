@@ -82,7 +82,7 @@ remind "msg" --every 1h                         # recurring reminder
 
 1. Text reminder/timer -> `remind` CLI. ALWAYS.
 2. Shell command on schedule -> `job create` CLI. ALWAYS.
-3. Needs LLM reasoning (summarize, analyze, draft) -> `goose schedule` (AI job, costs tokens)
+3. Needs LLM reasoning (summarize, analyze, draft) -> `job create` with `goose run --recipe` + `--provider`/`--model` for cheaper models
 
 When in doubt, ASK: "script job ($0, no AI) or AI job (uses tokens)?"
 

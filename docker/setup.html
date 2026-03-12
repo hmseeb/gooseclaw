@@ -1049,7 +1049,7 @@ body::after {
   color: var(--text-tertiary);
   transition: transform 0.2s;
 }
-.channel-routing.expanded .channel-routing-toggle { transform: rotate(180deg); }
+.channel-routing.expanded .channel-routing-toggle { transform: rotate(90deg); }
 .channel-routing-body { display: none; padding-top: 4px; }
 .channel-routing.expanded .channel-routing-body { display: block; }
 .channel-route-row {
@@ -1109,6 +1109,57 @@ body::after {
   cursor: pointer;
 }
 .verbosity-select option { background: var(--bg-elevated); }
+.channel-custom-model {
+  margin-top: 4px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 12px;
+  outline: none;
+  width: 100%;
+  box-sizing: border-box;
+}
+.channel-custom-model::placeholder { color: var(--text-tertiary); }
+.channel-custom-model:focus { border-color: var(--border-accent); box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.1); }
+.channel-section-divider {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 10px 0 4px;
+  margin-top: 4px;
+  border-top: 1px solid var(--border-subtle);
+}
+.channel-idle-input {
+  width: 48px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 12px;
+  text-align: center;
+  outline: none;
+}
+.channel-idle-input:focus { border-color: var(--border-accent); box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.1); }
+.channel-idle-label { font-size: 11px; color: var(--text-tertiary); }
+.toggle-switch { position: relative; display: inline-block; width: 36px; height: 20px; flex-shrink: 0; }
+.toggle-switch input { opacity: 0; width: 0; height: 0; }
+.toggle-slider {
+  position: absolute; cursor: pointer; inset: 0;
+  background: var(--border-subtle); border-radius: 20px; transition: 0.2s;
+}
+.toggle-slider:before {
+  content: ""; position: absolute; height: 14px; width: 14px;
+  left: 3px; bottom: 3px; background: white; border-radius: 50%; transition: 0.2s;
+}
+.toggle-switch input:checked + .toggle-slider { background: var(--accent); }
+.toggle-switch input:checked + .toggle-slider:before { transform: translateX(16px); }
 
 /* ── settings dashboard ── */
 .dashboard-field {
@@ -1678,7 +1729,7 @@ body::after {
       <div class="channel-routing" id="channelRouting">
         <div class="channel-routing-header" onclick="toggleChannelRouting()">
           <h3>Channel Settings</h3>
-          <span class="channel-routing-toggle">&#9660;</span>
+          <span class="channel-routing-toggle">&#9654;</span>
         </div>
         <div class="channel-routing-body" id="channelRoutingBody"></div>
       </div>
@@ -3297,10 +3348,10 @@ function renderModelCards(config) {
   html += `<button class="add-model-btn" onclick="openAddModelForm()">+ Add Model</button>`;
   grid.innerHTML = html;
 
-  /* show channel routing section if 2+ models or telegram is active (for verbosity) */
+  /* show channel routing section if at least 1 model (always has automation settings) */
   const routingEl = document.getElementById('channelRouting');
   if (routingEl) {
-    if (models.length >= 2 || hasTelegram) {
+    if (models.length >= 1) {
       routingEl.classList.add('show');
       renderChannelRouting(config, hasTelegram);
     } else {
@@ -3527,24 +3578,40 @@ function renderChannelRouting(config, hasTelegram) {
   const models = config.models || [];
   const routes = config.channel_routes || {};
   const verbosity = config.channel_verbosity || {};
+  const memoryIdleMinutes = config.memory_idle_minutes || 10;
+  const memoryEnabled = config.memory_writer_enabled !== false;
 
-  const channels = [{id: 'web', label: 'Web', icon: '\uD83D\uDCAC'}];
+  const channels = [];
   if (hasTelegram) channels.push({id: 'telegram', label: 'Telegram', icon: '\u2708\uFE0F'});
 
+  const defaultModel = models.find(m => m.is_default);
+  const defaultLabel = defaultModel ? `default (${defaultModel.model})` : 'default';
+
+  function modelSelect(chId, currentRoute, includeCustom) {
+    const isCustom = currentRoute && currentRoute.startsWith('custom:');
+    const customVal = isCustom ? currentRoute.slice(7) : '';
+    let opts = `<option value=""${!currentRoute ? ' selected' : ''}>${defaultLabel}</option>`;
+    models.forEach(m => {
+      opts += `<option value="${m.id}"${currentRoute === m.id ? ' selected' : ''}>${(PROVIDERS[m.provider]?.icon || '') + ' ' + m.model}</option>`;
+    });
+    if (includeCustom !== false) {
+      opts += `<option value="__custom__"${isCustom ? ' selected' : ''}>Custom...</option>`;
+    }
+    let html = `<select onchange="onChannelModelChange('${chId}', this)">${opts}</select>`;
+    html += `<input type="text" class="channel-custom-model" id="custom-model-${chId}" placeholder="model name e.g. claude-haiku-4-5" value="${customVal}" style="display:${isCustom ? 'block' : 'none'}" onchange="saveCustomModel('${chId}', this.value)">`;
+    return html;
+  }
+
   let html = '';
+
+  /* messaging channels */
   channels.forEach(ch => {
     const currentRoute = routes[ch.id] || '';
     const currentVerbosity = verbosity[ch.id] || 'balanced';
-    const defaultModel = models.find(m => m.is_default);
-    const defaultLabel = defaultModel ? `default (${defaultModel.model})` : 'default';
-
     html += `<div class="channel-route-row">
       <span class="channel-route-label">${ch.icon} ${ch.label}</span>
       <span class="channel-route-selects">
-        <select onchange="updateChannelRoute('${ch.id}', this.value)">
-          <option value=""${!currentRoute ? ' selected' : ''}>${defaultLabel}</option>
-          ${models.map(m => `<option value="${m.id}"${currentRoute === m.id ? ' selected' : ''}>${(PROVIDERS[m.provider]?.icon || '') + ' ' + m.model}</option>`).join('')}
-        </select>
+        ${modelSelect(ch.id, currentRoute)}
         <select class="verbosity-select" onchange="updateChannelVerbosity('${ch.id}', this.value)">
           <option value="quiet"${currentVerbosity === 'quiet' ? ' selected' : ''}>quiet</option>
           <option value="balanced"${currentVerbosity === 'balanced' ? ' selected' : ''}>balanced</option>
@@ -3553,7 +3620,85 @@ function renderChannelRouting(config, hasTelegram) {
       </span>
     </div>`;
   });
+
+  /* automation section */
+  html += `<div class="channel-section-divider">Automation</div>`;
+
+  /* cron jobs */
+  const cronRoute = routes['cron'] || '';
+  html += `<div class="channel-route-row">
+    <span class="channel-route-label">\u23F0 Cron Jobs</span>
+    <span class="channel-route-selects">${modelSelect('cron', cronRoute)}</span>
+  </div>`;
+
+  /* memory writer */
+  const memRoute = routes['memory'] || '';
+  html += `<div class="channel-route-row">
+    <span class="channel-route-label">
+      <label class="toggle-switch">
+        <input type="checkbox" ${memoryEnabled ? 'checked' : ''} onchange="toggleMemoryWriter(this.checked)">
+        <span class="toggle-slider"></span>
+      </label>
+      \uD83E\uDDE0 Memory
+    </span>
+    <span class="channel-route-selects">
+      ${modelSelect('memory', memRoute)}
+      <span class="channel-idle-label">
+        <input type="number" class="channel-idle-input" id="memory-idle-min" value="${memoryIdleMinutes}" min="1" max="120" onchange="updateMemoryIdle(this.value)"> min idle
+      </span>
+    </span>
+  </div>`;
+
   body.innerHTML = html;
+}
+
+function onChannelModelChange(chId, sel) {
+  const customInput = document.getElementById(`custom-model-${chId}`);
+  if (sel.value === '__custom__') {
+    if (customInput) { customInput.style.display = 'block'; customInput.focus(); }
+  } else {
+    if (customInput) { customInput.style.display = 'none'; customInput.value = ''; }
+    updateChannelRoute(chId, sel.value);
+  }
+}
+
+function saveCustomModel(chId, modelName) {
+  if (!modelName.trim()) return;
+  updateChannelRoute(chId, 'custom:' + modelName.trim());
+}
+
+async function toggleMemoryWriter(enabled) {
+  try {
+    const resp = await fetch('/api/setup/agent-config', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({memory_writer_enabled: enabled})
+    });
+    const data = await resp.json();
+    if (data.success) {
+      dashboardConfig.memory_writer_enabled = enabled;
+    }
+  } catch(e) {
+    alert('Could not save memory setting');
+  }
+}
+
+async function updateMemoryIdle(minutes) {
+  const val = parseInt(minutes, 10);
+  if (isNaN(val) || val < 1) return;
+  try {
+    const resp = await fetch('/api/setup/agent-config', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({memory_idle_minutes: val})
+    });
+    const data = await resp.json();
+    if (data.success) {
+      dashboardConfig.memory_idle_minutes = val;
+    }
+  } catch(e) {
+    alert('Could not save memory settings');
+  }
 }
 
 async function updateChannelRoute(channel, modelId) {

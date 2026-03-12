@@ -819,7 +819,7 @@ def validate_setup_config(config):
                 errors.append("only one model can be default")
 
     # channel_routes validation
-    valid_channels = ("web", "telegram")
+    valid_channels = ("web", "telegram", "cron", "memory")
     channel_routes = config.get("channel_routes")
     if channel_routes is not None:
         if not isinstance(channel_routes, dict):
@@ -829,10 +829,11 @@ def validate_setup_config(config):
             for ch, mid in channel_routes.items():
                 if ch not in valid_channels:
                     errors.append(f"unknown channel in channel_routes: {ch!r}")
-                if mid and mid not in model_ids:
+                # allow "custom:<model>" values as well as model IDs
+                if mid and not mid.startswith("custom:") and mid not in model_ids:
                     errors.append(f"channel_routes[{ch!r}] references unknown model id: {mid!r}")
 
-    # channel_verbosity validation
+    # channel_verbosity validation (only messaging channels have verbosity)
     channel_verbosity = config.get("channel_verbosity")
     if channel_verbosity is not None:
         if not isinstance(channel_verbosity, dict):
@@ -840,7 +841,7 @@ def validate_setup_config(config):
         else:
             valid_levels = ("quiet", "balanced", "verbose")
             for ch, level in channel_verbosity.items():
-                if ch not in valid_channels:
+                if ch not in ("web", "telegram"):
                     errors.append(f"unknown channel in channel_verbosity: {ch!r}")
                 if level not in valid_levels:
                     errors.append(f"channel_verbosity[{ch!r}] must be quiet, balanced, or verbose")
@@ -868,6 +869,8 @@ def migrate_config_models(config):
     }]
     config.setdefault("channel_routes", {})
     config.setdefault("channel_verbosity", {})
+    config.setdefault("memory_idle_minutes", 10)
+    config.setdefault("memory_writer_enabled", True)
     return config
 
 
@@ -1893,6 +1896,10 @@ def create_job(job_data):
         job["env"] = job_data["env"]
     if job_data.get("working_dir"):
         job["working_dir"] = job_data["working_dir"]
+    if job_data.get("model"):
+        job["model"] = job_data["model"]
+    if job_data.get("provider"):
+        job["provider"] = job_data["provider"]
 
     with _jobs_lock:
         _jobs.append(job)
@@ -1962,6 +1969,23 @@ def _fix_goose_run_recipe(command):
     return " ".join(new_parts)
 
 
+def _resolve_job_model(job):
+    """Resolve a job's model field to (model_name, provider_id) or (None, None)."""
+    model_ref = job.get("model")
+    if not model_ref:
+        return None, None
+    # custom:modelname — use that model name with the default provider
+    if model_ref.startswith("custom:"):
+        return model_ref[7:], None
+    # model config ID — look up in setup
+    setup = load_setup()
+    if setup:
+        for m in setup.get("models", []):
+            if m.get("id") == model_ref:
+                return m.get("model"), m.get("provider")
+    return model_ref, None  # treat as raw model name
+
+
 def _run_script(job):
     """Execute a script job as a subprocess. Capture output, enforce timeout."""
     job_id = job.get("id", "unknown")
@@ -1970,6 +1994,17 @@ def _run_script(job):
     timeout = job.get("timeout_seconds", 300)
     working_dir = job.get("working_dir", "/data")
     extra_env = job.get("env") or {}
+
+    # resolve per-job model/provider overrides
+    model_name, _provider_id = _resolve_job_model(job)
+    job_provider = job.get("provider")
+    if "goose" in command:
+        if job_provider:
+            command = re.sub(r'(goose\s+run\b)', rf'\1 --provider {job_provider}', command)
+            print(f"[jobs] provider override: {job_provider}")
+        if model_name:
+            command = re.sub(r'(goose\s+run\b)', rf'\1 --model {model_name}', command)
+            print(f"[jobs] model override: {model_name}")
 
     print(f"[jobs] firing script: {job_name} ({job_id})")
 
@@ -3066,6 +3101,216 @@ def _create_goose_session():
         return None
 
 
+# ── memory writer (end-of-session learning) ──────────────────────────────────
+# Tracks last message time per chat. After N minutes of idle, fetches the
+# conversation and sends it through goose for memory extraction.
+
+_memory_last_activity = {}        # chat_id (str) -> timestamp (float)
+_memory_last_activity_lock = threading.Lock()
+_memory_processed_sessions = set()  # session_ids already processed
+_memory_writer_running = False
+
+MEMORY_EXTRACT_PROMPT = """You are analyzing a conversation to extract learnings about the user.
+Review the conversation below and extract ANY of these:
+
+1. **User facts**: name, role, preferences, habits, interests, people mentioned, work context
+2. **Corrections**: times the user corrected the agent ("no", "actually", "not like that")
+3. **Preferences**: communication style, format preferences, tool preferences
+4. **Important context**: deadlines, projects, relationships, recurring topics
+
+Output a structured JSON object with these keys (omit empty ones):
+{
+  "user_facts": ["fact1", "fact2"],
+  "corrections": ["correction1"],
+  "preferences": ["preference1"],
+  "context": ["context1"]
+}
+
+If there's nothing meaningful to extract, output: {"empty": true}
+
+CONVERSATION:
+"""
+
+def _memory_touch(chat_id):
+    """Record activity timestamp for a chat."""
+    with _memory_last_activity_lock:
+        _memory_last_activity[str(chat_id)] = time.time()
+
+
+def _memory_writer_loop():
+    """Background loop: check for idle sessions and extract memories."""
+    global _memory_writer_running
+    _memory_writer_running = True
+    print("[memory-writer] started")
+
+    while True:
+        try:
+            time.sleep(60)  # check every minute
+
+            setup = load_setup()
+            if not setup:
+                continue
+            if not setup.get("memory_writer_enabled", True):
+                continue
+            idle_minutes = setup.get("memory_idle_minutes", 10)
+            idle_threshold = idle_minutes * 60
+
+            # find idle chats
+            now = time.time()
+            idle_chats = []
+            with _memory_last_activity_lock:
+                for chat_id, last_time in list(_memory_last_activity.items()):
+                    if now - last_time >= idle_threshold:
+                        idle_chats.append(chat_id)
+
+            for chat_id in idle_chats:
+                # get session for this chat
+                with _telegram_sessions_lock:
+                    sid = _telegram_sessions.get(chat_id)
+                if not sid or sid in _memory_processed_sessions:
+                    # already processed or no session, clear activity tracker
+                    with _memory_last_activity_lock:
+                        _memory_last_activity.pop(chat_id, None)
+                    continue
+
+                # mark as processed before starting (avoid duplicate runs)
+                _memory_processed_sessions.add(sid)
+                with _memory_last_activity_lock:
+                    _memory_last_activity.pop(chat_id, None)
+
+                # fetch conversation
+                messages = _fetch_session_messages(sid)
+                if not messages or len(messages) < 2:
+                    continue
+
+                # build conversation text (truncate to keep token count reasonable)
+                convo_text = ""
+                for msg in messages[-40:]:  # last 40 messages max
+                    role = msg.get("role", "unknown")
+                    text = msg.get("text", "")[:500]
+                    convo_text += f"[{role}]: {text}\n\n"
+
+                if len(convo_text.strip()) < 50:
+                    continue
+
+                print(f"[memory-writer] extracting from session {sid} ({len(messages)} msgs)")
+
+                # send through goose web in a separate session
+                try:
+                    extract_sid = _create_goose_session()
+                    if not extract_sid:
+                        print("[memory-writer] could not create extraction session")
+                        continue
+
+                    prompt = MEMORY_EXTRACT_PROMPT + convo_text
+                    response, error = _do_ws_relay(prompt, extract_sid)
+                    if error:
+                        print(f"[memory-writer] extraction error: {error}")
+                        continue
+
+                    _process_memory_extraction(response)
+                    print(f"[memory-writer] done for session {sid}")
+
+                except Exception as e:
+                    print(f"[memory-writer] error processing session {sid}: {e}")
+
+        except Exception as e:
+            print(f"[memory-writer] loop error: {e}")
+
+
+def _process_memory_extraction(response_text):
+    """Parse extraction response and append to identity files."""
+    # try to find JSON in the response
+    json_match = re.search(r'\{[^{}]*\}', response_text, re.DOTALL)
+    if not json_match:
+        print("[memory-writer] no JSON found in response")
+        return
+
+    try:
+        data = json.loads(json_match.group())
+    except (json.JSONDecodeError, ValueError):
+        print("[memory-writer] could not parse JSON from response")
+        return
+
+    if data.get("empty"):
+        print("[memory-writer] nothing to extract")
+        return
+
+    identity_dir = os.path.join(DATA_DIR, "identity")
+    timestamp = time.strftime("%Y-%m-%d %H:%M")
+
+    # append user facts to user.md
+    user_facts = data.get("user_facts", [])
+    if user_facts:
+        user_file = os.path.join(identity_dir, "user.md")
+        if os.path.exists(user_file):
+            with open(user_file, "r") as f:
+                content = f.read()
+            additions = "\n".join(f"- {fact}" for fact in user_facts)
+            # append to Important Context section
+            if "## Important Context" in content:
+                content = content.replace(
+                    "## Important Context",
+                    f"## Important Context\n\n<!-- auto-extracted {timestamp} -->\n{additions}\n"
+                )
+                with open(user_file, "w") as f:
+                    f.write(content)
+                print(f"[memory-writer] added {len(user_facts)} facts to user.md")
+
+    # append corrections to learnings
+    corrections = data.get("corrections", [])
+    if corrections:
+        learnings_file = os.path.join(identity_dir, "learnings", "LEARNINGS.md")
+        if os.path.exists(learnings_file):
+            with open(learnings_file, "a") as f:
+                date_str = time.strftime("%Y%m%d")
+                for i, correction in enumerate(corrections):
+                    f.write(f"\n### LRN-{date_str}-AUTO\n- {correction}\n")
+            print(f"[memory-writer] added {len(corrections)} corrections to LEARNINGS.md")
+
+    # append preferences to user.md Preferences section
+    preferences = data.get("preferences", [])
+    if preferences:
+        user_file = os.path.join(identity_dir, "user.md")
+        if os.path.exists(user_file):
+            with open(user_file, "r") as f:
+                content = f.read()
+            additions = "\n".join(f"- {pref}" for pref in preferences)
+            if "## Preferences (Observed)" in content:
+                content = content.replace(
+                    "## Preferences (Observed)",
+                    f"## Preferences (Observed)\n\n<!-- auto-extracted {timestamp} -->\n{additions}\n"
+                )
+                with open(user_file, "w") as f:
+                    f.write(content)
+                print(f"[memory-writer] added {len(preferences)} preferences to user.md")
+
+    # append context to memory.md
+    context = data.get("context", [])
+    if context:
+        memory_file = os.path.join(identity_dir, "memory.md")
+        if os.path.exists(memory_file):
+            with open(memory_file, "r") as f:
+                content = f.read()
+            additions = "\n".join(f"- {ctx}" for ctx in context)
+            if "## Lessons Learned" in content:
+                content = content.replace(
+                    "## Lessons Learned",
+                    f"## Lessons Learned\n\n<!-- auto-extracted {timestamp} -->\n{additions}\n"
+                )
+                with open(memory_file, "w") as f:
+                    f.write(content)
+                print(f"[memory-writer] added {len(context)} context items to memory.md")
+
+
+def start_memory_writer():
+    """Start the memory writer background thread."""
+    global _memory_writer_running
+    if _memory_writer_running:
+        return
+    threading.Thread(target=_memory_writer_loop, daemon=True).start()
+
+
 # ── minimal WebSocket client (stdlib only, no external deps) ────────────────
 
 def _ws_connect(host, port, path, auth_token=None):
@@ -3822,6 +4067,7 @@ def _telegram_poll_loop(bot_token):
                     # threaded so the poll loop stays responsive for /stop commands.
                     # per-chat lock prevents concurrent relays per user.
                     def _do_relay(_text=text, _chat_id=chat_id, _bt=bot_token):
+                        _memory_touch(_chat_id)
                         _chat_lock = _get_chat_lock(_chat_id)
                         if not _chat_lock.acquire(timeout=2):
                             # another relay is running for this chat
@@ -4323,6 +4569,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.handle_reload_channels()
         elif path == "/api/setup/channels/verbosity":
             self.handle_set_verbosity()
+        elif path == "/api/setup/agent-config":
+            self.handle_agent_config()
         else:
             self.proxy_to_goose()
 
@@ -4629,6 +4877,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                 start_session_watcher()
                 start_job_engine()
                 start_cron_scheduler()
+                start_memory_writer()
             threading.Thread(target=_restart, daemon=True).start()
 
             resp = {"success": True, "message": "saved. agent is restarting..."}
@@ -4690,6 +4939,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             start_session_watcher()
             start_job_engine()
             start_cron_scheduler()
+            start_memory_writer()
         threading.Thread(target=_restart, daemon=True).start()
         return True
 
@@ -4853,14 +5103,15 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
 
             migrate_config_models(setup)
             model_ids = {m.get("id") for m in setup.get("models", [])}
-            valid_channels = ("web", "telegram")
+            valid_channels = ("web", "telegram", "cron", "memory")
             clean_routes = {}
             for ch, mid in routes.items():
                 ch = _sanitize_string(ch)
                 if ch not in valid_channels:
                     continue
                 mid = _sanitize_string(mid) if mid else None
-                if mid and mid not in model_ids:
+                # allow "custom:<model>" values as well as model IDs
+                if mid and not mid.startswith("custom:") and mid not in model_ids:
                     self.send_json(400, {"error": f"unknown model id: {mid!r}"}); return
                 if mid:
                     clean_routes[ch] = mid
@@ -4919,6 +5170,39 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(200, {"success": True, "channel_verbosity": clean})
         except Exception as e:
             print(f"[gateway] ERROR (handle_set_verbosity): {e}", file=sys.stderr)
+            self.send_json(500, {"error": "Internal server error."})
+
+    def handle_agent_config(self):
+        """POST /api/setup/agent-config — set memory idle minutes and other agent settings."""
+        if not self._check_rate_limit(auth_limiter):
+            return
+        if not check_auth(self):
+            self.send_response(401); self.end_headers(); return
+        body = self._read_body()
+        try:
+            data = json.loads(body)
+            setup = load_setup()
+            if not setup:
+                self.send_json(400, {"error": "not configured yet"}); return
+
+            changed = {}
+            if "memory_idle_minutes" in data:
+                val = int(data["memory_idle_minutes"])
+                if val < 1 or val > 120:
+                    self.send_json(400, {"error": "memory_idle_minutes must be 1-120"}); return
+                setup["memory_idle_minutes"] = val
+                changed["memory_idle_minutes"] = val
+            if "memory_writer_enabled" in data:
+                val = bool(data["memory_writer_enabled"])
+                setup["memory_writer_enabled"] = val
+                changed["memory_writer_enabled"] = val
+
+            save_setup(setup)
+            self.send_json(200, {"success": True, **changed})
+        except (ValueError, TypeError) as e:
+            self.send_json(400, {"error": str(e)})
+        except Exception as e:
+            print(f"[gateway] ERROR (handle_agent_config): {e}", file=sys.stderr)
             self.send_json(500, {"error": "Internal server error."})
 
     # ── notify endpoints ──
@@ -5129,6 +5413,10 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                 data["name"] = _sanitize_string(data["name"], max_length=200)
             if data.get("id"):
                 data["id"] = _sanitize_string(data["id"], max_length=100)
+            if data.get("model"):
+                data["model"] = _sanitize_string(data["model"], max_length=200)
+            if data.get("provider"):
+                data["provider"] = _sanitize_string(data["provider"], max_length=200)
 
             # default name for reminders
             if job_type == "reminder" and not data.get("name") and data.get("text"):
@@ -5510,6 +5798,9 @@ def main():
 
         # start cron scheduler (reads goose schedule.json, fires jobs via goose web)
         start_cron_scheduler()
+
+        # start memory writer (end-of-session learning)
+        start_memory_writer()
 
         # load channel plugins from /data/channels/
         _load_all_channels()

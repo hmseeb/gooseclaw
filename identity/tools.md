@@ -24,6 +24,7 @@
 | `job create "name" --run "cmd" --every 1h` | create a recurring script job |
 | `job create "name" --run "cmd" --cron "0 9 * * *"` | create a cron-scheduled job |
 | `job create "name" --run "cmd" --in 5m` | create a one-shot job |
+| `job create "name" --run "cmd" --every 1d --provider openrouter --model mistral-7b` | job with provider/model override |
 | `job list` | list all active jobs |
 | `job cancel <id>` | cancel a job (first 8 chars of ID ok) |
 | `job run <id>` | trigger a job immediately |
@@ -50,6 +51,7 @@ Results are delivered via Telegram push notification automatically. The user doe
 
 - **Script jobs**: run shell commands on schedule. use `job create`.
 - **Text reminders**: fire a message via notify. use `remind` (convenience wrapper).
+- **Provider/model override**: use `--provider <name>` and/or `--model <name>` to run a job on a specific provider/LLM. These are injected into `goose run` commands automatically. Use for cheaper recurring tasks (e.g. `--provider openrouter --model mistral-7b`).
 - ALWAYS use `job`/`remind` for automation. use `goose schedule` only for complex AI tasks.
 - the gateway exposes /api/jobs for programmatic use.
 
@@ -136,8 +138,8 @@ Resolution order: env vars first, then sidecar JSON. Never put tokens in the .py
 | Text reminder (take meds, standup) | `remind` ($0) |
 | Health check / uptime ping | `job` ($0) |
 | Cost monitoring via API | `job` ($0) |
-| Summarize, analyze, or reason about data | `goose schedule` ($$) |
-| Morning briefing with curated insights | `goose schedule` ($$) |
+| Summarize, analyze, or reason about data | `job` + `goose run --model haiku` ($) |
+| Morning briefing with curated insights | `job` + `goose run --model haiku` ($) |
 
 ### Job API endpoints
 
@@ -162,6 +164,21 @@ remind "drink water" --every 1h
 
 - max 5 concurrent jobs at once.
 - `timeout_seconds`: max seconds a script can run (default 300). killed if exceeded.
+
+## Memory Writer (automatic learning)
+
+The gateway has a built-in memory writer that automatically extracts learnings from
+conversations after they go idle. This is a safety net on top of the agent's own
+self-improvement loop (rule 9 in persistent-instructions.md).
+
+- **How it works**: after N minutes of inactivity (configurable, default 10min), the
+  gateway fetches the conversation, sends it through goose for analysis, and appends
+  extracted facts to identity files (user.md, memory.md, learnings/).
+- **Toggle**: enabled by default. can be disabled in /setup Channel Settings > Memory toggle.
+- **Model**: uses the default model unless a specific model is configured for Memory in Channel Settings.
+- **What it extracts**: user facts, corrections, preferences, important context.
+- The agent's own self-improvement loop still runs independently. The memory writer is
+  a programmatic backup that catches things the agent might miss.
 
 ## Research Tools (MCP, always available)
 

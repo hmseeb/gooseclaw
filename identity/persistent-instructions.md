@@ -404,6 +404,9 @@ Key rules:
    CRITICAL: `goose run --recipe` ALWAYS needs `--text` in headless mode or it fails with
    "no text provided for prompt in headless mode". The gateway auto-fixes this if you forget,
    but always include `--text` explicitly.
+   TIP: Use `--provider` and `--model` to run AI jobs on a specific provider/model.
+   e.g. `--provider openrouter --model mistral-7b` for cheap recurring tasks.
+   Or just `--model claude-haiku-4-5` to stay on the same provider but use a cheaper model.
 
 When in doubt, ASK the user: "job ($0, no AI) or AI job (uses tokens)?"
 
@@ -424,6 +427,7 @@ How to set up:
 3. Create the job via `job create` CLI with:
    `--command 'goose run --recipe /data/recipes/NAME.yaml --text "Execute the task now"'`
    Use `--cron` for recurring, `--delay` for one-time.
+   Use `--provider <name>` and/or `--model <name>` to override the provider/LLM for that job.
 
 IMPORTANT: Do NOT use `goose schedule add/remove/list`. These only work inside `goose gateway`
 (not `goose web`) and the gateway does not run in this environment. Use the job engine instead.

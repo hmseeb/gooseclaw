@@ -94,8 +94,17 @@ for j in data.get('jobs', []):
     if j.get('recurring_seconds'):
         schedule += f' (every {j[\"recurring_seconds\"]}s)'
 
+    provider = j.get('provider', '')
+    model = j.get('model', '')
+    override = ''
+    if provider and model:
+        override = f' [{provider}/{model}]'
+    elif provider:
+        override = f' [{provider}]'
+    elif model:
+        override = f' [{model}]'
     status = j.get('last_status', '-')
-    print(f'  [{jid}] {tag} {name} — {schedule} [{status}]')
+    print(f'  [{jid}] {tag} {name} — {schedule}{override} [{status}]')
 "
 }
 
@@ -167,6 +176,8 @@ cmd_create() {
     local fire_at=""
     local recurring_seconds=""
     local cron_expr=""
+    local model=""
+    local provider=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -189,6 +200,14 @@ cmd_create() {
             --cron)
                 shift
                 cron_expr="$1"
+                ;;
+            --model)
+                shift
+                model="$1"
+                ;;
+            --provider)
+                shift
+                provider="$1"
                 ;;
             *)
                 if [[ -z "$name" ]]; then
@@ -222,7 +241,7 @@ cmd_create() {
         delay_seconds="$recurring_seconds"
     fi
 
-    PAYLOAD=$(_NAME="$name" _CMD="$command" _DELAY="$delay_seconds" _FIREAT="$fire_at" _RECUR="$recurring_seconds" _CRON="$cron_expr" python3 -c "
+    PAYLOAD=$(_NAME="$name" _CMD="$command" _DELAY="$delay_seconds" _FIREAT="$fire_at" _RECUR="$recurring_seconds" _CRON="$cron_expr" _MODEL="$model" _PROVIDER="$provider" python3 -c "
 import json, os
 d = {
     'type': 'script',
@@ -233,6 +252,8 @@ ds = os.environ.get('_DELAY', '')
 fa = os.environ.get('_FIREAT', '')
 rs = os.environ.get('_RECUR', '')
 cr = os.environ.get('_CRON', '')
+ml = os.environ.get('_MODEL', '')
+pv = os.environ.get('_PROVIDER', '')
 if ds:
     d['delay_seconds'] = int(ds)
 elif fa:
@@ -241,6 +262,10 @@ if rs:
     d['recurring_seconds'] = int(rs)
 if cr:
     d['cron'] = cr
+if ml:
+    d['model'] = ml
+if pv:
+    d['provider'] = pv
 print(json.dumps(d))
 ")
 
@@ -278,6 +303,7 @@ if [[ $# -eq 0 ]]; then
     echo "  job create \"name\" --run \"command\" --cron \"0 9 * * 1-5\"  # cron schedule"
     echo "  job create \"name\" --run \"command\" --in 5m       # one-shot in 5 minutes"
     echo "  job create \"name\" --run \"command\" --at 09:00    # one-shot at time"
+    echo "  job create \"name\" --run \"cmd\" --every 1d --provider openrouter --model mistral-7b"
     echo "  job list                                         # list active jobs"
     echo "  job cancel <id>                                  # cancel by ID (first 8 chars ok)"
     echo "  job run <id>                                     # trigger immediately"

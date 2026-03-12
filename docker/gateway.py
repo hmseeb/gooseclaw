@@ -606,6 +606,77 @@ def send_telegram_message(bot_token, chat_id, text):
     return True, ""
 
 
+def _send_telegram_msg_with_id(bot_token, chat_id, text):
+    """Send a telegram message and return (message_id, error).
+
+    Returns the message_id on success (needed for editMessageText).
+    Returns (None, error_string) on failure.
+    """
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    html_text = _markdown_to_telegram_html(text)
+    try:
+        payload = urllib.parse.urlencode({
+            "chat_id": chat_id,
+            "text": html_text[:4000],
+            "parse_mode": "HTML",
+            "disable_web_page_preview": "true",
+        }).encode()
+        req = urllib.request.Request(url, data=payload)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            result = json.loads(resp.read())
+            if result.get("ok"):
+                return result["result"]["message_id"], ""
+            raise ValueError("telegram returned ok=false")
+    except Exception:
+        # HTML failed, try plain text
+        try:
+            payload = urllib.parse.urlencode({
+                "chat_id": chat_id,
+                "text": text[:4000],
+                "disable_web_page_preview": "true",
+            }).encode()
+            req = urllib.request.Request(url, data=payload)
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                result = json.loads(resp.read())
+                if result.get("ok"):
+                    return result["result"]["message_id"], ""
+        except Exception as e:
+            return None, str(e)
+    return None, "unknown error"
+
+
+def _edit_telegram_message(bot_token, chat_id, message_id, text):
+    """Edit an existing telegram message. Returns True on success."""
+    url = f"https://api.telegram.org/bot{bot_token}/editMessageText"
+    html_text = _markdown_to_telegram_html(text)
+    try:
+        payload = urllib.parse.urlencode({
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": html_text[:4000],
+            "parse_mode": "HTML",
+            "disable_web_page_preview": "true",
+        }).encode()
+        req = urllib.request.Request(url, data=payload)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            result = json.loads(resp.read())
+            return result.get("ok", False)
+    except Exception:
+        # HTML failed, try plain text
+        try:
+            payload = urllib.parse.urlencode({
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "text": text[:4000],
+                "disable_web_page_preview": "true",
+            }).encode()
+            req = urllib.request.Request(url, data=payload)
+            urllib.request.urlopen(req, timeout=10)
+            return True
+        except Exception:
+            return False
+
+
 def notify_all(text):
     """Send a message to all registered notification channels.
 
@@ -3163,7 +3234,7 @@ def _update_goose_session_provider(session_id, model_config):
 
 
 def _relay_to_goose_web(user_text, session_id, chat_id=None, channel=None,
-                        flush_cb=None, verbosity=None, sock_ref=None):
+                        flush_cb=None, verbosity=None, sock_ref=None, flush_interval=4.0):
     """Send a user message to goose web via WebSocket and return the assistant's text.
 
     Returns (response_text, error_string). On success error_string is empty.
@@ -3186,7 +3257,7 @@ def _relay_to_goose_web(user_text, session_id, chat_id=None, channel=None,
     # choose relay function based on streaming params
     use_streaming = flush_cb and verbosity and verbosity != "quiet"
     if use_streaming:
-        relay_fn = lambda txt, sid: _do_ws_relay_streaming(txt, sid, flush_cb, verbosity, sock_ref=sock_ref)
+        relay_fn = lambda txt, sid: _do_ws_relay_streaming(txt, sid, flush_cb, verbosity, sock_ref=sock_ref, flush_interval=flush_interval)
     else:
         relay_fn = lambda txt, sid: _do_ws_relay(txt, sid, sock_ref=sock_ref)
 
@@ -3412,7 +3483,7 @@ class _StreamBuffer:
         self.flush()
 
 
-def _do_ws_relay_streaming(user_text, session_id, flush_cb, verbosity="balanced", sock_ref=None):
+def _do_ws_relay_streaming(user_text, session_id, flush_cb, verbosity="balanced", sock_ref=None, flush_interval=4.0):
     """Connect to goose web via WebSocket, stream response chunks via flush_cb.
 
     Like _do_ws_relay but delivers text incrementally through flush_cb and
@@ -3425,7 +3496,7 @@ def _do_ws_relay_streaming(user_text, session_id, flush_cb, verbosity="balanced"
     t0 = time.time()
     print(f"[relay-stream] start session={session_id} verbosity={verbosity} text={user_text[:50]!r}")
 
-    buf = _StreamBuffer(flush_cb)
+    buf = _StreamBuffer(flush_cb, interval=flush_interval)
     collected = []
     sock = None
 
@@ -3740,43 +3811,73 @@ def _telegram_poll_loop(bot_token):
                         _tg_setup = load_setup()
                         _tg_verbosity = get_verbosity_for_channel(_tg_setup, "telegram") if _tg_setup else "balanced"
 
-                        if _tg_verbosity == "quiet":
-                            # original behavior: typing loop + single message at end
-                            typing_stop = threading.Event()
+                        # typing indicator loop (runs for ALL modes)
+                        typing_stop = threading.Event()
 
-                            def _typing_loop(_bt=bot_token, _cid=chat_id):
-                                while not typing_stop.is_set():
-                                    _send_typing_action(_bt, _cid)
-                                    typing_stop.wait(4)
+                        def _typing_loop(_bt=bot_token, _cid=chat_id):
+                            while not typing_stop.is_set():
+                                _send_typing_action(_bt, _cid)
+                                typing_stop.wait(4)
 
-                            typing_thread = threading.Thread(target=_typing_loop, daemon=True)
-                            typing_thread.start()
+                        typing_thread = threading.Thread(target=_typing_loop, daemon=True)
+                        typing_thread.start()
 
-                            try:
+                        try:
+                            if _tg_verbosity == "quiet":
+                                # quiet: typing loop + single message at end
                                 response_text, error = _relay_to_goose_web(
                                     text, session_id, chat_id=chat_id, channel="telegram",
                                     sock_ref=_sock_ref,
                                 )
-                            finally:
-                                typing_stop.set()
-                                typing_thread.join(timeout=2)
-
-                            if error:
-                                send_telegram_message(bot_token, chat_id, f"Error: {error}")
+                                if error:
+                                    send_telegram_message(bot_token, chat_id, f"Error: {error}")
+                                else:
+                                    send_telegram_message(bot_token, chat_id, response_text)
                             else:
-                                send_telegram_message(bot_token, chat_id, response_text)
-                        else:
-                            # streaming: deliver chunks as they arrive
-                            def _tg_flush(chunk, _bt=bot_token, _cid=chat_id):
-                                send_telegram_message(_bt, _cid, chunk)
+                                # streaming: edit-in-place (one message that grows)
+                                _edit_state = {"msg_id": None, "accumulated": "", "overflow": []}
 
-                            response_text, error = _relay_to_goose_web(
-                                text, session_id, chat_id=chat_id, channel="telegram",
-                                flush_cb=_tg_flush, verbosity=_tg_verbosity,
-                                sock_ref=_sock_ref,
-                            )
-                            if error:
-                                send_telegram_message(bot_token, chat_id, f"Error: {error}")
+                                def _tg_flush_edit(chunk, _bt=bot_token, _cid=chat_id, _st=_edit_state):
+                                    _st["accumulated"] += chunk
+                                    txt = _st["accumulated"]
+                                    if _st["msg_id"] is None:
+                                        # first chunk: send new message
+                                        mid, err = _send_telegram_msg_with_id(_bt, _cid, txt)
+                                        if mid:
+                                            _st["msg_id"] = mid
+                                        else:
+                                            print(f"[telegram] edit-stream: initial send failed: {err}")
+                                    elif len(txt) > 3800:
+                                        # message getting too long, finalize and start fresh
+                                        _st["overflow"].append(_st["msg_id"])
+                                        _st["accumulated"] = chunk
+                                        _st["msg_id"] = None
+                                        mid, err = _send_telegram_msg_with_id(_bt, _cid, chunk)
+                                        if mid:
+                                            _st["msg_id"] = mid
+                                    else:
+                                        # edit existing message with accumulated text
+                                        _edit_telegram_message(_bt, _cid, _st["msg_id"], txt)
+
+                                response_text, error = _relay_to_goose_web(
+                                    text, session_id, chat_id=chat_id, channel="telegram",
+                                    flush_cb=_tg_flush_edit, verbosity=_tg_verbosity,
+                                    sock_ref=_sock_ref, flush_interval=2.0,
+                                )
+                                # final edit with complete response
+                                if _edit_state["msg_id"] and response_text and not error:
+                                    # final edit with the last accumulated chunk
+                                    final_text = _edit_state["accumulated"] or response_text
+                                    if final_text:
+                                        _edit_telegram_message(bot_token, chat_id, _edit_state["msg_id"], final_text)
+                                elif error:
+                                    send_telegram_message(bot_token, chat_id, f"Error: {error}")
+                                elif not _edit_state["msg_id"] and response_text:
+                                    # flush_cb was never called (short response)
+                                    send_telegram_message(bot_token, chat_id, response_text)
+                        finally:
+                            typing_stop.set()
+                            typing_thread.join(timeout=2)
                     except Exception as exc:
                         print(f"[telegram] relay exception for chat {chat_id}: {exc}")
                         try:

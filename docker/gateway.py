@@ -315,7 +315,7 @@ env_map = {
 }
 
 default_models = {
-    "anthropic": "claude-sonnet-4-5",
+    "anthropic": "claude-opus-4-6",
     "openai": "gpt-4o",
     "google": "gemini-2.0-flash",
     "groq": "llama-3.3-70b-versatile",
@@ -1501,18 +1501,25 @@ def apply_config(config):
         _setup_claude_cli()
     elif provider_type == "custom":
         url = config.get("custom_url", "")
-        custom_model = config.get("custom_model", "gpt-4")
+        custom_model = config.get("custom_model", "")
         custom_key = config.get("custom_key", "")
-        # write custom provider json
+        custom_engine = config.get("custom_engine", "openai")
+        # set env var for custom API key
+        if custom_key:
+            os.environ["CUSTOM_API_KEY"] = custom_key
+        # write custom provider json in goose's expected format
         cp_dir = os.path.join(CONFIG_DIR, "custom_providers")
         os.makedirs(cp_dir, exist_ok=True)
         with open(os.path.join(cp_dir, "custom.json"), "w") as f:
             json.dump({
                 "name": "custom",
-                "provider_type": "openai",
-                "host": url,
-                "model": custom_model,
-                "api_key": custom_key,
+                "engine": custom_engine,
+                "display_name": "Custom Endpoint",
+                "api_key_env": "CUSTOM_API_KEY" if custom_key else "",
+                "base_url": url,
+                "models": [{"name": custom_model, "context_limit": 128000}],
+                "requires_auth": bool(custom_key),
+                "supports_streaming": True,
             }, f)
         lines.append("GOOSE_PROVIDER: custom")
     elif provider_type in env_map:
@@ -4589,6 +4596,20 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                 saved = setup.get("saved_keys", {})
                 saved[provider] = new_key
                 setup["saved_keys"] = saved
+
+            # save custom endpoint fields
+            if provider == "custom":
+                base_url = _sanitize_string(data.get("base_url", ""))
+                engine = _sanitize_string(data.get("engine", "openai"))
+                if not base_url:
+                    self.send_json(400, {"error": "base_url is required for custom endpoint"}); return
+                if engine not in ("openai", "anthropic", "ollama"):
+                    engine = "openai"
+                setup["custom_url"] = base_url
+                setup["custom_engine"] = engine
+                setup["custom_model"] = model
+                if new_key:
+                    setup["custom_key"] = new_key
 
             is_first = len(setup.get("models", [])) == 0
             new_model = {

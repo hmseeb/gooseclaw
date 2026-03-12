@@ -1643,6 +1643,18 @@ body::after {
           <label>Provider</label>
           <select id="addModelProvider" onchange="onAddModelProviderChange()"></select>
         </div>
+        <div class="field" id="addModelEngineField" style="display:none">
+          <label>Engine</label>
+          <select id="addModelEngine">
+            <option value="openai">OpenAI-compatible</option>
+            <option value="anthropic">Anthropic-compatible</option>
+            <option value="ollama">Ollama-compatible</option>
+          </select>
+        </div>
+        <div class="field" id="addModelUrlField" style="display:none">
+          <label>Base URL</label>
+          <input type="url" id="addModelUrl" placeholder="https://api.example.com/v1">
+        </div>
         <div class="field" id="addModelKeyField">
           <label>API Key</label>
           <div class="secret-field-wrapper">
@@ -1936,8 +1948,8 @@ const PROVIDERS = {
     pricing: 'Pay per token',
     keyUrl: 'https://console.anthropic.com',
     envVar: 'ANTHROPIC_API_KEY',
-    defaultModel: 'claude-sonnet-4-5',
-    models: ['claude-sonnet-4-5', 'claude-sonnet-4-20250514', 'claude-opus-4', 'claude-haiku-3-5'],
+    defaultModel: 'claude-opus-4-6',
+    models: ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5'],
     keyPlaceholder: 'sk-ant-api03-...',
     keyPrefix: 'sk-ant-',
   },
@@ -2132,7 +2144,7 @@ const PROVIDERS = {
     keyUrl: 'https://claude.ai/settings',
     envVar: 'CLAUDE_CODE_OAUTH_TOKEN',
     defaultModel: 'default',
-    models: ['default', 'claude-sonnet-4-20250514', 'claude-opus-4-20250514', 'claude-haiku-4-5-20251001'],
+    models: ['default', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5'],
     keyPlaceholder: 'sk-ant-oat01-...',
     keyPrefix: null,
   },
@@ -2221,11 +2233,13 @@ const PROVIDERS = {
     category: 'custom',
     pricing: 'Varies',
     keyUrl: null,
-    envVar: '',
-    defaultModel: 'gpt-4',
+    envVar: 'CUSTOM_API_KEY',
+    defaultModel: '',
     models: [],
-    keyPlaceholder: 'https://...',
+    keyPlaceholder: 'sk-...',
     keyPrefix: null,
+    needsUrl: true,
+    needsEngine: true,
   },
 };
 
@@ -3375,6 +3389,8 @@ function closeAddModelForm() {
   document.getElementById('addModelForm').classList.remove('show');
   document.getElementById('addModelKey').value = '';
   document.getElementById('addModelName').value = '';
+  document.getElementById('addModelUrl').value = '';
+  document.getElementById('addModelEngine').selectedIndex = 0;
 }
 
 async function onAddModelProviderChange() {
@@ -3385,6 +3401,12 @@ async function onAddModelProviderChange() {
   const hintEl = document.getElementById('addModelKeyHint');
   const nameInput = document.getElementById('addModelName');
   const dl = document.getElementById('addModelSuggestions');
+
+  /* show/hide custom endpoint fields */
+  const engineField = document.getElementById('addModelEngineField');
+  const urlField = document.getElementById('addModelUrlField');
+  engineField.style.display = (prov && prov.needsEngine) ? '' : 'none';
+  urlField.style.display = (prov && prov.needsUrl) ? '' : 'none';
 
   /* show/hide key field based on provider type */
   const localProviders = ['ollama', 'lm-studio', 'docker-model-runner', 'ramalama'];
@@ -3465,6 +3487,11 @@ async function submitAddModel() {
   try {
     const payload = {provider: provId, model: model};
     if (key) payload.api_key = key;
+    if (provId === 'custom') {
+      payload.base_url = document.getElementById('addModelUrl').value.trim();
+      payload.engine = document.getElementById('addModelEngine').value;
+      if (!payload.base_url) { alert('Base URL is required for custom endpoint'); btn.disabled = false; btn.textContent = 'Add'; return; }
+    }
     const resp = await fetch('/api/setup/models/add', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},

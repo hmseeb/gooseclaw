@@ -807,7 +807,117 @@ body::after {
   transition: all 0.15s;
 }
 .model-card-btn:hover { color: var(--error); background: var(--error-bg); }
+.model-card-btn.edit-btn:hover { color: var(--accent-bright); background: rgba(124, 58, 237, 0.1); }
+.model-card-btn.key-btn:hover { color: #f59e0b; background: rgba(245, 158, 11, 0.1); }
 .model-card-btn.switch-btn:hover { color: var(--accent-bright); background: rgba(124, 58, 237, 0.1); }
+/* inline edit for model name */
+.model-card-edit-inline {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+}
+.model-card-edit-inline input {
+  flex: 1;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-accent);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  outline: none;
+}
+.model-card-edit-inline input:focus {
+  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.1);
+}
+.model-card-edit-inline button {
+  padding: 3px 8px;
+  border-radius: 5px;
+  border: none;
+  font-size: 11px;
+  cursor: pointer;
+  font-family: 'DM Sans', sans-serif;
+}
+.model-card-edit-inline .save-edit-btn {
+  background: var(--accent);
+  color: white;
+}
+.model-card-edit-inline .cancel-edit-btn {
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-tertiary);
+}
+/* inline key edit for model card */
+.model-card-key-inline {
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.model-card-key-inline input {
+  flex: 1;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  outline: none;
+}
+.model-card-key-inline input:focus {
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.1);
+}
+.model-card-key-inline button {
+  padding: 3px 8px;
+  border-radius: 5px;
+  border: none;
+  font-size: 11px;
+  cursor: pointer;
+  font-family: 'DM Sans', sans-serif;
+}
+.model-card-key-inline .save-key-btn {
+  background: #f59e0b;
+  color: #000;
+  font-weight: 600;
+}
+.model-card-key-inline .cancel-key-btn {
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-tertiary);
+}
+/* secret field wrapper with eye toggle */
+.secret-field-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.secret-field-wrapper input {
+  flex: 1;
+  padding-right: 36px !important;
+}
+.secret-toggle-btn {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px;
+  color: var(--text-tertiary);
+  display: flex;
+  align-items: center;
+  transition: color 0.15s;
+}
+.secret-toggle-btn:hover {
+  color: var(--text-secondary);
+}
+.secret-toggle-btn svg {
+  width: 16px;
+  height: 16px;
+}
 .add-model-btn {
   flex: 1 1 calc(50% - 4px);
   min-width: 160px;
@@ -1358,7 +1468,12 @@ body::after {
     </div>
     <div class="field">
       <label>Telegram Bot Token</label>
-      <input type="text" id="telegramToken" placeholder="paste token from @BotFather" onblur="validateTelegramFormat(this)">
+      <div class="secret-field-wrapper">
+        <input type="password" id="telegramToken" placeholder="paste token from @BotFather" onblur="validateTelegramFormat(this)">
+        <button type="button" class="secret-toggle-btn" onclick="toggleSecretVisibility(this)" title="Toggle visibility">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
+      </div>
       <div class="field-hint">skip if you only want the web UI</div>
       <div id="telegramFormatError" style="display:none;font-size:12px;color:var(--error);margin-top:4px"></div>
       <div class="botfather-instructions">
@@ -1514,7 +1629,12 @@ body::after {
         </div>
         <div class="field" id="addModelKeyField">
           <label>API Key</label>
-          <input type="password" id="addModelKey" placeholder="enter API key">
+          <div class="secret-field-wrapper">
+            <input type="password" id="addModelKey" placeholder="enter API key">
+            <button type="button" class="secret-toggle-btn" onclick="toggleSecretVisibility(this)" title="Toggle visibility">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
           <div style="font-size:11px;color:var(--text-tertiary);margin-top:3px" id="addModelKeyHint"></div>
         </div>
         <div class="field">
@@ -1549,7 +1669,12 @@ body::after {
         <span class="dashboard-field-label">Telegram</span>
         <span class="dashboard-field-value" id="dfv-telegram"></span>
         <div class="dashboard-field-edit" id="dfe-telegram">
-          <input type="text" id="dfi-telegram" placeholder="bot token from @BotFather">
+          <div class="secret-field-wrapper">
+            <input type="password" id="dfi-telegram" placeholder="bot token from @BotFather">
+            <button type="button" class="secret-toggle-btn" onclick="toggleSecretVisibility(this)" title="Toggle visibility">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
         </div>
         <button class="dashboard-edit-btn" onclick="startDashboardEdit('telegram')">edit</button>
       </div>
@@ -1557,7 +1682,12 @@ body::after {
         <span class="dashboard-field-label">Auth Token</span>
         <span class="dashboard-field-value" id="dfv-authtoken"></span>
         <div class="dashboard-field-edit" id="dfe-authtoken">
-          <input type="text" id="dfi-authtoken" placeholder="leave blank to keep current">
+          <div class="secret-field-wrapper">
+            <input type="password" id="dfi-authtoken" placeholder="leave blank to keep current">
+            <button type="button" class="secret-toggle-btn" onclick="toggleSecretVisibility(this)" title="Toggle visibility">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
         </div>
         <button class="dashboard-edit-btn" onclick="startDashboardEdit('authtoken')">edit</button>
       </div>
@@ -1586,7 +1716,12 @@ body::after {
     </p>
     <div class="input-group" style="margin-bottom:16px">
       <label class="input-label">Recovery Secret</label>
-      <input type="password" id="recoverySecret" class="text-input" placeholder="Enter your recovery secret">
+      <div class="secret-field-wrapper">
+        <input type="password" id="recoverySecret" class="text-input" placeholder="Enter your recovery secret">
+        <button type="button" class="secret-toggle-btn" onclick="toggleSecretVisibility(this)" title="Toggle visibility">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
+      </div>
     </div>
     <div id="recoveryResult" style="display:none"></div>
     <div class="btn-row">
@@ -1606,6 +1741,129 @@ let savedKeysSet = {};
 let validationPassed = false;
 let lastSavedConfig = null;
 let _startupPollTimer = null;
+
+/* ── eye toggle for secret fields ── */
+const EYE_OPEN_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+const EYE_CLOSED_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
+
+function toggleSecretVisibility(btn) {
+  const wrapper = btn.closest('.secret-field-wrapper');
+  const input = wrapper.querySelector('input');
+  if (input.type === 'password') {
+    input.type = 'text';
+    btn.innerHTML = EYE_CLOSED_SVG;
+  } else {
+    input.type = 'password';
+    btn.innerHTML = EYE_OPEN_SVG;
+  }
+}
+
+/* ── inline model name editing ── */
+function startEditModel(modelId, event) {
+  event.stopPropagation();
+  const models = dashboardConfig.models || [];
+  const model = models.find(m => m.id === modelId);
+  if (!model) return;
+
+  const card = event.target.closest('.model-card');
+  const nameEl = card.querySelector('.model-card-name');
+  const currentName = model.model;
+
+  nameEl.innerHTML = `<div class="model-card-edit-inline">
+    <input type="text" value="${currentName}" onkeydown="if(event.key==='Enter'){saveEditModel('${modelId}',this);event.stopPropagation()}" onclick="event.stopPropagation()">
+    <button class="save-edit-btn" onclick="event.stopPropagation();saveEditModel('${modelId}',this.previousElementSibling)">&#10003;</button>
+    <button class="cancel-edit-btn" onclick="event.stopPropagation();renderModelCards(dashboardConfig)">&#10005;</button>
+  </div>`;
+  const inp = nameEl.querySelector('input');
+  inp.focus();
+  inp.select();
+}
+
+async function saveEditModel(modelId, inputEl) {
+  const newModel = inputEl.value.trim();
+  if (!newModel) { renderModelCards(dashboardConfig); return; }
+
+  const models = dashboardConfig.models || [];
+  const model = models.find(m => m.id === modelId);
+  if (!model || model.model === newModel) { renderModelCards(dashboardConfig); return; }
+
+  try {
+    const resp = await fetch('/api/setup/models/add', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({id: modelId, provider: model.provider, model: newModel, replace: true})
+    });
+    const data = await resp.json();
+    if (data.success) {
+      model.model = newModel;
+      renderModelCards(dashboardConfig);
+      const successEl = document.getElementById('dashboardSuccess');
+      if (successEl) { successEl.classList.add('show'); }
+      pollDashboardRestart();
+    } else {
+      alert(data.error || 'Failed to update model name');
+      renderModelCards(dashboardConfig);
+    }
+  } catch(e) {
+    alert('Could not reach server');
+    renderModelCards(dashboardConfig);
+  }
+}
+
+/* ── inline API key editing on model card ── */
+function startEditModelKey(modelId, event) {
+  event.stopPropagation();
+  const card = event.target.closest('.model-card');
+  /* remove any existing key editor */
+  const existing = card.querySelector('.model-card-key-inline');
+  if (existing) { existing.remove(); return; }
+
+  const models = dashboardConfig.models || [];
+  const model = models.find(m => m.id === modelId);
+  if (!model) return;
+  const prov = PROVIDERS[model.provider];
+  const placeholder = model.provider === 'claude-code'
+    ? 'OAuth token (sk-ant-oat01-...)'
+    : (prov && prov.keyPlaceholder ? prov.keyPlaceholder : 'API key');
+
+  const div = document.createElement('div');
+  div.className = 'model-card-key-inline';
+  div.innerHTML = `
+    <input type="password" placeholder="${placeholder}" onclick="event.stopPropagation()">
+    <button class="save-key-btn" onclick="event.stopPropagation();saveEditModelKey('${modelId}',this.parentElement.querySelector('input'))">Save</button>
+    <button class="cancel-key-btn" onclick="event.stopPropagation();this.parentElement.remove()">&#10005;</button>`;
+  card.appendChild(div);
+  div.querySelector('input').focus();
+}
+
+async function saveEditModelKey(modelId, inputEl) {
+  const key = inputEl.value.trim();
+  if (!key) { inputEl.parentElement.remove(); return; }
+
+  const models = dashboardConfig.models || [];
+  const model = models.find(m => m.id === modelId);
+  if (!model) return;
+
+  try {
+    const payload = {id: modelId, provider: model.provider, model: model.model, api_key: key, replace: true};
+    const resp = await fetch('/api/setup/models/add', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const data = await resp.json();
+    if (data.success) {
+      inputEl.parentElement.remove();
+      const successEl = document.getElementById('dashboardSuccess');
+      if (successEl) { successEl.classList.add('show'); }
+      pollDashboardRestart();
+    } else {
+      alert(data.error || 'Failed to update API key');
+    }
+  } catch(e) {
+    alert('Could not reach server');
+  }
+}
 
 /* ── per-provider format hints ── */
 function getFormatHint(providerId) {
@@ -2101,7 +2359,12 @@ function buildCredFields() {
     html = `
       <div class="field">
         <label>Claude Setup Token</label>
-        <input type="password" id="claudeToken" placeholder="sk-ant-oat01-...">
+        <div class="secret-field-wrapper">
+          <input type="password" id="claudeToken" placeholder="sk-ant-oat01-...">
+          <button type="button" class="secret-toggle-btn" onclick="toggleSecretVisibility(this)" title="Toggle visibility">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+        </div>
         <div class="field-hint">
           Run <code>claude setup-token</code> in your local terminal to get this token.
           Requires an active Claude Pro/Team subscription.
@@ -2156,7 +2419,12 @@ function buildCredFields() {
     html = `
       <div class="field">
         <label>Azure OpenAI API Key</label>
-        <input type="password" id="azureKey" placeholder="...">
+        <div class="secret-field-wrapper">
+          <input type="password" id="azureKey" placeholder="...">
+          <button type="button" class="secret-toggle-btn" onclick="toggleSecretVisibility(this)" title="Toggle visibility">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+        </div>
         <div class="field-hint">Find these in Azure Portal &rsaquo; your OpenAI resource &rsaquo; Keys and Endpoint.
           <br><a href="https://portal.azure.com" target="_blank" rel="noopener">portal.azure.com</a>
         </div>
@@ -2178,7 +2446,12 @@ function buildCredFields() {
       </div>
       <div class="field">
         <label>API Key</label>
-        <input type="password" id="customKey" placeholder="optional">
+        <div class="secret-field-wrapper">
+          <input type="password" id="customKey" placeholder="optional">
+          <button type="button" class="secret-toggle-btn" onclick="toggleSecretVisibility(this)" title="Toggle visibility">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+        </div>
         <div class="field-hint">leave blank if your endpoint doesn't require auth</div>
       </div>`;
 
@@ -2190,7 +2463,12 @@ function buildCredFields() {
     html = `
       <div class="field">
         <label>${provider.name} API Key</label>
-        <input type="password" id="apiKey" placeholder="${provider.keyPlaceholder || ''}">
+        <div class="secret-field-wrapper">
+          <input type="password" id="apiKey" placeholder="${provider.keyPlaceholder || ''}">
+          <button type="button" class="secret-toggle-btn" onclick="toggleSecretVisibility(this)" title="Toggle visibility">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+        </div>
         <div class="field-hint">
           Get your API key at <a href="${provider.keyUrl}" target="_blank" rel="noopener">${provider.keyUrl}</a>${prefixHint}
         </div>
@@ -2823,7 +3101,7 @@ function renderDashboardValues(config) {
   if (tgfv) {
     const tgSet = config.telegram_bot_token_set || config.telegram_bot_token;
     if (tgSet) {
-      tgfv.textContent = 'Configured';
+      tgfv.textContent = '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022';
       tgfv.className = 'dashboard-field-value ok';
     } else {
       tgfv.textContent = 'Not configured';
@@ -2835,7 +3113,7 @@ function renderDashboardValues(config) {
   const afv = document.getElementById('dfv-authtoken');
   if (afv) {
     const at = config.web_auth_token;
-    afv.textContent = at ? at : 'Auto-generated';
+    afv.textContent = at ? '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022' : 'Auto-generated';
     afv.className = 'dashboard-field-value' + (at ? '' : ' muted');
   }
 
@@ -2844,6 +3122,23 @@ function renderDashboardValues(config) {
 function startDashboardEdit(field) {
   const fieldEl = document.getElementById(`df-${field}`);
   if (fieldEl) fieldEl.classList.add('editing');
+
+  /* pre-fill secret inputs with masked placeholder when value is set */
+  if (field === 'telegram') {
+    const inp = document.getElementById('dfi-telegram');
+    if (inp) {
+      const isSet = dashboardConfig.telegram_bot_token_set || dashboardConfig.telegram_bot_token;
+      inp.value = '';
+      inp.placeholder = isSet ? 'clear and re-enter to change' : 'bot token from @BotFather';
+    }
+  } else if (field === 'authtoken') {
+    const inp = document.getElementById('dfi-authtoken');
+    if (inp) {
+      const isSet = !!dashboardConfig.web_auth_token;
+      inp.value = '';
+      inp.placeholder = isSet ? 'clear and re-enter to change' : 'leave blank to auto-generate';
+    }
+  }
 }
 
 async function saveDashboardChanges() {
@@ -2927,8 +3222,11 @@ function renderModelCards(config) {
     const isDefault = m.is_default;
     const channels = routeMap[m.id] || [];
 
+    const needsKey = m.provider !== 'github-copilot' && !['ollama','lm-studio','docker-model-runner','ramalama'].includes(m.provider);
     html += `<div class="model-card${isDefault ? ' active' : ''}" onclick="activateModel('${m.id}')" title="Click to set as default">
       <div class="model-card-actions">
+        <button class="model-card-btn edit-btn" onclick="startEditModel('${m.id}',event)" title="Edit model name">&#9998;</button>
+        ${needsKey ? `<button class="model-card-btn key-btn" onclick="startEditModelKey('${m.id}',event)" title="Edit API key">&#128273;</button>` : ''}
         ${!isDefault ? `<button class="model-card-btn" onclick="event.stopPropagation();removeModel('${m.id}')" title="Remove">&#x2715;</button>` : ''}
       </div>
       <div class="model-card-provider">${icon} ${provName}</div>
@@ -3267,7 +3565,7 @@ function prefillWizard(config) {
     if (el) {
       if (config.claude_setup_token_set) {
         el.value = '';
-        el.placeholder = 'Token already set (leave blank to keep)';
+        el.placeholder = '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022 (clear and re-enter to change)';
       }
     }
   } else if (pt === 'azure-openai') {
@@ -3275,7 +3573,7 @@ function prefillWizard(config) {
     const endEl = document.getElementById('azureEndpoint');
     if (keyEl && config.azure_key_set) {
       keyEl.value = '';
-      keyEl.placeholder = 'Key already set (leave blank to keep)';
+      keyEl.placeholder = '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022 (clear and re-enter to change)';
     }
     if (endEl && config.azure_endpoint) endEl.value = config.azure_endpoint;
   } else if (pt === 'custom') {
@@ -3284,14 +3582,14 @@ function prefillWizard(config) {
     if (urlEl && config.custom_url) urlEl.value = config.custom_url;
     if (keyEl && config.custom_key_set) {
       keyEl.value = '';
-      keyEl.placeholder = 'Key already set (leave blank to keep)';
+      keyEl.placeholder = '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022 (clear and re-enter to change)';
     }
   } else if (pt !== 'github-copilot') {
     /* standard API key provider */
     const el = document.getElementById('apiKey');
     if (el && config.api_key_set) {
       el.value = '';
-      el.placeholder = 'Key already set (leave blank to keep)';
+      el.placeholder = '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022 (clear and re-enter to change)';
     }
   }
 
@@ -3314,7 +3612,7 @@ function prefillWizard(config) {
   const tgEl = document.getElementById('telegramToken');
   if (tgEl && config.telegram_bot_token_set) {
     tgEl.value = '';
-    tgEl.placeholder = 'Token already set (leave blank to keep)';
+    tgEl.placeholder = '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022 (clear and re-enter to change)';
   }
 
   /* pre-fill advanced multi-model settings */

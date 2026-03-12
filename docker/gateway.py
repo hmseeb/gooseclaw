@@ -1533,10 +1533,12 @@ def apply_config(config):
         lines.append(f"GOOSE_PROVIDER: {provider_type}")
 
     # default models per provider if none specified (from module-level registry)
+    # claude-code doesn't need a model config (CLI handles it), and setting
+    # GOOSE_MODEL to "default" can confuse goose into not initializing the provider.
     if not model:
         model = default_models.get(provider_type, "")
 
-    if model:
+    if model and model != "default" and provider_type != "claude-code":
         lines.append(f"GOOSE_MODEL: {model}")
 
     # lead/worker multi-model settings

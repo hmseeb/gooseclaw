@@ -943,7 +943,7 @@ body::after {
   gap: 6px;
   flex-shrink: 0;
 }
-.channel-route-select select {
+.channel-route-select select, .channel-route-selects select:first-child {
   padding: 5px 28px 5px 10px;
   border-radius: 6px;
   border: 1px solid var(--border-subtle);
@@ -960,11 +960,29 @@ body::after {
   cursor: pointer;
   max-width: 200px;
 }
-.channel-route-select select option { background: var(--bg-elevated); }
-.channel-route-select select:focus {
+.channel-route-select select option, .channel-route-selects select option { background: var(--bg-elevated); }
+.channel-route-select select:focus, .verbosity-select:focus {
   border-color: var(--border-accent);
   box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.1);
 }
+.channel-route-selects { display: flex; gap: 8px; align-items: center; }
+.verbosity-select {
+  padding: 5px 28px 5px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-card);
+  color: var(--text-tertiary);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 11px;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%239ca3af' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  cursor: pointer;
+}
+.verbosity-select option { background: var(--bg-elevated); }
 
 /* ── settings dashboard ── */
 .dashboard-field {
@@ -1511,7 +1529,7 @@ body::after {
       </div>
       <div class="channel-routing" id="channelRouting">
         <div class="channel-routing-header" onclick="toggleChannelRouting()">
-          <h3>Channel Routing</h3>
+          <h3>Channel Settings</h3>
           <span class="channel-routing-toggle">&#9660;</span>
         </div>
         <div class="channel-routing-body" id="channelRoutingBody"></div>
@@ -2925,10 +2943,10 @@ function renderModelCards(config) {
   html += `<button class="add-model-btn" onclick="openAddModelForm()">+ Add Model</button>`;
   grid.innerHTML = html;
 
-  /* show channel routing section if 2+ models */
+  /* show channel routing section if 2+ models or telegram is active (for verbosity) */
   const routingEl = document.getElementById('channelRouting');
   if (routingEl) {
-    if (models.length >= 2) {
+    if (models.length >= 2 || hasTelegram) {
       routingEl.classList.add('show');
       renderChannelRouting(config, hasTelegram);
     } else {
@@ -3141,6 +3159,7 @@ function renderChannelRouting(config, hasTelegram) {
   if (!body) return;
   const models = config.models || [];
   const routes = config.channel_routes || {};
+  const verbosity = config.channel_verbosity || {};
 
   const channels = [{id: 'web', label: 'Web', icon: '\uD83D\uDCAC'}];
   if (hasTelegram) channels.push({id: 'telegram', label: 'Telegram', icon: '\u2708\uFE0F'});
@@ -3148,15 +3167,21 @@ function renderChannelRouting(config, hasTelegram) {
   let html = '';
   channels.forEach(ch => {
     const currentRoute = routes[ch.id] || '';
+    const currentVerbosity = verbosity[ch.id] || 'balanced';
     const defaultModel = models.find(m => m.is_default);
     const defaultLabel = defaultModel ? `default (${defaultModel.model})` : 'default';
 
     html += `<div class="channel-route-row">
       <span class="channel-route-label">${ch.icon} ${ch.label}</span>
-      <span class="channel-route-select">
+      <span class="channel-route-selects">
         <select onchange="updateChannelRoute('${ch.id}', this.value)">
           <option value=""${!currentRoute ? ' selected' : ''}>${defaultLabel}</option>
           ${models.map(m => `<option value="${m.id}"${currentRoute === m.id ? ' selected' : ''}>${(PROVIDERS[m.provider]?.icon || '') + ' ' + m.model}</option>`).join('')}
+        </select>
+        <select class="verbosity-select" onchange="updateChannelVerbosity('${ch.id}', this.value)">
+          <option value="quiet"${currentVerbosity === 'quiet' ? ' selected' : ''}>quiet</option>
+          <option value="balanced"${currentVerbosity === 'balanced' ? ' selected' : ''}>balanced</option>
+          <option value="verbose"${currentVerbosity === 'verbose' ? ' selected' : ''}>verbose</option>
         </select>
       </span>
     </div>`;
@@ -3184,6 +3209,24 @@ async function updateChannelRoute(channel, modelId) {
     }
   } catch(e) {
     alert('Could not save routing');
+  }
+}
+
+async function updateChannelVerbosity(channel, level) {
+  const verbosity = dashboardConfig.channel_verbosity || {};
+  verbosity[channel] = level;
+  try {
+    const resp = await fetch('/api/setup/channels/verbosity', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({channel_verbosity: verbosity})
+    });
+    const data = await resp.json();
+    if (data.success) {
+      dashboardConfig.channel_verbosity = data.channel_verbosity;
+    }
+  } catch(e) {
+    alert('Could not save verbosity');
   }
 }
 

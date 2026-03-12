@@ -393,28 +393,33 @@ Key rules:
    -> Use `job create` CLI. Zero LLM cost.
 
 3. **Needs LLM reasoning?** (summarize, analyze, draft, curate, judge, write)
-   -> Use `goose schedule` (AI job). Costs tokens but can think.
+   -> Use `job create` with `goose run --recipe <path> --text "Run now"`. Costs tokens but can think.
+   CRITICAL: `goose run --recipe` ALWAYS needs `--text` in headless mode or it fails with
+   "no text provided for prompt in headless mode". The gateway auto-fixes this if you forget,
+   but always include `--text` explicitly.
 
 When in doubt, ASK the user: "job ($0, no AI) or AI job (uses tokens)?"
 
-### AI Jobs (goose schedule)
+### AI Jobs (goose run --recipe)
 
 For complex recurring tasks that need AI processing (e.g. morning briefings, research summaries).
 
-When using goose schedule (via shell, NOT CronCreate):
-- Create/update recipe YAML files in /data/recipes/
-- EVERY recipe MUST include a DELIVERY section that pipes output through `notify`
-  Without this, scheduled output goes to sessions.db and the user never sees it.
-  Example delivery block for recipe instructions:
-  ```
-  DELIVERY: After composing your output, you MUST deliver it to the user.
-  Run: echo "YOUR_OUTPUT_HERE" | notify
-  Format as plain text. Keep under 4000 chars. Prefix with task title and date.
-  ```
-- Use `goose schedule add`, `goose schedule remove`, or `goose schedule list` as needed
-- If updating an existing recipe, you MUST remove and re-add the schedule
-  (goose copies recipes at registration time, editing the source file alone does nothing)
-- Always confirm what was changed
+How to set up:
+1. Create recipe YAML in /data/recipes/
+2. EVERY recipe MUST include a DELIVERY section in the instructions that pipes output through `notify`
+   Without this, scheduled output is lost and the user never sees it.
+   Example delivery block for recipe instructions:
+   ```
+   DELIVERY: After composing your output, you MUST deliver it to the user.
+   Run: echo "YOUR_OUTPUT_HERE" | notify
+   Format as plain text. Keep under 4000 chars. Prefix with task title and date.
+   ```
+3. Create the job via `job create` CLI with:
+   `--command 'goose run --recipe /data/recipes/NAME.yaml --text "Execute the task now"'`
+   Use `--cron` for recurring, `--delay` for one-time.
+
+IMPORTANT: Do NOT use `goose schedule add/remove/list`. These only work inside `goose gateway`
+(not `goose web`) and the gateway does not run in this environment. Use the job engine instead.
 
 ---
 

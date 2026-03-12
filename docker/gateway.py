@@ -132,6 +132,10 @@ _telegram_running = False  # True while the Python polling thread is active
 _telegram_sessions_file = os.path.join(DATA_DIR, "telegram_sessions.json")
 _telegram_sessions = {}  # chat_id (str) -> session_id (str)
 _telegram_sessions_lock = threading.Lock()
+_telegram_active_relays = {}   # chat_id (str) -> [socket] ref (active WS relay)
+_telegram_active_relays_lock = threading.Lock()
+_telegram_chat_locks = {}      # chat_id (str) -> threading.Lock (one relay at a time)
+_telegram_chat_locks_lock = threading.Lock()
 
 # ── per-channel model routing state ────────────────────────────────────────
 # Tracks which model was last set on each goose session so we avoid
@@ -724,18 +728,31 @@ def validate_setup_config(config):
                 errors.append("only one model can be default")
 
     # channel_routes validation
+    valid_channels = ("web", "telegram")
     channel_routes = config.get("channel_routes")
     if channel_routes is not None:
         if not isinstance(channel_routes, dict):
             errors.append("channel_routes must be an object")
         else:
-            valid_channels = ("web", "telegram")
             model_ids = {m.get("id") for m in (models or []) if isinstance(m, dict)}
             for ch, mid in channel_routes.items():
                 if ch not in valid_channels:
                     errors.append(f"unknown channel in channel_routes: {ch!r}")
                 if mid and mid not in model_ids:
                     errors.append(f"channel_routes[{ch!r}] references unknown model id: {mid!r}")
+
+    # channel_verbosity validation
+    channel_verbosity = config.get("channel_verbosity")
+    if channel_verbosity is not None:
+        if not isinstance(channel_verbosity, dict):
+            errors.append("channel_verbosity must be an object")
+        else:
+            valid_levels = ("quiet", "balanced", "verbose")
+            for ch, level in channel_verbosity.items():
+                if ch not in valid_channels:
+                    errors.append(f"unknown channel in channel_verbosity: {ch!r}")
+                if level not in valid_levels:
+                    errors.append(f"channel_verbosity[{ch!r}] must be quiet, balanced, or verbose")
 
     return len(errors) == 0, errors
 
@@ -759,6 +776,7 @@ def migrate_config_models(config):
         "is_default": True,
     }]
     config.setdefault("channel_routes", {})
+    config.setdefault("channel_verbosity", {})
     return config
 
 
@@ -779,6 +797,12 @@ def get_model_for_channel(config, channel):
             if m.get("id") == model_id:
                 return m
     return get_active_model(config)
+
+
+def get_verbosity_for_channel(config, channel):
+    """Return verbosity level for a channel. Default: 'balanced'."""
+    levels = config.get("channel_verbosity", {})
+    return levels.get(channel, "balanced")
 
 
 def _sync_active_model_to_config(config):
@@ -1797,11 +1821,40 @@ def list_active_jobs():
         return [dict(j) for j in _jobs if not j.get("fired") and j.get("enabled", True)]
 
 
+def _fix_goose_run_recipe(command):
+    """If command is 'goose run --recipe <path>' without --text, extract recipe
+    instructions and inject --text so it works in headless mode."""
+    if "goose run" not in command or "--recipe" not in command:
+        return command
+    if "--text" in command or "--instructions" in command:
+        return command  # already has text, leave it alone
+
+    # extract recipe path from command
+    parts = command.split()
+    recipe_path = None
+    for i, p in enumerate(parts):
+        if p == "--recipe" and i + 1 < len(parts):
+            recipe_path = parts[i + 1]
+            break
+    if not recipe_path or not os.path.exists(recipe_path):
+        return command
+
+    instructions = _load_recipe(recipe_path)
+    if not instructions:
+        return command
+
+    # inject --text with the recipe instructions
+    import shlex
+    text_arg = f" --text {shlex.quote(instructions)}"
+    print(f"[jobs] injected --text for goose run --recipe (headless fix)")
+    return command + text_arg
+
+
 def _run_script(job):
     """Execute a script job as a subprocess. Capture output, enforce timeout."""
     job_id = job.get("id", "unknown")
     job_name = job.get("name", job_id)
-    command = job.get("command", "")
+    command = _fix_goose_run_recipe(job.get("command", ""))
     timeout = job.get("timeout_seconds", 300)
     working_dir = job.get("working_dir", "/data")
     extra_env = job.get("env") or {}
@@ -2415,8 +2468,13 @@ class ChannelRelay:
         except Exception as e:
             print(f"[channels] warn: could not save sessions for {self._name}: {e}")
 
-    def __call__(self, user_id, text):
-        """Relay a message from channel user to goose web. Returns response text."""
+    def __call__(self, user_id, text, send_fn=None):
+        """Relay a message from channel user to goose web. Returns response text.
+
+        If send_fn is provided, streams response chunks via send_fn(text) based
+        on the channel's verbosity setting. Backward compatible: plugins that
+        don't pass send_fn get the original single-response behavior.
+        """
         user_key = str(user_id)
         with self._lock:
             session_id = self._sessions.get(user_key)
@@ -2427,14 +2485,24 @@ class ChannelRelay:
                 self._sessions[user_key] = session_id
             self._save()
 
-        response_text, error = _do_ws_relay(text, session_id)
+        # determine streaming params
+        setup = load_setup()
+        verbosity = get_verbosity_for_channel(setup, self._name) if setup else "balanced"
+        use_streaming = send_fn and verbosity != "quiet"
+
+        if use_streaming:
+            relay_fn = lambda txt, sid: _do_ws_relay_streaming(txt, sid, send_fn, verbosity)
+        else:
+            relay_fn = _do_ws_relay
+
+        response_text, error = relay_fn(text, session_id)
         if error:
             # try new session on failure
             session_id = f"{self._name}_{user_key}_{time.strftime('%Y%m%d_%H%M%S')}"
             with self._lock:
                 self._sessions[user_key] = session_id
             self._save()
-            response_text, error = _do_ws_relay(text, session_id)
+            response_text, error = relay_fn(text, session_id)
 
         if error:
             return f"Error: {error}"
@@ -2800,6 +2868,15 @@ def start_session_watcher():
 
 # ── telegram session management ─────────────────────────────────────────────
 
+def _get_chat_lock(chat_id):
+    """Get or create a per-chat lock. Ensures only one relay runs at a time per chat."""
+    chat_key = str(chat_id)
+    with _telegram_chat_locks_lock:
+        if chat_key not in _telegram_chat_locks:
+            _telegram_chat_locks[chat_key] = threading.Lock()
+        return _telegram_chat_locks[chat_key]
+
+
 def _get_session_id(chat_id):
     """Get or create a session_id for a telegram chat_id.
 
@@ -3062,12 +3139,15 @@ def _update_goose_session_provider(session_id, model_config):
         print(f"[routing] failed to update session provider: {e}")
 
 
-def _relay_to_goose_web(user_text, session_id, chat_id=None, channel=None):
+def _relay_to_goose_web(user_text, session_id, chat_id=None, channel=None,
+                        flush_cb=None, verbosity=None, sock_ref=None):
     """Send a user message to goose web via WebSocket and return the assistant's text.
 
     Returns (response_text, error_string). On success error_string is empty.
     If chat_id is provided and the session is stale, creates a new session and retries.
     If channel is provided, applies per-channel model routing before relaying.
+    If flush_cb is provided and verbosity != "quiet", uses streaming relay.
+    If sock_ref is a list, sock_ref[0] is set to the active socket for cancellation.
     """
     if not _INTERNAL_GOOSE_TOKEN:
         return "", "Goose is not ready yet (no internal token). Please try again in a moment."
@@ -3080,7 +3160,14 @@ def _relay_to_goose_web(user_text, session_id, chat_id=None, channel=None):
             if model_cfg:
                 _update_goose_session_provider(session_id, model_cfg)
 
-    text, err = _do_ws_relay(user_text, session_id)
+    # choose relay function based on streaming params
+    use_streaming = flush_cb and verbosity and verbosity != "quiet"
+    if use_streaming:
+        relay_fn = lambda txt, sid: _do_ws_relay_streaming(txt, sid, flush_cb, verbosity, sock_ref=sock_ref)
+    else:
+        relay_fn = lambda txt, sid: _do_ws_relay(txt, sid, sock_ref=sock_ref)
+
+    text, err = relay_fn(user_text, session_id)
 
     # if connection or session error, try creating a new session
     if err and chat_id:
@@ -3091,16 +3178,17 @@ def _relay_to_goose_web(user_text, session_id, chat_id=None, channel=None):
                 _telegram_sessions[str(chat_id)] = new_sid
             _save_telegram_sessions()
             print(f"[telegram] retrying with new session {new_sid}")
-            return _do_ws_relay(user_text, new_sid)
+            return relay_fn(user_text, new_sid)
 
     return text, err
 
 
-def _do_ws_relay(user_text, session_id):
+def _do_ws_relay(user_text, session_id, sock_ref=None):
     """Connect to goose web via WebSocket, send a message, collect the response.
 
     Returns (response_text, error_string). No timeout on the relay itself.
     Connection uses a 15s timeout for the initial handshake only.
+    If sock_ref is a list, sock_ref[0] is set to the socket for external cancellation.
     """
     ws_path = f"/ws?token={urllib.parse.quote(str(_INTERNAL_GOOSE_TOKEN))}"
     t0 = time.time()
@@ -3109,6 +3197,8 @@ def _do_ws_relay(user_text, session_id):
     sock = None
     try:
         sock = _ws_connect("127.0.0.1", GOOSE_WEB_PORT, ws_path, auth_token=_INTERNAL_GOOSE_TOKEN)
+        if sock_ref is not None:
+            sock_ref[0] = sock
         t_connect = time.time()
         print(f"[relay] ws connected in {t_connect - t0:.1f}s")
 
@@ -3171,6 +3261,184 @@ def _do_ws_relay(user_text, session_id):
         return "", f"WebSocket error: {e}"
     except Exception as e:
         print(f"[relay] error after {time.time() - t0:.1f}s: {e}")
+        if sock:
+            try:
+                sock.close()
+            except Exception:
+                pass
+        return "", f"Error communicating with goose: {e}"
+
+
+# ── streaming relay ─────────────────────────────────────────────────────────
+
+def _truncate(text, max_len=500):
+    """Truncate text with ellipsis if it exceeds max_len."""
+    if len(text) <= max_len:
+        return text
+    return text[:max_len] + "..."
+
+
+class _StreamBuffer:
+    """Accumulates text chunks and flushes to a callback on triggers."""
+
+    def __init__(self, flush_cb, interval=4.0):
+        self._buf = []
+        self._flush_cb = flush_cb
+        self._interval = interval
+        self._last_flush = time.time()
+        self._char_count = 0
+
+    def append(self, text):
+        self._buf.append(text)
+        self._char_count += len(text)
+        if self._should_flush(text):
+            self.flush()
+
+    def _should_flush(self, latest_text):
+        if time.time() - self._last_flush >= self._interval:
+            return True
+        if self._char_count > 3000:
+            return True
+        if latest_text.endswith("\n\n"):
+            return True
+        return False
+
+    def flush(self):
+        if not self._buf:
+            return
+        text = "".join(self._buf)
+        self._buf.clear()
+        self._char_count = 0
+        self._last_flush = time.time()
+        if text.strip():
+            try:
+                self._flush_cb(text)
+            except Exception as e:
+                print(f"[stream] flush error: {e}")
+
+    def flush_final(self):
+        self.flush()
+
+
+def _do_ws_relay_streaming(user_text, session_id, flush_cb, verbosity="balanced", sock_ref=None):
+    """Connect to goose web via WebSocket, stream response chunks via flush_cb.
+
+    Like _do_ws_relay but delivers text incrementally through flush_cb and
+    emits tool/thinking events based on verbosity level.
+    If sock_ref is a list, sock_ref[0] is set to the socket for external cancellation.
+
+    Returns (full_text, error_string) for compatibility with _do_ws_relay.
+    """
+    ws_path = f"/ws?token={urllib.parse.quote(str(_INTERNAL_GOOSE_TOKEN))}"
+    t0 = time.time()
+    print(f"[relay-stream] start session={session_id} verbosity={verbosity} text={user_text[:50]!r}")
+
+    buf = _StreamBuffer(flush_cb)
+    collected = []
+    sock = None
+
+    try:
+        sock = _ws_connect("127.0.0.1", GOOSE_WEB_PORT, ws_path, auth_token=_INTERNAL_GOOSE_TOKEN)
+        if sock_ref is not None:
+            sock_ref[0] = sock
+        print(f"[relay-stream] ws connected in {time.time() - t0:.1f}s")
+
+        msg = json.dumps({
+            "type": "message",
+            "content": user_text,
+            "session_id": session_id,
+            "timestamp": int(time.time() * 1000),
+        })
+        _ws_send_text(sock, msg)
+
+        while True:
+            frame_text = _ws_recv_text(sock)
+            if frame_text is None:
+                break
+
+            try:
+                event = json.loads(frame_text)
+            except (json.JSONDecodeError, ValueError):
+                continue
+
+            etype = event.get("type", "")
+
+            if etype == "response":
+                content = event.get("content", "")
+                if content:
+                    collected.append(content)
+                    buf.append(content)
+
+            elif etype == "tool_request":
+                # flush any pending text before tool status
+                buf.flush()
+                tool_name = event.get("tool", event.get("name", "tool"))
+                if verbosity == "verbose":
+                    args = event.get("arguments", event.get("args", ""))
+                    if isinstance(args, dict):
+                        # show first few key=value pairs
+                        parts = [f'{k}="{v}"' for k, v in list(args.items())[:3]]
+                        args_str = ", ".join(parts)
+                    else:
+                        args_str = _truncate(str(args), 100) if args else ""
+                    status = f"[Using {tool_name}({args_str})]" if args_str else f"[Using {tool_name}]"
+                else:
+                    status = f"[Using {tool_name}...]"
+                try:
+                    flush_cb(status)
+                except Exception as e:
+                    print(f"[stream] tool status error: {e}")
+
+            elif etype in ("tool_response", "tool_confirmation"):
+                if verbosity == "verbose":
+                    result = event.get("result", event.get("content", ""))
+                    if result:
+                        truncated = _truncate(str(result), 400)
+                        try:
+                            flush_cb(f"Result: {truncated}")
+                        except Exception as e:
+                            print(f"[stream] tool result error: {e}")
+
+            elif etype == "thinking":
+                if verbosity == "verbose":
+                    content = event.get("content", "")
+                    if content:
+                        buf.flush()
+                        truncated = _truncate(content, 500)
+                        try:
+                            flush_cb(f"_{truncated}_")
+                        except Exception as e:
+                            print(f"[stream] thinking error: {e}")
+
+            elif etype == "error":
+                buf.flush()
+                err_msg = event.get("message", "Unknown error")
+                print(f"[relay-stream] error event after {time.time() - t0:.1f}s: {err_msg}")
+                sock.close()
+                return "".join(collected).strip(), f"Goose error: {err_msg}"
+
+            elif etype == "complete":
+                break
+
+        buf.flush_final()
+        sock.close()
+        full_text = "".join(collected).strip()
+        elapsed = time.time() - t0
+        print(f"[relay-stream] done in {elapsed:.1f}s ({len(full_text)} chars) session={session_id}")
+        if not full_text:
+            return "(No response from goose)", ""
+        return full_text, ""
+
+    except ConnectionError as e:
+        print(f"[relay-stream] connection error after {time.time() - t0:.1f}s: {e}")
+        if sock:
+            try:
+                sock.close()
+            except Exception:
+                pass
+        return "", f"WebSocket error: {e}"
+    except Exception as e:
+        print(f"[relay-stream] error after {time.time() - t0:.1f}s: {e}")
         if sock:
             try:
                 sock.close()
@@ -3276,6 +3544,7 @@ def _telegram_poll_loop(bot_token):
                         help_text = (
                             "🪿 *GooseClaw Commands*\n\n"
                             "*Session:*\n"
+                            "/stop — cancel the current response\n"
                             "/clear — wipe conversation and start fresh\n"
                             "/newsession — same as /clear\n"
                             "/compact — summarize history to save tokens\n\n"
@@ -3285,6 +3554,21 @@ def _telegram_poll_loop(bot_token):
                             "/help — this message"
                         )
                         send_telegram_message(bot_token, chat_id, help_text)
+                        continue
+
+                    if lower == "/stop":
+                        # kill any active relay for this chat
+                        with _telegram_active_relays_lock:
+                            sock_ref = _telegram_active_relays.pop(chat_id, None)
+                        if sock_ref and sock_ref[0]:
+                            try:
+                                sock_ref[0].close()
+                            except Exception:
+                                pass
+                            send_telegram_message(bot_token, chat_id, "Stopped.")
+                            print(f"[telegram] /stop killed relay for chat {chat_id}")
+                        else:
+                            send_telegram_message(bot_token, chat_id, "Nothing running.")
                         continue
 
                     if lower in ("/newsession", "/clear"):
@@ -3321,30 +3605,64 @@ def _telegram_poll_loop(bot_token):
                         continue
 
                     # ── relay to goose web ──
+                    # per-chat lock prevents concurrent relays (e.g. auto-kick + user msg)
+                    _chat_lock = _get_chat_lock(chat_id)
+                    _chat_lock.acquire()
                     _send_typing_action(bot_token, chat_id)
                     session_id = _get_session_id(chat_id)
+                    _sock_ref = [None]
 
-                    # send typing indicator periodically in a background thread
-                    typing_stop = threading.Event()
+                    # register sock_ref so /stop can close the socket mid-relay
+                    with _telegram_active_relays_lock:
+                        _telegram_active_relays[chat_id] = _sock_ref
 
-                    def _typing_loop(_bt=bot_token, _cid=chat_id):
-                        while not typing_stop.is_set():
-                            _send_typing_action(_bt, _cid)
-                            typing_stop.wait(4)
-
-                    typing_thread = threading.Thread(target=_typing_loop, daemon=True)
-                    typing_thread.start()
+                    # determine verbosity for telegram channel
+                    _tg_setup = load_setup()
+                    _tg_verbosity = get_verbosity_for_channel(_tg_setup, "telegram") if _tg_setup else "balanced"
 
                     try:
-                        response_text, error = _relay_to_goose_web(text, session_id, chat_id=chat_id, channel="telegram")
-                    finally:
-                        typing_stop.set()
-                        typing_thread.join(timeout=2)
+                        if _tg_verbosity == "quiet":
+                            # original behavior: typing loop + single message at end
+                            typing_stop = threading.Event()
 
-                    if error:
-                        send_telegram_message(bot_token, chat_id, f"Error: {error}")
-                    else:
-                        send_telegram_message(bot_token, chat_id, response_text)
+                            def _typing_loop(_bt=bot_token, _cid=chat_id):
+                                while not typing_stop.is_set():
+                                    _send_typing_action(_bt, _cid)
+                                    typing_stop.wait(4)
+
+                            typing_thread = threading.Thread(target=_typing_loop, daemon=True)
+                            typing_thread.start()
+
+                            try:
+                                response_text, error = _relay_to_goose_web(
+                                    text, session_id, chat_id=chat_id, channel="telegram",
+                                    sock_ref=_sock_ref,
+                                )
+                            finally:
+                                typing_stop.set()
+                                typing_thread.join(timeout=2)
+
+                            if error:
+                                send_telegram_message(bot_token, chat_id, f"Error: {error}")
+                            else:
+                                send_telegram_message(bot_token, chat_id, response_text)
+                        else:
+                            # streaming: deliver chunks as they arrive
+                            def _tg_flush(chunk, _bt=bot_token, _cid=chat_id):
+                                send_telegram_message(_bt, _cid, chunk)
+
+                            response_text, error = _relay_to_goose_web(
+                                text, session_id, chat_id=chat_id, channel="telegram",
+                                flush_cb=_tg_flush, verbosity=_tg_verbosity,
+                                sock_ref=_sock_ref,
+                            )
+                            if error:
+                                send_telegram_message(bot_token, chat_id, f"Error: {error}")
+                    finally:
+                        # unregister active relay and release chat lock
+                        with _telegram_active_relays_lock:
+                            _telegram_active_relays.pop(chat_id, None)
+                        _chat_lock.release()
                 else:
                     # unpaired user — check if this is a pairing code
                     with telegram_pair_lock:
@@ -3379,11 +3697,12 @@ def _telegram_poll_loop(bot_token):
                             sid = _get_session_id(chat_id)
                             if sid:
                                 def _kick_greeting(msg=kick_msg, s=sid, c=chat_id):
-                                    txt, err = _relay_to_goose_web(
-                                        msg, s, chat_id=str(c), channel="telegram",
-                                    )
-                                    if txt and not err:
-                                        send_telegram_message(bot_token, c, txt)
+                                    with _get_chat_lock(c):
+                                        txt, err = _relay_to_goose_web(
+                                            msg, s, chat_id=str(c), channel="telegram",
+                                        )
+                                        if txt and not err:
+                                            send_telegram_message(bot_token, c, txt)
                                 threading.Thread(target=_kick_greeting, daemon=True).start()
                         except Exception:
                             pass
@@ -3431,6 +3750,27 @@ def start_telegram_gateway(bot_token):
 
     # generate an initial pairing code
     _generate_and_store_pair_code()
+
+    # register slash commands for autocomplete in telegram
+    try:
+        commands = [
+            {"command": "stop", "description": "Cancel the current response"},
+            {"command": "clear", "description": "Wipe conversation and start fresh"},
+            {"command": "newsession", "description": "Same as /clear"},
+            {"command": "compact", "description": "Summarize history to save tokens"},
+            {"command": "prompts", "description": "List available extension prompts"},
+            {"command": "help", "description": "Show available commands"},
+        ]
+        payload = json.dumps({"commands": commands}).encode()
+        req = urllib.request.Request(
+            f"https://api.telegram.org/bot{bot_token}/setMyCommands",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        urllib.request.urlopen(req, timeout=10)
+        print("[telegram] registered slash commands for autocomplete")
+    except Exception as e:
+        print(f"[telegram] warn: could not register commands: {e}")
 
     thread = threading.Thread(target=_telegram_poll_loop, args=(bot_token,), daemon=True)
     thread.start()
@@ -3676,6 +4016,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                 self.proxy_to_goose()
         elif path == "/api/channels/reload":
             self.handle_reload_channels()
+        elif path == "/api/setup/channels/verbosity":
+            self.handle_set_verbosity()
         else:
             self.proxy_to_goose()
 
@@ -4222,6 +4564,42 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(200, {"success": True, "channel_routes": clean_routes})
         except Exception as e:
             print(f"[gateway] ERROR (handle_set_routes): {e}", file=sys.stderr)
+            self.send_json(500, {"error": "Internal server error."})
+
+    def handle_set_verbosity(self):
+        """POST /api/setup/channels/verbosity — set per-channel verbosity levels."""
+        if not self._check_rate_limit(auth_limiter):
+            return
+        if not check_auth(self):
+            self.send_response(401); self.end_headers(); return
+        body = self._read_body()
+        try:
+            data = json.loads(body)
+            verbosity = data.get("channel_verbosity", {})
+            if not isinstance(verbosity, dict):
+                self.send_json(400, {"error": "channel_verbosity must be an object"}); return
+
+            setup = load_setup()
+            if not setup:
+                self.send_json(400, {"error": "not configured yet"}); return
+
+            valid_channels = ("web", "telegram")
+            valid_levels = ("quiet", "balanced", "verbose")
+            clean = {}
+            for ch, level in verbosity.items():
+                ch = _sanitize_string(ch)
+                level = _sanitize_string(level)
+                if ch not in valid_channels:
+                    continue
+                if level not in valid_levels:
+                    self.send_json(400, {"error": f"invalid verbosity level: {level!r}"}); return
+                clean[ch] = level
+
+            setup["channel_verbosity"] = clean
+            save_setup(setup)
+            self.send_json(200, {"success": True, "channel_verbosity": clean})
+        except Exception as e:
+            print(f"[gateway] ERROR (handle_set_verbosity): {e}", file=sys.stderr)
             self.send_json(500, {"error": "Internal server error."})
 
     # ── notify endpoints ──

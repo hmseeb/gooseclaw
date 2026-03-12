@@ -3751,6 +3751,18 @@ def _telegram_poll_loop(bot_token):
                             sock_ref = _telegram_active_relays.pop(chat_id, None)
                         if sock_ref and sock_ref[0]:
                             try:
+                                # send cancel signal before closing so goose aborts sub-agents
+                                sid = None
+                                with _telegram_sessions_lock:
+                                    sid = _telegram_sessions.get(chat_id)
+                                if sid:
+                                    try:
+                                        _ws_send_text(sock_ref[0], json.dumps({
+                                            "type": "cancel",
+                                            "session_id": sid,
+                                        }))
+                                    except Exception:
+                                        pass
                                 sock_ref[0].close()
                             except Exception:
                                 pass
@@ -3763,19 +3775,14 @@ def _telegram_poll_loop(bot_token):
                     if lower == "/clear":
                         with _telegram_sessions_lock:
                             old = _telegram_sessions.pop(chat_id, None)
-                        # generate a fresh session ID directly — goose web auto-creates
-                        # sessions on first message. _create_goose_session() unreliably
-                        # returns the existing session via GET / redirect, so we bypass it.
-                        new_sid = time.strftime("%Y%m%d_%H%M%S")
-                        with _telegram_sessions_lock:
-                            _telegram_sessions[chat_id] = new_sid
                         _save_telegram_sessions()
-                        label = "cleared"
+                        # session cleared — _get_session_id() will create a real
+                        # goose web session on the next message.
                         send_telegram_message(
                             bot_token, chat_id,
-                            f"🔄 Session {label}. Conversation history is fresh."
+                            "🔄 Session cleared. Conversation history is fresh."
                         )
-                        print(f"[telegram] session reset for chat {chat_id} (old: {old}, new: {new_sid})")
+                        print(f"[telegram] session cleared for chat {chat_id} (old: {old})")
                         continue
 
                     if lower == "/compact":
@@ -3793,101 +3800,98 @@ def _telegram_poll_loop(bot_token):
                             send_telegram_message(bot_token, chat_id, f"📝 Compacted:\n\n{response_text}")
                         continue
 
-                    # ── relay to goose web ──
-                    # per-chat lock prevents concurrent relays (e.g. auto-kick + user msg)
-                    _chat_lock = _get_chat_lock(chat_id)
-                    _chat_lock.acquire()
-                    try:
-                        _send_typing_action(bot_token, chat_id)
-                        session_id = _get_session_id(chat_id)
-                        _sock_ref = [None]
-
-                        # register sock_ref so /stop can close the socket mid-relay
-                        with _telegram_active_relays_lock:
-                            _telegram_active_relays[chat_id] = _sock_ref
-
-                        # determine verbosity for telegram channel
-                        _tg_setup = load_setup()
-                        _tg_verbosity = get_verbosity_for_channel(_tg_setup, "telegram") if _tg_setup else "balanced"
-
-                        # typing indicator loop (runs for ALL modes)
-                        typing_stop = threading.Event()
-
-                        def _typing_loop(_bt=bot_token, _cid=chat_id):
-                            while not typing_stop.is_set():
-                                _send_typing_action(_bt, _cid)
-                                typing_stop.wait(4)
-
-                        typing_thread = threading.Thread(target=_typing_loop, daemon=True)
-                        typing_thread.start()
-
+                    # ── relay to goose web (runs in a background thread) ──
+                    # threaded so the poll loop stays responsive for /stop commands.
+                    # per-chat lock prevents concurrent relays per user.
+                    def _do_relay(_text=text, _chat_id=chat_id, _bt=bot_token):
+                        _chat_lock = _get_chat_lock(_chat_id)
+                        if not _chat_lock.acquire(timeout=2):
+                            # another relay is running for this chat
+                            send_telegram_message(_bt, _chat_id, "Still thinking... send /stop to cancel.")
+                            return
                         try:
-                            if _tg_verbosity == "quiet":
-                                # quiet: typing loop + single message at end
-                                response_text, error = _relay_to_goose_web(
-                                    text, session_id, chat_id=chat_id, channel="telegram",
-                                    sock_ref=_sock_ref,
-                                )
-                                if error:
-                                    send_telegram_message(bot_token, chat_id, f"Error: {error}")
-                                else:
-                                    send_telegram_message(bot_token, chat_id, response_text)
-                            else:
-                                # streaming: edit-in-place (one message that grows)
-                                _edit_state = {"msg_id": None, "accumulated": "", "overflow": []}
+                            _send_typing_action(_bt, _chat_id)
+                            session_id = _get_session_id(_chat_id)
+                            _sock_ref = [None]
 
-                                def _tg_flush_edit(chunk, _bt=bot_token, _cid=chat_id, _st=_edit_state):
-                                    _st["accumulated"] += chunk
-                                    txt = _st["accumulated"]
-                                    if _st["msg_id"] is None:
-                                        # first chunk: send new message
-                                        mid, err = _send_telegram_msg_with_id(_bt, _cid, txt)
-                                        if mid:
-                                            _st["msg_id"] = mid
-                                        else:
-                                            print(f"[telegram] edit-stream: initial send failed: {err}")
-                                    elif len(txt) > 3800:
-                                        # message getting too long, finalize and start fresh
-                                        _st["overflow"].append(_st["msg_id"])
-                                        _st["accumulated"] = chunk
-                                        _st["msg_id"] = None
-                                        mid, err = _send_telegram_msg_with_id(_bt, _cid, chunk)
-                                        if mid:
-                                            _st["msg_id"] = mid
+                            with _telegram_active_relays_lock:
+                                _telegram_active_relays[_chat_id] = _sock_ref
+
+                            _tg_setup = load_setup()
+                            _tg_verbosity = get_verbosity_for_channel(_tg_setup, "telegram") if _tg_setup else "balanced"
+
+                            # typing indicator loop
+                            typing_stop = threading.Event()
+
+                            def _typing_loop():
+                                while not typing_stop.is_set():
+                                    _send_typing_action(_bt, _chat_id)
+                                    typing_stop.wait(4)
+
+                            typing_thread = threading.Thread(target=_typing_loop, daemon=True)
+                            typing_thread.start()
+
+                            try:
+                                if _tg_verbosity == "quiet":
+                                    response_text, error = _relay_to_goose_web(
+                                        _text, session_id, chat_id=_chat_id, channel="telegram",
+                                        sock_ref=_sock_ref,
+                                    )
+                                    if error:
+                                        send_telegram_message(_bt, _chat_id, f"Error: {error}")
                                     else:
-                                        # edit existing message with accumulated text
-                                        _edit_telegram_message(_bt, _cid, _st["msg_id"], txt)
+                                        send_telegram_message(_bt, _chat_id, response_text)
+                                else:
+                                    # streaming: edit-in-place
+                                    _edit_state = {"msg_id": None, "accumulated": "", "overflow": []}
 
-                                response_text, error = _relay_to_goose_web(
-                                    text, session_id, chat_id=chat_id, channel="telegram",
-                                    flush_cb=_tg_flush_edit, verbosity=_tg_verbosity,
-                                    sock_ref=_sock_ref, flush_interval=2.0,
-                                )
-                                # final edit with complete response
-                                if _edit_state["msg_id"] and response_text and not error:
-                                    # final edit with the last accumulated chunk
-                                    final_text = _edit_state["accumulated"] or response_text
-                                    if final_text:
-                                        _edit_telegram_message(bot_token, chat_id, _edit_state["msg_id"], final_text)
-                                elif error:
-                                    send_telegram_message(bot_token, chat_id, f"Error: {error}")
-                                elif not _edit_state["msg_id"] and response_text:
-                                    # flush_cb was never called (short response)
-                                    send_telegram_message(bot_token, chat_id, response_text)
+                                    def _tg_flush_edit(chunk, _st=_edit_state):
+                                        _st["accumulated"] += chunk
+                                        txt = _st["accumulated"]
+                                        if _st["msg_id"] is None:
+                                            mid, err = _send_telegram_msg_with_id(_bt, _chat_id, txt)
+                                            if mid:
+                                                _st["msg_id"] = mid
+                                            else:
+                                                print(f"[telegram] edit-stream: initial send failed: {err}")
+                                        elif len(txt) > 3800:
+                                            _st["overflow"].append(_st["msg_id"])
+                                            _st["accumulated"] = chunk
+                                            _st["msg_id"] = None
+                                            mid, err = _send_telegram_msg_with_id(_bt, _chat_id, chunk)
+                                            if mid:
+                                                _st["msg_id"] = mid
+                                        else:
+                                            _edit_telegram_message(_bt, _chat_id, _st["msg_id"], txt)
+
+                                    response_text, error = _relay_to_goose_web(
+                                        _text, session_id, chat_id=_chat_id, channel="telegram",
+                                        flush_cb=_tg_flush_edit, verbosity=_tg_verbosity,
+                                        sock_ref=_sock_ref, flush_interval=2.0,
+                                    )
+                                    if _edit_state["msg_id"] and response_text and not error:
+                                        final_text = _edit_state["accumulated"] or response_text
+                                        if final_text:
+                                            _edit_telegram_message(_bt, _chat_id, _edit_state["msg_id"], final_text)
+                                    elif error:
+                                        send_telegram_message(_bt, _chat_id, f"Error: {error}")
+                                    elif not _edit_state["msg_id"] and response_text:
+                                        send_telegram_message(_bt, _chat_id, response_text)
+                            finally:
+                                typing_stop.set()
+                                typing_thread.join(timeout=2)
+                        except Exception as exc:
+                            print(f"[telegram] relay exception for chat {_chat_id}: {exc}")
+                            try:
+                                send_telegram_message(_bt, _chat_id, f"Error: {exc}")
+                            except Exception:
+                                pass
                         finally:
-                            typing_stop.set()
-                            typing_thread.join(timeout=2)
-                    except Exception as exc:
-                        print(f"[telegram] relay exception for chat {chat_id}: {exc}")
-                        try:
-                            send_telegram_message(bot_token, chat_id, f"Error: {exc}")
-                        except Exception:
-                            pass
-                    finally:
-                        # unregister active relay and release chat lock
-                        with _telegram_active_relays_lock:
-                            _telegram_active_relays.pop(chat_id, None)
-                        _chat_lock.release()
+                            with _telegram_active_relays_lock:
+                                _telegram_active_relays.pop(_chat_id, None)
+                            _chat_lock.release()
+
+                    threading.Thread(target=_do_relay, daemon=True).start()
                 else:
                     # unpaired user — check if this is a pairing code
                     with telegram_pair_lock:

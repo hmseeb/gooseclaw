@@ -575,9 +575,12 @@ def send_telegram_message(bot_token, chat_id, text):
             if len(current) + len(line) + 1 > limit:
                 if current:
                     chunks.append(current)
-                current = line
-            else:
-                current = f"{current}\n{line}" if current else line
+                current = ""
+            # hard-split lines that exceed the limit on their own
+            while len(line) > limit:
+                chunks.append(line[:limit])
+                line = line[limit:]
+            current = f"{current}\n{line}" if current else line
         if current:
             chunks.append(current)
         return chunks
@@ -2136,9 +2139,9 @@ def _run_script(job):
         status = "error"
         full_output = f"execution error: {e}"
 
-    # truncate (send_telegram_message handles chunking, so allow generous limit)
-    if len(full_output) > 16000:
-        full_output = full_output[:15997] + "..."
+    # truncate only extreme output (send_telegram_message handles chunking)
+    if len(full_output) > 64000:
+        full_output = full_output[:63997] + "..."
 
     # notify
     should_notify = job.get("notify", True)

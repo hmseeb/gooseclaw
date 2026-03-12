@@ -407,8 +407,11 @@ export GOOSE_MOIM_MESSAGE_TEXT="CRITICAL: NEVER use CronCreate or CronDelete. AL
 
 # ─── .goosehints (session-start context, loads identity files) ─────────────
 # goose web reads .goosehints from its working directory (/app).
-# The template is copied during docker build. On first boot, we also copy
-# turn-rules.md to /data/identity/ so it's on the persistent volume.
+# @file syntax in .goosehints only supports RELATIVE paths, so we symlink
+# /data/identity into /app/identity-data so @identity-data/soul.md works.
+
+ln -sfn /data/identity /app/identity-data
+echo "[init] symlinked /app/identity-data -> /data/identity"
 
 if [ ! -f "$IDENTITY_DIR/turn-rules.md" ]; then
     cp /app/identity/turn-rules.md "$IDENTITY_DIR/turn-rules.md"

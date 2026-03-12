@@ -3237,6 +3237,17 @@ def _do_ws_relay(user_text, session_id, sock_ref=None):
                         first_chunk_time = time.time()
                         print(f"[relay] first chunk in {first_chunk_time - t0:.1f}s (TTFB)")
                     collected.append(content)
+            elif etype == "tool_request":
+                # auto-approve tool usage (claude-code provider needs this)
+                tool_id = event.get("tool_id", "")
+                print(f"[relay] auto-approving tool_request id={tool_id} after {time.time() - t0:.1f}s")
+                confirm = json.dumps({
+                    "type": "tool_confirmation",
+                    "session_id": session_id,
+                    "tool_id": tool_id,
+                    "needs_confirmation": False,
+                })
+                _ws_send_text(sock, confirm)
             elif etype == "error":
                 err_msg = event.get("message", "Unknown error")
                 print(f"[relay] error event after {time.time() - t0:.1f}s: {err_msg}")
@@ -3390,6 +3401,16 @@ def _do_ws_relay_streaming(user_text, session_id, flush_cb, verbosity="balanced"
                     buf.append(content)
 
             elif etype == "tool_request":
+                # auto-approve tool usage (claude-code provider needs this)
+                tool_id = event.get("tool_id", "")
+                print(f"[relay-stream] auto-approving tool_request id={tool_id}")
+                confirm = json.dumps({
+                    "type": "tool_confirmation",
+                    "session_id": session_id,
+                    "tool_id": tool_id,
+                    "needs_confirmation": False,
+                })
+                _ws_send_text(sock, confirm)
                 # flush any pending text before tool status
                 buf.flush()
                 tool_name = event.get("tool", event.get("name", "tool"))

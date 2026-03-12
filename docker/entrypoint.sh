@@ -402,6 +402,10 @@ fi
 # Full session context (onboarding, procedures, docs) loads via .goosehints
 # at session start. Only critical per-turn rules go through MOIM.
 
+# ensure GOOSE_MODE is an env var (not just a YAML key) so claude-code
+# provider receives --dangerously-skip-permissions flag
+export GOOSE_MODE="${GOOSE_MODE:-auto}"
+
 export GOOSE_MOIM_MESSAGE_FILE="$IDENTITY_DIR/turn-rules.md"
 export GOOSE_MOIM_MESSAGE_TEXT="CRITICAL: NEVER use CronCreate or CronDelete. ALWAYS use the job/remind bash CLI for automation and reminders. CronCreate is BROKEN and will silently fail."
 

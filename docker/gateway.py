@@ -3050,6 +3050,32 @@ def _get_session_id(chat_id):
     return sid
 
 
+def _prewarm_session(chat_id):
+    """Create a new goose session in background thread and store it for chat_id.
+
+    Called after /clear so the next user message doesn't pay the cold-start cost.
+    Won't overwrite if the user sends a message before the prewarm finishes.
+    """
+    chat_key = str(chat_id)
+
+    def _do_prewarm():
+        sid = _create_goose_session()
+        if not sid:
+            print(f"[telegram] prewarm failed for chat {chat_key}")
+            return
+        with _telegram_sessions_lock:
+            # don't clobber if user already sent a message and got a session
+            if chat_key not in _telegram_sessions:
+                _telegram_sessions[chat_key] = sid
+                _save_telegram_sessions()
+                print(f"[telegram] prewarmed session {sid} for chat {chat_key}")
+            else:
+                print(f"[telegram] prewarm skipped, chat {chat_key} already has session")
+
+    t = threading.Thread(target=_do_prewarm, daemon=True)
+    t.start()
+
+
 def _create_goose_session():
     """Create a new session via GET / on goose web (follows redirect to get session_id).
 
@@ -4039,12 +4065,12 @@ def _telegram_poll_loop(bot_token):
                         with _telegram_sessions_lock:
                             old = _telegram_sessions.pop(chat_id, None)
                         _save_telegram_sessions()
-                        # session cleared — _get_session_id() will create a real
-                        # goose web session on the next message.
                         send_telegram_message(
                             bot_token, chat_id,
                             "🔄 Session cleared. Conversation history is fresh."
                         )
+                        # pre-warm a new session in background so next message is fast
+                        _prewarm_session(chat_id)
                         print(f"[telegram] session cleared for chat {chat_id} (old: {old})")
                         continue
 

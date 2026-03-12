@@ -590,5 +590,62 @@ class TestRegexInjection(unittest.TestCase):
         assert result == cmd  # \b prevents matching "running"
 
 
+# ── _prewarm_session ────────────────────────────────────────────────────────
+
+class TestPrewarmSession(unittest.TestCase):
+    """Tests for _prewarm_session() background session creation after /clear."""
+
+    def setUp(self):
+        with gateway._telegram_sessions_lock:
+            gateway._telegram_sessions.clear()
+
+    def tearDown(self):
+        with gateway._telegram_sessions_lock:
+            gateway._telegram_sessions.clear()
+
+    @patch("gateway._create_goose_session", return_value="new_session_abc")
+    @patch("gateway._save_telegram_sessions")
+    def test_creates_and_stores_session(self, _save, mock_create):
+        gateway._prewarm_session("chat_99")
+        # give the background thread a moment
+        time.sleep(0.1)
+        with gateway._telegram_sessions_lock:
+            sid = gateway._telegram_sessions.get("chat_99")
+        assert sid == "new_session_abc"
+        mock_create.assert_called_once()
+
+    @patch("gateway._create_goose_session", return_value=None)
+    @patch("gateway._save_telegram_sessions")
+    def test_no_session_stored_on_failure(self, _save, mock_create):
+        gateway._prewarm_session("chat_99")
+        time.sleep(0.1)
+        with gateway._telegram_sessions_lock:
+            sid = gateway._telegram_sessions.get("chat_99")
+        assert sid is None
+
+    @patch("gateway._create_goose_session", return_value="new_session_xyz")
+    @patch("gateway._save_telegram_sessions")
+    def test_does_not_overwrite_if_user_sent_message_first(self, _save, mock_create):
+        """If user sends a message before prewarm finishes, don't clobber."""
+        # simulate: user message arrived and created session already
+        with gateway._telegram_sessions_lock:
+            gateway._telegram_sessions["chat_99"] = "user_initiated_session"
+        gateway._prewarm_session("chat_99")
+        time.sleep(0.1)
+        with gateway._telegram_sessions_lock:
+            sid = gateway._telegram_sessions.get("chat_99")
+        assert sid == "user_initiated_session"
+
+    @patch("gateway._create_goose_session", return_value="prewarmed_session")
+    @patch("gateway._save_telegram_sessions")
+    def test_is_non_blocking(self, _save, mock_create):
+        """_prewarm_session should return immediately (runs in background thread)."""
+        start = time.time()
+        gateway._prewarm_session("chat_99")
+        elapsed = time.time() - start
+        assert elapsed < 0.05  # should be near-instant
+        time.sleep(0.1)  # let thread finish
+
+
 if __name__ == "__main__":
     unittest.main()

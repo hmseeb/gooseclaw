@@ -1533,12 +1533,14 @@ def apply_config(config):
         lines.append(f"GOOSE_PROVIDER: {provider_type}")
 
     # default models per provider if none specified (from module-level registry)
-    # claude-code doesn't need a model config (CLI handles it), and setting
-    # GOOSE_MODEL to "default" can confuse goose into not initializing the provider.
     if not model:
         model = default_models.get(provider_type, "")
 
-    if model and model != "default" and provider_type != "claude-code":
+    # claude-code provider: always use "default" so the CLI picks its own model
+    if provider_type == "claude-code":
+        model = "default"
+
+    if model:
         lines.append(f"GOOSE_MODEL: {model}")
 
     # lead/worker multi-model settings
@@ -3233,6 +3235,9 @@ def _do_ws_relay(user_text, session_id, sock_ref=None):
                 continue
 
             etype = event.get("type", "")
+            # log every event for debugging (truncate large content)
+            _event_summary = {k: (v[:200] if isinstance(v, str) and len(v) > 200 else v) for k, v in event.items()}
+            print(f"[relay] event: {json.dumps(_event_summary)}")
 
             if etype == "response":
                 content = event.get("content", "")
@@ -3258,6 +3263,7 @@ def _do_ws_relay(user_text, session_id, sock_ref=None):
                 sock.close()
                 return "", f"Goose error: {err_msg}"
             elif etype == "complete":
+                print(f"[relay] complete after {time.time() - t0:.1f}s, collected {len(collected)} chunks")
                 break
             else:
                 # log non-response events for debugging
@@ -3396,7 +3402,9 @@ def _do_ws_relay_streaming(user_text, session_id, flush_cb, verbosity="balanced"
                 continue
 
             etype = event.get("type", "")
-            print(f"[relay-stream] event type={etype} after {time.time() - t0:.1f}s")
+            # log every event for debugging (truncate large content)
+            _event_summary = {k: (v[:200] if isinstance(v, str) and len(v) > 200 else v) for k, v in event.items()}
+            print(f"[relay-stream] event: {json.dumps(_event_summary)}")
 
             if etype == "response":
                 content = event.get("content", "")
@@ -4020,7 +4028,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/health/ready":
             self.handle_health_ready()
         elif path == "/api/debug/config":
-            # temporary debug endpoint to check goose config
+            # temporary debug endpoint to check goose config and claude CLI
             try:
                 config_path = os.path.join(CONFIG_DIR, "config.yaml")
                 with open(config_path) as f:
@@ -4028,7 +4036,24 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                 # mask any sensitive values
                 import re
                 content = re.sub(r'(auth.token|api.key|token|secret):\s*\S+', r'\1: ****', content, flags=re.IGNORECASE)
-                self.send_json(200, {"config": content, "env_oauth_set": bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")), "goose_mode": os.environ.get("GOOSE_MODE", "NOT SET")})
+                # check claude CLI
+                claude_info = {}
+                try:
+                    import subprocess
+                    r = subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=10)
+                    claude_info["version"] = r.stdout.strip() or r.stderr.strip()
+                    claude_info["returncode"] = r.returncode
+                except Exception as ce:
+                    claude_info["error"] = str(ce)
+                # check goose stderr buffer
+                recent_stderr = _get_recent_stderr(10)
+                self.send_json(200, {
+                    "config": content,
+                    "env_oauth_set": bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")),
+                    "goose_mode": os.environ.get("GOOSE_MODE", "NOT SET"),
+                    "claude_cli": claude_info,
+                    "goose_stderr": recent_stderr,
+                })
             except Exception as e:
                 self.send_json(500, {"error": str(e)})
         elif path == "/api/setup/status":

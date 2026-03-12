@@ -3250,10 +3250,15 @@ def _prewarm_session(chat_id):
                 # don't clobber if user already sent a message and got a session
                 if chat_key not in _telegram_sessions:
                     _telegram_sessions[chat_key] = sid
-                    _save_telegram_sessions()
-                    print(f"[telegram] prewarmed session {sid} for chat {chat_key}")
+                    _stored = True
                 else:
-                    print(f"[telegram] prewarm skipped, chat {chat_key} already has session")
+                    _stored = False
+            # save OUTSIDE lock to avoid deadlock (_save_telegram_sessions acquires same lock)
+            if _stored:
+                _save_telegram_sessions()
+                print(f"[telegram] prewarmed session {sid} for chat {chat_key}")
+            else:
+                print(f"[telegram] prewarm skipped, chat {chat_key} already has session")
         finally:
             evt.set()
             _prewarm_events.pop(chat_key, None)

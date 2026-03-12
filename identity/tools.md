@@ -46,6 +46,7 @@
 
 The unified job engine handles both text reminders and script jobs. Zero LLM cost.
 10s tick, persists to /data/jobs.json, survives container restarts.
+Results are delivered via Telegram push notification automatically. The user does NOT need to keep any session open. Never tell them to "keep this session open" or "stay here."
 
 - **Script jobs**: run shell commands on schedule. use `job create`.
 - **Text reminders**: fire a message via notify. use `remind` (convenience wrapper).

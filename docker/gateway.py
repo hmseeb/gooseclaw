@@ -3179,13 +3179,13 @@ def _clear_chat(chat_id):
     with _telegram_active_relays_lock:
         sock_ref = _telegram_active_relays.pop(chat_key, None)
     if sock_ref and sock_ref[0]:
+        # set cancelled flag BEFORE closing socket so retry logic sees it
+        if len(sock_ref) > 1 and hasattr(sock_ref[1], 'set'):
+            sock_ref[1].set()
         try:
             sock_ref[0].close()
         except Exception:
             pass
-        # set cancelled flag if present
-        if len(sock_ref) > 1 and hasattr(sock_ref[1], 'set'):
-            sock_ref[1].set()
 
     # remove session
     with _telegram_sessions_lock:
@@ -3739,7 +3739,10 @@ def _relay_to_goose_web(user_text, session_id, chat_id=None, channel=None,
     text, err = relay_fn(user_text, session_id)
 
     # if error or empty response, try creating a new session and retrying
-    if err and chat_id:
+    # but NOT if the relay was cancelled (e.g. /stop or /clear killed it)
+    cancelled = (sock_ref and len(sock_ref) > 1
+                 and hasattr(sock_ref[1], 'is_set') and sock_ref[1].is_set())
+    if err and chat_id and not cancelled:
         reason = err if err else "empty response"
         print(f"[telegram] relay failed ({reason}), creating new session")
         new_sid = _create_goose_session()

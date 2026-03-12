@@ -5,11 +5,6 @@ credentials.*
 *token*
 vault.yaml
 
-# planning/agent artifacts
-.planning/
-.agents/
-.claude/
-
 # OS
 .DS_Store
 Thumbs.db

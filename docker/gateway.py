@@ -5011,7 +5011,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                 response = {"created": True, "job": job}
                 if job.get("fire_at"):
                     response["fires_in_seconds"] = round(job["fire_at"] - time.time())
-                    response["fires_at_human"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(job["fire_at"]))
+                    response["fires_at_human"] = time.strftime("%Y-%m-%d %H:%M:%S %Z", time.localtime(job["fire_at"]))
                 self.send_json(201, response)
         except json.JSONDecodeError:
             self.send_json(400, {"error": "invalid JSON"})
@@ -5029,7 +5029,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         for j in active:
             if j.get("fire_at"):
                 j["fires_in_seconds"] = round(j["fire_at"] - now)
-                j["fires_at_human"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(j["fire_at"]))
+                j["fires_at_human"] = time.strftime("%Y-%m-%d %H:%M:%S %Z", time.localtime(j["fire_at"]))
         self.send_json(200, {"jobs": active, "count": len(active)})
 
     def handle_delete_job(self, job_id):

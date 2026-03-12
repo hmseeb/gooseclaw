@@ -387,7 +387,7 @@ tr:hover td { background: rgba(124, 58, 237, 0.02); }
   background: rgba(124, 58, 237, 0.08);
 }
 
-.actions { display: flex; gap: 6px; }
+.actions { display: flex; gap: 6px; justify-content: flex-end; }
 
 .empty-state {
   padding: 36px;
@@ -1036,7 +1036,7 @@ function renderJobsTable(jobs, wrap) {
     return;
   }
 
-  let html = '<table><tr><th>Type</th><th>Name</th><th>Schedule</th><th>Status</th><th>Actions</th></tr>';
+  let html = '<table><tr><th>Type</th><th>Name</th><th>Schedule</th><th>Status</th><th style="text-align:right">Actions</th></tr>';
   for (const j of jobs) {
     const typeCls = j.type === 'reminder' ? 'reminder' : 'script';
     const statusCls = j.last_status === 'ok' ? 'ok' : j.last_status === 'error' || j.last_status === 'timeout' ? 'error' : 'pending';

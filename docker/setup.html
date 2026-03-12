@@ -1148,7 +1148,7 @@ body::after {
 }
 .channel-idle-input:focus { border-color: var(--border-accent); box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.1); }
 .channel-idle-label { font-size: 11px; color: var(--text-tertiary); }
-.toggle-switch { position: relative; display: inline-block; width: 36px; height: 20px; flex-shrink: 0; }
+.toggle-switch { position: relative; display: inline-block; width: 36px; height: 20px; flex-shrink: 0; vertical-align: middle; }
 .toggle-switch input { opacity: 0; width: 0; height: 0; }
 .toggle-slider {
   position: absolute; cursor: pointer; inset: 0;
@@ -1160,6 +1160,45 @@ body::after {
 }
 .toggle-switch input:checked + .toggle-slider { background: var(--accent); }
 .toggle-switch input:checked + .toggle-slider:before { transform: translateX(16px); }
+.pill-toggle {
+  display: inline-flex; align-items: center; padding: 2px 10px;
+  border-radius: 20px; font-size: 10px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.5px;
+  cursor: pointer; transition: all 0.2s; user-select: none;
+  border: 1px solid transparent;
+}
+.pill-toggle.on {
+  background: rgba(52, 211, 153, 0.12); color: var(--success);
+  border-color: rgba(52, 211, 153, 0.2);
+}
+.pill-toggle.off {
+  background: rgba(255, 255, 255, 0.04); color: var(--text-tertiary);
+  border-color: var(--border-subtle);
+}
+.pill-toggle:hover { opacity: 0.8; }
+.info-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: var(--border-subtle); color: var(--text-tertiary);
+  font-size: 10px; font-weight: 700; cursor: help;
+  position: relative; vertical-align: middle; flex-shrink: 0;
+}
+.info-icon:hover { background: var(--accent); color: #fff; }
+.info-tooltip {
+  display: none; position: absolute; bottom: calc(100% + 8px); left: 50%;
+  transform: translateX(-50%); width: 260px; padding: 10px 12px;
+  background: var(--bg-elevated); border: 1px solid var(--border-subtle);
+  border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+  font-size: 11px; font-weight: 400; line-height: 1.5;
+  color: var(--text-secondary); text-transform: none; letter-spacing: normal;
+  z-index: 100; pointer-events: none;
+}
+.info-tooltip::after {
+  content: ""; position: absolute; top: 100%; left: 50%;
+  transform: translateX(-50%); border: 6px solid transparent;
+  border-top-color: var(--border-subtle);
+}
+.info-icon:hover .info-tooltip { display: block; }
 
 /* ── settings dashboard ── */
 .dashboard-field {
@@ -3633,17 +3672,21 @@ function renderChannelRouting(config, hasTelegram) {
 
   /* memory writer */
   const memRoute = routes['memory'] || '';
-  html += `<div class="channel-route-row">
+  html += `<div class="channel-route-row" id="memory-row">
     <span class="channel-route-label">
-      <label class="toggle-switch">
-        <input type="checkbox" ${memoryEnabled ? 'checked' : ''} onchange="toggleMemoryWriter(this.checked)">
-        <span class="toggle-slider"></span>
-      </label>
       \uD83E\uDDE0 Memory
+      <span class="pill-toggle ${memoryEnabled ? 'on' : 'off'}" id="memory-pill" onclick="toggleMemoryPill()">${memoryEnabled ? 'on' : 'off'}</span>
+      <span class="info-icon">i
+        <span class="info-tooltip">
+          <strong>Memory Writer</strong><br>
+          Safety net for the built-in self-improvement loop. After your chat goes idle, it scans the full conversation and catches any preferences, corrections, or context that were missed in real-time.<br><br>
+          <strong>Idle timer:</strong> how long to wait after the last message before scanning.
+        </span>
+      </span>
     </span>
-    <span class="channel-route-selects">
+    <span class="channel-route-selects" id="memory-controls" style="${memoryEnabled ? '' : 'opacity:0.3;pointer-events:none;'}">
       ${modelSelect('memory', memRoute)}
-      <span class="channel-idle-label">
+      <span class="channel-idle-label" style="display:flex;align-items:center;gap:4px;white-space:nowrap;">
         <input type="number" class="channel-idle-input" id="memory-idle-min" value="${memoryIdleMinutes}" min="1" max="120" onchange="updateMemoryIdle(this.value)"> min idle
       </span>
     </span>
@@ -3665,6 +3708,18 @@ function onChannelModelChange(chId, sel) {
 function saveCustomModel(chId, modelName) {
   if (!modelName.trim()) return;
   updateChannelRoute(chId, 'custom:' + modelName.trim());
+}
+
+function toggleMemoryPill() {
+  const pill = document.getElementById('memory-pill');
+  const controls = document.getElementById('memory-controls');
+  const isOn = pill.classList.contains('on');
+  const newState = !isOn;
+  pill.textContent = newState ? 'on' : 'off';
+  pill.className = 'pill-toggle ' + (newState ? 'on' : 'off');
+  controls.style.opacity = newState ? '1' : '0.3';
+  controls.style.pointerEvents = newState ? 'auto' : 'none';
+  toggleMemoryWriter(newState);
 }
 
 async function toggleMemoryWriter(enabled) {

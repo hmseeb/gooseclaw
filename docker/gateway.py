@@ -2603,7 +2603,7 @@ class ChannelRelay:
         return response_text
 
     def reset_session(self, user_id):
-        """Reset a user's session (for /clear, /newsession commands)."""
+        """Reset a user's session (for /clear command)."""
         with self._lock:
             self._sessions.pop(str(user_id), None)
         self._save()
@@ -3736,7 +3736,6 @@ def _telegram_poll_loop(bot_token):
                             "*Session:*\n"
                             "/stop — cancel the current response\n"
                             "/clear — wipe conversation and start fresh\n"
-                            "/newsession — same as /clear\n"
                             "/compact — summarize history to save tokens\n\n"
                             "*MCP Prompts:*\n"
                             "/prompts — list available extension prompts\n"
@@ -3761,7 +3760,7 @@ def _telegram_poll_loop(bot_token):
                             send_telegram_message(bot_token, chat_id, "Nothing running.")
                         continue
 
-                    if lower in ("/newsession", "/clear"):
+                    if lower == "/clear":
                         with _telegram_sessions_lock:
                             old = _telegram_sessions.pop(chat_id, None)
                         # generate a fresh session ID directly — goose web auto-creates
@@ -3771,7 +3770,7 @@ def _telegram_poll_loop(bot_token):
                         with _telegram_sessions_lock:
                             _telegram_sessions[chat_id] = new_sid
                         _save_telegram_sessions()
-                        label = "cleared" if lower == "/clear" else "started"
+                        label = "cleared"
                         send_telegram_message(
                             bot_token, chat_id,
                             f"🔄 Session {label}. Conversation history is fresh."
@@ -3988,7 +3987,6 @@ def start_telegram_gateway(bot_token):
         commands = [
             {"command": "stop", "description": "Cancel the current response"},
             {"command": "clear", "description": "Wipe conversation and start fresh"},
-            {"command": "newsession", "description": "Same as /clear"},
             {"command": "compact", "description": "Summarize history to save tokens"},
             {"command": "prompts", "description": "List available extension prompts"},
             {"command": "help", "description": "Show available commands"},

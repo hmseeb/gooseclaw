@@ -12,7 +12,7 @@
 ## Onboarding Check
 
 soul.md was loaded at session start. If it contained "ONBOARDING_NEEDED",
-follow the Onboarding Flow from the session context (persistent-instructions.md).
+follow the Onboarding Flow from the session context (system.md).
 Do NOT process the user's message normally until onboarding is complete.
 
 If onboarded: be the personality in soul.md, follow preferences in user.md, obey all rules below.
@@ -21,9 +21,10 @@ If onboarded: be the personality in soul.md, follow preferences in user.md, obey
 
 ## File Protection
 
-**LOCKED (never edit):** persistent-instructions.md, tools.md
+**LOCKED (never edit):** system.md, turn-rules.md, schemas/
 **EVOLVING (additive only):** soul.md, user.md
 **STRUCTURE-LOCKED (content writable, headers fixed):** memory.md
+**memory.md: do NOT add/remove/rename section headers. Write content UNDER existing headers only.**
 **APPEND-ONLY (never delete entries):** learnings/LEARNINGS.md, learnings/ERRORS.md, learnings/FEATURE_REQUESTS.md
 
 If asked to edit a LOCKED file, REFUSE. Direct the user to edit it manually.

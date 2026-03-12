@@ -385,14 +385,20 @@ if [ -f "$TEMPLATE_VERSION_FILE" ]; then
     DATA_VER=$(cat "$DATA_VERSION_FILE" 2>/dev/null || echo "0.0.0")
     if [ "$TEMPLATE_VER" != "$DATA_VER" ]; then
         echo "[upgrade] template updated: $DATA_VER -> $TEMPLATE_VER"
-        # update system files (tools.md, persistent-instructions.md, turn-rules.md)
+        # update system files (system.md, turn-rules.md, schemas/)
         # but NEVER overwrite user files (soul.md, user.md, memory.md)
-        for f in tools.md persistent-instructions.md turn-rules.md; do
+        for f in system.md turn-rules.md; do
             if [ -f "$APP_DIR/identity/$f" ]; then
                 cp "$APP_DIR/identity/$f" "$IDENTITY_DIR/$f"
                 echo "[upgrade] updated $f"
             fi
         done
+        # update schemas directory
+        if [ -d "$APP_DIR/identity/schemas" ]; then
+            mkdir -p "$IDENTITY_DIR/schemas"
+            cp "$APP_DIR/identity/schemas/"*.schema.md "$IDENTITY_DIR/schemas/"
+            echo "[upgrade] updated schemas/"
+        fi
         echo "$TEMPLATE_VER" > "$DATA_VERSION_FILE"
         echo "[upgrade] done"
     fi

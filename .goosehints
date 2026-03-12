@@ -3,20 +3,19 @@
 # identity-data is a symlink to /data/identity/ (Railway volume).
 
 # !! CRITICAL: if soul.md below contains "ONBOARDING_NEEDED", you MUST
-# !! run the Onboarding Flow from persistent-instructions.md IMMEDIATELY.
+# !! run the Onboarding Flow from system.md IMMEDIATELY.
 # !! Do NOT respond casually. Do NOT process the user's message normally.
 # !! Start with the onboarding greeting. This is your highest priority.
 
-# identity files (agent personality + user profile + platform reference)
+# system (full procedures, platform docs, file schemas — all LOCKED)
+@identity-data/system.md
+
+# identity files (agent personality + user profile — EVOLVING, clean data only)
 @identity-data/soul.md
 @identity-data/user.md
-@identity-data/tools.md
 
-# factual knowledge
+# factual knowledge (STRUCTURE-LOCKED, clean data only)
 @identity-data/memory.md
-
-# full procedures (onboarding, integrations, scheduling, rules)
-@identity-data/persistent-instructions.md
 
 # runtime context
 gooseclaw is a personal autonomous AI agent deployed on Railway.

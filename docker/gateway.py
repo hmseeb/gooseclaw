@@ -3169,9 +3169,11 @@ def _relay_to_goose_web(user_text, session_id, chat_id=None, channel=None,
 
     text, err = relay_fn(user_text, session_id)
 
-    # if connection or session error, try creating a new session
-    if err and chat_id:
-        print(f"[telegram] relay failed ({err}), creating new session")
+    # if error or empty response, try creating a new session and retrying
+    is_empty = (not err and (not text or text == "(No response from goose)"))
+    if (err or is_empty) and chat_id:
+        reason = err if err else "empty response"
+        print(f"[telegram] relay failed ({reason}), creating new session")
         new_sid = _create_goose_session()
         if new_sid:
             with _telegram_sessions_lock:
@@ -3369,14 +3371,17 @@ def _do_ws_relay_streaming(user_text, session_id, flush_cb, verbosity="balanced"
         while True:
             frame_text = _ws_recv_text(sock)
             if frame_text is None:
+                print(f"[relay-stream] ws closed by server after {time.time() - t0:.1f}s")
                 break
 
             try:
                 event = json.loads(frame_text)
             except (json.JSONDecodeError, ValueError):
+                print(f"[relay-stream] unparseable frame: {frame_text[:200]}")
                 continue
 
             etype = event.get("type", "")
+            print(f"[relay-stream] event type={etype} after {time.time() - t0:.1f}s")
 
             if etype == "response":
                 content = event.get("content", "")
@@ -3685,6 +3690,8 @@ def _telegram_poll_loop(bot_token):
                             )
                             if error:
                                 send_telegram_message(bot_token, chat_id, f"Error: {error}")
+                            elif response_text and "(No response from goose)" in response_text:
+                                send_telegram_message(bot_token, chat_id, response_text)
                     except Exception as exc:
                         print(f"[telegram] relay exception for chat {chat_id}: {exc}")
                         try:

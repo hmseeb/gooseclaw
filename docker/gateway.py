@@ -2161,9 +2161,8 @@ def _run_script(job):
         stderr = result.stderr.strip()
         exit_code = result.returncode
 
-        # strip goose startup banner from output
-        if "goose" in command:
-            output = _strip_goose_preamble(output)
+        # strip goose startup banner from output (always safe, no-ops if no banner)
+        output = _strip_goose_preamble(output)
 
         if exit_code != 0:
             status = "error"

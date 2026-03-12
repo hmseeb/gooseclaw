@@ -737,7 +737,7 @@ body::after {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   padding: 12px;
-  cursor: pointer;
+  cursor: default;
   transition: all 0.2s;
   position: relative;
 }
@@ -748,6 +748,11 @@ body::after {
 .model-card.active {
   border-color: var(--border-accent);
   background: var(--bg-card-selected);
+}
+.model-card.editing {
+  flex: 1 1 100%;
+  max-width: 100%;
+  border-color: var(--border-accent);
 }
 .model-card-provider {
   font-size: 11px;
@@ -792,9 +797,9 @@ body::after {
   position: absolute;
   top: 8px;
   right: 8px;
-  display: none;
+  display: flex;
+  gap: 4px;
 }
-.model-card:hover .model-card-actions { display: flex; gap: 4px; }
 .model-card-btn {
   background: transparent;
   border: none;
@@ -807,6 +812,7 @@ body::after {
   transition: all 0.15s;
 }
 .model-card-btn:hover { color: var(--error); background: var(--error-bg); }
+.model-card-btn.edit-btn:hover { color: var(--accent-bright); background: rgba(124, 58, 237, 0.1); }
 .model-card-btn.switch-btn:hover { color: var(--accent-bright); background: rgba(124, 58, 237, 0.1); }
 /* click-to-expand edit panel for model cards */
 .model-card-edit-panel {
@@ -1771,8 +1777,7 @@ function toggleSecretVisibility(btn) {
 /* ── click-to-expand model edit panel ── */
 let _openEditModelId = null;
 
-function toggleModelEdit(modelId, event) {
-  event.stopPropagation();
+function toggleModelEdit(modelId) {
   if (_openEditModelId === modelId) {
     _openEditModelId = null;
     renderModelCards(dashboardConfig);
@@ -1792,11 +1797,9 @@ async function saveModelEdit(modelId) {
 
   const nameInput = panel.querySelector('.edit-model-name');
   const keyInput = panel.querySelector('.edit-model-key');
-  const defaultCheck = panel.querySelector('.edit-model-default');
 
   const newName = nameInput ? nameInput.value.trim() : '';
   const newKey = keyInput ? keyInput.value.trim() : '';
-  const wantDefault = defaultCheck ? defaultCheck.checked : false;
 
   let changed = false;
 
@@ -1825,7 +1828,7 @@ async function saveModelEdit(modelId) {
   /* update API key if changed (not empty and not masked placeholder) */
   if (newKey && newKey !== '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022') {
     try {
-      var keyPayload = {id: modelId, provider: model.provider, model: model.model, api_key: newKey, replace: true};
+      var keyPayload = {id: modelId, provider: model.provider, model: newName || model.model, api_key: newKey, replace: true};
       var resp2 = await fetch('/api/setup/models/add', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -1836,28 +1839,6 @@ async function saveModelEdit(modelId) {
         changed = true;
       } else {
         alert(data2.error || 'Failed to update API key');
-        return;
-      }
-    } catch(e) {
-      alert('Could not reach server');
-      return;
-    }
-  }
-
-  /* activate as default if checkbox checked and not already default */
-  if (wantDefault && !model.is_default) {
-    try {
-      var resp3 = await fetch('/api/setup/models/activate', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({id: modelId})
-      });
-      var data3 = await resp3.json();
-      if (data3.success) {
-        models.forEach(function(m) { m.is_default = (m.id === modelId); });
-        changed = true;
-      } else {
-        alert(data3.error || 'Failed to activate model');
         return;
       }
     } catch(e) {
@@ -3255,9 +3236,10 @@ function renderModelCards(config) {
 
     const needsKey = m.provider !== 'github-copilot' && !['ollama','lm-studio','docker-model-runner','ramalama'].includes(m.provider);
     const isEditing = _openEditModelId === m.id;
-    html += `<div class="model-card${isDefault ? ' active' : ''}" onclick="toggleModelEdit('${m.id}',event)">
+    html += `<div class="model-card${isDefault ? ' active' : ''}${isEditing ? ' editing' : ''}">
       <div class="model-card-actions">
-        ${!isDefault ? `<button class="model-card-btn" onclick="event.stopPropagation();removeModel('${m.id}')" title="Remove">&#x2715;</button>` : ''}
+        <button class="model-card-btn edit-btn" onclick="toggleModelEdit('${m.id}')" title="Edit">&#9998;</button>
+        ${!isDefault ? `<button class="model-card-btn" onclick="removeModel('${m.id}')" title="Remove">&#x2715;</button>` : ''}
       </div>
       <div class="model-card-provider">${icon} ${provName}</div>
       <div class="model-card-name">${m.model}</div>
@@ -3271,9 +3253,9 @@ function renderModelCards(config) {
       const modelSuggestions = (prov && prov.models) ? prov.models : [];
       const datalistId = 'dl-models-' + m.id;
       const hasKey = savedKeysSet[m.provider];
-      html += `<div class="model-card-edit-panel" data-model-id="${m.id}" onclick="event.stopPropagation()">
+      html += `<div class="model-card-edit-panel" data-model-id="${m.id}">
         <div class="field">
-          <label>Model name</label>
+          <label>Model</label>
           <input type="text" class="edit-model-name" value="${m.model}" list="${datalistId}">
           <datalist id="${datalistId}">${modelSuggestions.map(function(s) { return '<option value="' + s + '">'; }).join('')}</datalist>
         </div>`;
@@ -3281,7 +3263,7 @@ function renderModelCards(config) {
         const keyPlaceholder = hasKey ? 'Enter new key to update' : (prov && prov.keyPlaceholder ? prov.keyPlaceholder : 'API key');
         const keyValue = hasKey ? '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022' : '';
         html += `<div class="field">
-          <label>API key</label>
+          <label>${m.provider === 'claude-code' ? 'OAuth Token' : 'API Key'}</label>
           <div class="secret-field-wrapper">
             <input type="password" class="edit-model-key" value="${keyValue}" placeholder="${keyPlaceholder}">
             <button type="button" class="secret-toggle-btn" onclick="toggleSecretVisibility(this)" title="Toggle visibility">${EYE_OPEN_SVG}</button>
@@ -3289,7 +3271,6 @@ function renderModelCards(config) {
         </div>`;
       }
       html += `<div class="edit-actions">
-          <label><input type="checkbox" class="edit-model-default"${isDefault ? ' checked' : ''}> Set as default</label>
           <button class="save-btn" onclick="saveModelEdit('${m.id}')">Save</button>
           <button class="cancel-btn" onclick="cancelModelEdit('${m.id}')">Cancel</button>
         </div>

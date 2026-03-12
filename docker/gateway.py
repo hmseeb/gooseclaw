@@ -2996,9 +2996,9 @@ def _ws_connect(host, port, path, auth_token=None):
         sock.close()
         raise ConnectionError(f"WebSocket handshake failed: {status_line}")
 
-    # handshake done. remove timeout so the relay can run as long as it needs.
-    # the loop exits on "complete" event or connection close, not a timer.
-    sock.settimeout(None)
+    # handshake done. set a generous relay timeout so the bot doesn't hang
+    # forever if goose stops responding. 5 minutes should cover long tool calls.
+    sock.settimeout(300)
     return sock
 
 
@@ -3218,6 +3218,7 @@ def _do_ws_relay(user_text, session_id, sock_ref=None):
             frame_text = _ws_recv_text(sock)
             if frame_text is None:
                 # connection closed
+                print(f"[relay] ws closed by server after {time.time() - t0:.1f}s")
                 break
 
             try:
@@ -3241,7 +3242,9 @@ def _do_ws_relay(user_text, session_id, sock_ref=None):
                 return "", f"Goose error: {err_msg}"
             elif etype == "complete":
                 break
-            # ignore: thinking, tool_request, tool_confirmation, tool_response, cancelled
+            else:
+                # log non-response events for debugging
+                print(f"[relay] event type={etype} after {time.time() - t0:.1f}s")
 
         sock.close()
         elapsed = time.time() - t0
@@ -3251,6 +3254,18 @@ def _do_ws_relay(user_text, session_id, sock_ref=None):
             return "(No response from goose)", ""
         return full_text, ""
 
+    except socket.timeout:
+        elapsed = time.time() - t0
+        print(f"[relay] TIMEOUT after {elapsed:.1f}s session={session_id}")
+        if sock:
+            try:
+                sock.close()
+            except Exception:
+                pass
+        partial = "".join(collected).strip() if collected else ""
+        if partial:
+            return partial, ""
+        return "", "Goose took too long to respond (timeout). Try again."
     except ConnectionError as e:
         print(f"[relay] connection error after {time.time() - t0:.1f}s: {e}")
         if sock:
@@ -3429,6 +3444,18 @@ def _do_ws_relay_streaming(user_text, session_id, flush_cb, verbosity="balanced"
             return "(No response from goose)", ""
         return full_text, ""
 
+    except socket.timeout:
+        elapsed = time.time() - t0
+        print(f"[relay-stream] TIMEOUT after {elapsed:.1f}s session={session_id}")
+        if sock:
+            try:
+                sock.close()
+            except Exception:
+                pass
+        partial = "".join(collected).strip() if collected else ""
+        if partial:
+            return partial, ""
+        return "", "Goose took too long to respond (timeout). Try again."
     except ConnectionError as e:
         print(f"[relay-stream] connection error after {time.time() - t0:.1f}s: {e}")
         if sock:
@@ -3608,19 +3635,19 @@ def _telegram_poll_loop(bot_token):
                     # per-chat lock prevents concurrent relays (e.g. auto-kick + user msg)
                     _chat_lock = _get_chat_lock(chat_id)
                     _chat_lock.acquire()
-                    _send_typing_action(bot_token, chat_id)
-                    session_id = _get_session_id(chat_id)
-                    _sock_ref = [None]
-
-                    # register sock_ref so /stop can close the socket mid-relay
-                    with _telegram_active_relays_lock:
-                        _telegram_active_relays[chat_id] = _sock_ref
-
-                    # determine verbosity for telegram channel
-                    _tg_setup = load_setup()
-                    _tg_verbosity = get_verbosity_for_channel(_tg_setup, "telegram") if _tg_setup else "balanced"
-
                     try:
+                        _send_typing_action(bot_token, chat_id)
+                        session_id = _get_session_id(chat_id)
+                        _sock_ref = [None]
+
+                        # register sock_ref so /stop can close the socket mid-relay
+                        with _telegram_active_relays_lock:
+                            _telegram_active_relays[chat_id] = _sock_ref
+
+                        # determine verbosity for telegram channel
+                        _tg_setup = load_setup()
+                        _tg_verbosity = get_verbosity_for_channel(_tg_setup, "telegram") if _tg_setup else "balanced"
+
                         if _tg_verbosity == "quiet":
                             # original behavior: typing loop + single message at end
                             typing_stop = threading.Event()
@@ -3658,6 +3685,12 @@ def _telegram_poll_loop(bot_token):
                             )
                             if error:
                                 send_telegram_message(bot_token, chat_id, f"Error: {error}")
+                    except Exception as exc:
+                        print(f"[telegram] relay exception for chat {chat_id}: {exc}")
+                        try:
+                            send_telegram_message(bot_token, chat_id, f"Error: {exc}")
+                        except Exception:
+                            pass
                     finally:
                         # unregister active relay and release chat lock
                         with _telegram_active_relays_lock:
@@ -3697,15 +3730,21 @@ def _telegram_poll_loop(bot_token):
                             sid = _get_session_id(chat_id)
                             if sid:
                                 def _kick_greeting(msg=kick_msg, s=sid, c=chat_id):
-                                    with _get_chat_lock(c):
-                                        txt, err = _relay_to_goose_web(
-                                            msg, s, chat_id=str(c), channel="telegram",
-                                        )
-                                        if txt and not err:
-                                            send_telegram_message(bot_token, c, txt)
+                                    try:
+                                        with _get_chat_lock(c):
+                                            txt, err = _relay_to_goose_web(
+                                                msg, s, chat_id=str(c), channel="telegram",
+                                            )
+                                            if err:
+                                                print(f"[telegram] kick greeting error: {err}")
+                                                send_telegram_message(bot_token, c, f"Error: {err}")
+                                            elif txt:
+                                                send_telegram_message(bot_token, c, txt)
+                                    except Exception as exc:
+                                        print(f"[telegram] kick greeting exception: {exc}")
                                 threading.Thread(target=_kick_greeting, daemon=True).start()
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            print(f"[telegram] kick greeting setup failed: {exc}")
                     else:
                         send_telegram_message(
                             bot_token, chat_id,

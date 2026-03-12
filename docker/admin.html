@@ -409,6 +409,64 @@ tr:hover td { background: rgba(124, 58, 237, 0.02); }
   font-size: 11px;
 }
 
+/* ── inline edit row ── */
+.edit-row td { padding: 0 !important; }
+.inline-edit {
+  background: rgba(124, 58, 237, 0.04);
+  border-top: 1px solid rgba(124, 58, 237, 0.15);
+  padding: 12px 16px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  align-items: end;
+}
+.inline-edit .form-group { margin: 0; }
+.inline-edit label {
+  display: block;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-tertiary);
+  margin-bottom: 4px;
+}
+.inline-edit input {
+  width: 100%;
+  padding: 6px 10px;
+  background: var(--bg-main);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: 'JetBrains Mono', monospace;
+  box-sizing: border-box;
+}
+.inline-edit input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+.inline-edit-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+}
+.inline-edit-actions button {
+  padding: 5px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+}
+.inline-edit-actions .save-btn {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.inline-edit-actions .save-btn:hover { opacity: 0.9; }
+.inline-edit-actions .cancel-btn:hover { border-color: var(--text-tertiary); }
+
 /* ── create job panel ── */
 .create-panel {
   background: var(--bg-card);
@@ -968,8 +1026,11 @@ async function refreshJobs() {
   const jobs = data.jobs || [];
   _jobsCache = jobs;
   document.getElementById('job-count').textContent = jobs.length;
-
   const wrap = document.getElementById('jobs-table');
+  renderJobsTable(jobs, wrap);
+}
+
+function renderJobsTable(jobs, wrap) {
   if (jobs.length === 0) {
     wrap.innerHTML = '<div class="empty-state">no active jobs</div>';
     return;
@@ -987,7 +1048,7 @@ async function refreshJobs() {
     else if (j.fires_at_human) sched = j.fires_at_human;
     if (j.recurring_seconds) sched += ' (every ' + formatDuration(j.recurring_seconds) + ')';
 
-    html += '<tr>'
+    html += '<tr id="job-row-' + j.id + '">'
       + '<td><span class="type-badge ' + typeCls + '">' + j.type + '</span></td>'
       + '<td class="name-cell" title="' + escAttr(j.name) + '">' + escHtml(j.name) + '</td>'
       + '<td class="schedule-cell">' + escHtml(sched || '\u2014') + '</td>'
@@ -997,6 +1058,30 @@ async function refreshJobs() {
       + '<button class="action-btn trigger" onclick="triggerJob(\'' + j.id + '\')" title="run now">run</button>'
       + '<button class="action-btn danger" onclick="deleteJob(\'' + j.id + '\')" title="delete">del</button>'
       + '</td></tr>';
+
+    // inline edit row (hidden by default, toggled by editJob)
+    if (editingJobId === j.id) {
+      const isScript = j.type !== 'reminder';
+      const schedVal = j.cron || (j.recurring_seconds ? formatDuration(j.recurring_seconds) : '') || '';
+      const schedLabel = j.cron ? 'Cron' : j.recurring_seconds ? 'Interval' : 'Schedule';
+      html += '<tr class="edit-row"><td colspan="5"><div class="inline-edit">';
+      if (isScript) {
+        html += '<div class="form-group"><label>Name</label>'
+          + '<input type="text" id="edit-name" value="' + escAttr(j.name || '') + '"></div>'
+          + '<div class="form-group"><label>Command</label>'
+          + '<input type="text" id="edit-command" value="' + escAttr(j.command || '') + '"></div>';
+      } else {
+        html += '<div class="form-group" style="grid-column:1/-1"><label>Message</label>'
+          + '<input type="text" id="edit-text" value="' + escAttr(j.text || '') + '"></div>';
+      }
+      html += '<div class="form-group"><label>' + schedLabel + '</label>'
+        + '<input type="text" id="edit-schedule" value="' + escAttr(schedVal) + '" placeholder="0 */6 * * *"></div>'
+        + '<div class="form-group"></div>'
+        + '<div class="inline-edit-actions">'
+        + '<button class="save-btn" onclick="saveInlineEdit(\'' + j.id + '\')">Save</button>'
+        + '<button class="cancel-btn" onclick="cancelEdit()">Cancel</button>'
+        + '</div></div></td></tr>';
+    }
   }
   html += '</table>';
   wrap.innerHTML = html;
@@ -1027,8 +1112,7 @@ let editingJobId = null;  // null = create mode, string = edit mode
 let _jobsCache = [];  // cached from last refreshJobs
 
 function toggleCreate() {
-  editingJobId = null;
-  document.getElementById('submit-btn').textContent = 'Create Job';
+  cancelEdit();  // close any inline edit
   document.getElementById('create-panel').classList.toggle('open');
 }
 
@@ -1056,41 +1140,73 @@ function updateSchedFields() {
 }
 
 function editJob(id) {
-  const job = _jobsCache.find(j => j.id === id);
-  if (!job) { toast('job not found', 'error'); return; }
-
+  if (editingJobId === id) { cancelEdit(); return; }  // toggle off
   editingJobId = id;
-  document.getElementById('submit-btn').textContent = 'Save Changes';
+  // close create panel if open
+  document.getElementById('create-panel').classList.remove('open');
+  // re-render table to show inline edit row
+  refreshJobsUI();
+}
 
-  // set type
-  setJobType(job.type || 'script');
+function cancelEdit() {
+  editingJobId = null;
+  refreshJobsUI();
+}
 
-  // fill fields
-  document.getElementById('job-name').value = job.name || '';
-  document.getElementById('job-command').value = job.command || '';
-  document.getElementById('job-text').value = job.text || '';
-
-  // set schedule
-  if (job.cron) {
-    document.getElementById('sched-type').value = 'cron';
-    updateSchedFields();
-    document.getElementById('sched-value').value = job.cron;
-  } else if (job.recurring_seconds) {
-    document.getElementById('sched-type').value = 'every';
-    updateSchedFields();
-    document.getElementById('sched-value').value = formatDuration(job.recurring_seconds);
-  } else {
-    document.getElementById('sched-type').value = 'in';
-    updateSchedFields();
-  }
-
-  // open panel
-  document.getElementById('create-panel').classList.add('open');
+function refreshJobsUI() {
+  // re-render from cached data without API call
+  const jobs = _jobsCache;
+  const wrap = document.getElementById('jobs-table');
+  if (!jobs.length) { wrap.innerHTML = '<div class="empty-state">no active jobs</div>'; return; }
+  // reuse the rendering logic by calling the table builder
+  renderJobsTable(jobs, wrap);
 }
 
 async function submitJob() {
-  if (editingJobId) return saveJob();
   return createJob();
+}
+
+async function saveInlineEdit(id) {
+  const body = {};
+  const nameEl = document.getElementById('edit-name');
+  const cmdEl = document.getElementById('edit-command');
+  const textEl = document.getElementById('edit-text');
+  const schedEl = document.getElementById('edit-schedule');
+
+  if (nameEl) body.name = nameEl.value.trim();
+  if (cmdEl) {
+    body.command = cmdEl.value.trim();
+    if (!body.command) { toast('command required', 'error'); return; }
+  }
+  if (textEl) {
+    body.text = textEl.value.trim();
+    if (!body.text) { toast('message required', 'error'); return; }
+  }
+  if (schedEl && schedEl.value.trim()) {
+    const val = schedEl.value.trim();
+    // detect if it's a cron or interval
+    if (val.split(' ').length === 5) {
+      body.cron = val;
+    } else {
+      const secs = parseDuration(val);
+      if (secs) body.recurring_seconds = secs;
+      else body.cron = val;  // let server validate
+    }
+  }
+
+  const data = await api('/api/jobs/' + id, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  if (data.updated) {
+    toast('job updated');
+    editingJobId = null;
+    refreshJobs();
+  } else {
+    toast(data.error || 'failed to update', 'error');
+  }
 }
 
 async function createJob() {
@@ -1152,53 +1268,9 @@ async function createJob() {
   }
 }
 
-async function saveJob() {
-  const btn = document.getElementById('submit-btn');
-  btn.disabled = true;
-
-  const body = {};
-
-  if (currentJobType === 'script') {
-    body.name = document.getElementById('job-name').value.trim();
-    body.command = document.getElementById('job-command').value.trim();
-    if (!body.command) { toast('command required', 'error'); btn.disabled = false; return; }
-  } else {
-    body.text = document.getElementById('job-text').value.trim();
-    if (!body.text) { toast('message required', 'error'); btn.disabled = false; return; }
-  }
-
-  const schedType = document.getElementById('sched-type').value;
-  const schedVal = document.getElementById('sched-value').value.trim();
-  if (schedVal) {
-    if (schedType === 'cron') {
-      body.cron = schedVal;
-    } else if (schedType === 'every') {
-      body.recurring_seconds = parseDuration(schedVal);
-      if (!body.recurring_seconds) { toast('invalid interval', 'error'); btn.disabled = false; return; }
-    }
-  }
-
-  const data = await api('/api/jobs/' + editingJobId, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-
-  btn.disabled = false;
-
-  if (data.updated) {
-    toast('job updated');
-    resetJobForm();
-    refreshJobs();
-  } else {
-    toast(data.error || 'failed to update', 'error');
-  }
-}
-
 function resetJobForm() {
   editingJobId = null;
   document.getElementById('create-panel').classList.remove('open');
-  document.getElementById('submit-btn').textContent = 'Create Job';
   document.getElementById('job-name').value = '';
   document.getElementById('job-command').value = '';
   document.getElementById('job-text').value = '';

@@ -4017,6 +4017,18 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.handle_health()
         elif path == "/api/health/ready":
             self.handle_health_ready()
+        elif path == "/api/debug/config":
+            # temporary debug endpoint to check goose config
+            try:
+                config_path = os.path.join(CONFIG_DIR, "config.yaml")
+                with open(config_path) as f:
+                    content = f.read()
+                # mask any sensitive values
+                import re
+                content = re.sub(r'(auth.token|api.key|token|secret):\s*\S+', r'\1: ****', content, flags=re.IGNORECASE)
+                self.send_json(200, {"config": content, "env_oauth_set": bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")), "goose_mode": os.environ.get("GOOSE_MODE", "NOT SET")})
+            except Exception as e:
+                self.send_json(500, {"error": str(e)})
         elif path == "/api/setup/status":
             self.handle_startup_status()
         elif path == "/api/version":

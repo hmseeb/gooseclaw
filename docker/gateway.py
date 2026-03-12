@@ -1856,11 +1856,21 @@ def _fix_goose_run_recipe(command):
     if not instructions:
         return command
 
-    # inject --text with the recipe instructions
+    # replace --recipe <path> with --text <instructions> (goose doesn't allow both)
     import shlex
-    text_arg = f" --text {shlex.quote(instructions)}"
-    print(f"[jobs] injected --text for goose run --recipe (headless fix)")
-    return command + text_arg
+    new_parts = []
+    skip_next = False
+    for i, p in enumerate(parts):
+        if skip_next:
+            skip_next = False
+            continue
+        if p == "--recipe" and i + 1 < len(parts):
+            skip_next = True
+            continue
+        new_parts.append(p)
+    new_parts.extend(["--text", shlex.quote(instructions)])
+    print(f"[jobs] replaced --recipe with --text for headless goose run")
+    return " ".join(new_parts)
 
 
 def _run_script(job):

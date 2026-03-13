@@ -142,6 +142,121 @@ auth_limiter = RateLimiter(max_requests=5, window_seconds=60)    # auth-sensitiv
 notify_limiter = RateLimiter(max_requests=10, window_seconds=60)  # notify endpoint
 
 
+# ── session management (shared) ─────────────────────────────────────────────
+
+class SessionManager:
+    """Unified session store with composite keys (channel:user_id).
+    Thread-safe. Optional disk persistence per channel."""
+
+    def __init__(self, persist_dir=None):
+        self._sessions = {}          # "channel:user_id" -> session_id
+        self._lock = threading.Lock()
+        self._persist_dir = persist_dir
+
+    def get(self, channel, user_id):
+        key = f"{channel}:{user_id}"
+        with self._lock:
+            return self._sessions.get(key)
+
+    def set(self, channel, user_id, session_id):
+        key = f"{channel}:{user_id}"
+        with self._lock:
+            self._sessions[key] = session_id
+        self._save(channel)
+
+    def pop(self, channel, user_id):
+        key = f"{channel}:{user_id}"
+        with self._lock:
+            sid = self._sessions.pop(key, None)
+        if sid is not None:
+            self._save(channel)
+        return sid
+
+    def clear_channel(self, channel):
+        prefix = f"{channel}:"
+        with self._lock:
+            keys = [k for k in self._sessions if k.startswith(prefix)]
+            for k in keys:
+                del self._sessions[k]
+        self._save(channel)
+
+    def get_all_for_channel(self, channel):
+        prefix = f"{channel}:"
+        with self._lock:
+            return {k[len(prefix):]: v for k, v in self._sessions.items()
+                    if k.startswith(prefix)}
+
+    def _save(self, channel):
+        if not self._persist_dir:
+            return
+        with self._lock:
+            data = {k: v for k, v in self._sessions.items()
+                    if k.startswith(f"{channel}:")}
+        # Write OUTSIDE the lock to avoid deadlock (same pattern as existing _save_telegram_sessions)
+        try:
+            os.makedirs(self._persist_dir, exist_ok=True)
+            fpath = os.path.join(self._persist_dir, f"sessions_{channel}.json")
+            tmp = fpath + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(data, f, indent=2)
+            os.replace(tmp, fpath)
+        except Exception as e:
+            print(f"[session-mgr] warn: could not save {channel} sessions: {e}")
+
+    def load(self, channel):
+        if not self._persist_dir:
+            return
+        fpath = os.path.join(self._persist_dir, f"sessions_{channel}.json")
+        try:
+            if os.path.exists(fpath):
+                with open(fpath) as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    with self._lock:
+                        self._sessions.update(data)
+        except Exception as e:
+            print(f"[session-mgr] warn: could not load {channel} sessions: {e}")
+
+
+# ── channel state (shared concurrency primitives) ───────────────────────────
+
+class ChannelState:
+    """Per-channel concurrency primitives: user locks, active relay tracking."""
+
+    def __init__(self):
+        self._active_relays = {}       # user_id -> [sock, cancel_event]
+        self._relays_lock = threading.Lock()
+        self._user_locks = {}          # user_id -> Lock
+        self._user_locks_lock = threading.Lock()
+        self._prewarm_events = {}      # user_id -> Event
+
+    def get_user_lock(self, user_id):
+        uid = str(user_id)
+        with self._user_locks_lock:
+            if uid not in self._user_locks:
+                self._user_locks[uid] = threading.Lock()
+            return self._user_locks[uid]
+
+    def set_active_relay(self, user_id, sock_ref):
+        with self._relays_lock:
+            self._active_relays[str(user_id)] = sock_ref
+
+    def pop_active_relay(self, user_id):
+        with self._relays_lock:
+            return self._active_relays.pop(str(user_id), None)
+
+    def kill_relay(self, user_id):
+        sock_ref = self.pop_active_relay(user_id)
+        if sock_ref and sock_ref[0]:
+            if len(sock_ref) > 1 and hasattr(sock_ref[1], 'set'):
+                sock_ref[1].set()
+            try:
+                sock_ref[0].close()
+            except Exception:
+                pass
+        return sock_ref
+
+
 # ── security headers ─────────────────────────────────────────────────────────
 
 SECURITY_HEADERS = {

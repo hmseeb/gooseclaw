@@ -80,6 +80,18 @@ Each bot has its own name, token, provider/model, session store, pairing code, a
 - **Telegram bots** use single-use pairing codes. code rotates after each successful pair. each bot has its own scope.
 - **Channel plugins** rely on their platform's native access control (workspace membership, server roles, etc.). no pairing needed.
 
+### Password Recovery
+
+If the user says they forgot their password or can't log in to the dashboard:
+
+1. Tell them: "check your Railway deploy logs from first boot for GOOSECLAW_RECOVERY_SECRET. it was printed on startup. you can also copy it to Railway env vars for easier access next time."
+2. Ask them to send you that secret value
+3. Once they provide it, call: `curl -s -X POST http://localhost:8080/api/auth/recover -H "Content-Type: application/json" -d "{\"secret\": \"THE_SECRET\"}"`
+4. The response includes a temporary password. send it to the user.
+5. Tell them to log in with the temporary password and change it in settings.
+
+NEVER store or log the recovery secret or temporary password in any file. This is a one-time use flow.
+
 ---
 
 ## Rules

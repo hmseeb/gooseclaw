@@ -30,10 +30,26 @@ if [ ! -f "$DATA_DIR/.initialized" ]; then
     cp -r "$APP_DIR/identity/"* "$IDENTITY_DIR/"
     echo "[init] identity files copied to $IDENTITY_DIR/"
 
+    # generate recovery secret for password reset
+    RECOVERY_SECRET=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")
+    echo "$RECOVERY_SECRET" > "$DATA_DIR/.recovery_secret"
+    chmod 600 "$DATA_DIR/.recovery_secret"
+    echo "[init] recovery secret generated and saved to /data/.recovery_secret"
+    echo "[init] TIP: copy this to Railway env vars as GOOSECLAW_RECOVERY_SECRET for easy access"
+    echo "[init] GOOSECLAW_RECOVERY_SECRET=$RECOVERY_SECRET"
+
     touch "$DATA_DIR/.initialized"
     echo "[init] first boot setup complete"
 else
     echo "[init] existing data found at /data. using it."
+fi
+
+# ─── recovery secret ──────────────────────────────────────────────────────────
+
+# load recovery secret from persistent storage if env var not set
+if [ -z "$GOOSECLAW_RECOVERY_SECRET" ] && [ -f "$DATA_DIR/.recovery_secret" ]; then
+    export GOOSECLAW_RECOVERY_SECRET=$(cat "$DATA_DIR/.recovery_secret")
+    echo "[init] recovery secret loaded from /data"
 fi
 
 # ─── goose config ───────────────────────────────────────────────────────────

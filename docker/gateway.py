@@ -1213,6 +1213,46 @@ _TELEGRAM_MIME_FALLBACK = {
     "document": "application/octet-stream",
 }
 
+_MIME_EXT_MAP = {
+    "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif",
+    "image/webp": ".webp", "audio/ogg": ".ogg", "audio/mpeg": ".mp3",
+    "video/mp4": ".mp4", "application/pdf": ".pdf",
+}
+
+
+def _ext_from_mime(mime_type):
+    """Map a MIME type to a file extension, with stdlib fallback."""
+    return _MIME_EXT_MAP.get(mime_type) or mimetypes.guess_extension(mime_type) or ".bin"
+
+
+def _build_multipart(fields, files):
+    """Construct a multipart/form-data body from text fields and binary file parts.
+
+    Args:
+        fields: dict of {name: value} text fields
+        files: list of (field_name, filename, content_type, data) tuples
+
+    Returns:
+        (body_bytes, content_type_header)
+    """
+    boundary = uuid.uuid4().hex
+    lines = []
+    for name, value in fields.items():
+        lines.append(f"--{boundary}".encode())
+        lines.append(f'Content-Disposition: form-data; name="{name}"'.encode())
+        lines.append(b"")
+        lines.append(str(value).encode("utf-8"))
+    for field_name, filename, content_type, data in files:
+        lines.append(f"--{boundary}".encode())
+        lines.append(f'Content-Disposition: form-data; name="{field_name}"; filename="{filename}"'.encode())
+        lines.append(f"Content-Type: {content_type}".encode())
+        lines.append(b"")
+        lines.append(data)
+    lines.append(f"--{boundary}--".encode())
+    lines.append(b"")
+    body = b"\r\n".join(lines)
+    return body, f"multipart/form-data; boundary={boundary}"
+
 
 def _extract_file_info(msg, media_key):
     """Extract file_id, mime_type hint, and filename from Telegram message."""
@@ -3538,6 +3578,75 @@ class LegacyOutboundAdapter(OutboundAdapter):
 
     def send_text(self, text):
         return self._send_fn(text)
+
+
+class TelegramOutboundAdapter(OutboundAdapter):
+    """Telegram-specific outbound adapter with real media sending via Bot API."""
+
+    def __init__(self, bot_token, chat_id):
+        self.bot_token = bot_token
+        self.chat_id = chat_id
+
+    def capabilities(self):
+        return ChannelCapabilities(
+            supports_images=True, supports_voice=True, supports_files=True,
+            max_file_size=50_000_000, max_text_length=4096,
+        )
+
+    def send_text(self, text):
+        ok, err = send_telegram_message(self.bot_token, self.chat_id, text)
+        return {"sent": ok, "error": err or ""}
+
+    def send_image(self, image_bytes, caption="", mime_type="image/png"):
+        return self._send_media("sendPhoto", "photo", image_bytes,
+                                f"image{_ext_from_mime(mime_type)}", mime_type, caption)
+
+    def send_voice(self, audio_bytes, caption="", mime_type="audio/ogg"):
+        return self._send_media("sendVoice", "voice", audio_bytes,
+                                f"voice{_ext_from_mime(mime_type)}", mime_type, caption)
+
+    def send_file(self, file_bytes, filename="file", mime_type="application/octet-stream"):
+        return self._send_media("sendDocument", "document", file_bytes,
+                                filename, mime_type, "")
+
+    def _send_media(self, method, field, data, filename, mime_type, caption):
+        """Internal: upload media to Telegram via multipart/form-data."""
+        url = f"https://api.telegram.org/bot{self.bot_token}/{method}"
+        fields = {"chat_id": str(self.chat_id)}
+        if caption:
+            fields["caption"] = caption[:1024]
+        files = [(field, filename, mime_type, data)]
+        body, content_type = _build_multipart(fields, files)
+        try:
+            req = urllib.request.Request(url, data=body, headers={"Content-Type": content_type})
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                result = json.loads(resp.read())
+                return {"sent": result.get("ok", False), "error": ""}
+        except Exception as e:
+            return {"sent": False, "error": str(e)}
+
+
+def _route_media_blocks(media_blocks, adapter):
+    """Dispatch goose response media blocks to the appropriate adapter method.
+
+    Handles image blocks by decoding base64 and calling send_image (or send_file
+    for images > 10MB). Unknown block types are logged and skipped.
+    """
+    for block in media_blocks:
+        btype = block.get("type", "")
+        if btype == "image":
+            data_b64 = block.get("data", "")
+            if not data_b64:
+                continue
+            raw_bytes = base64.b64decode(data_b64)
+            mime = block.get("mimeType", "image/png")
+            if len(raw_bytes) > 10_000_000:
+                ext = _ext_from_mime(mime)
+                adapter.send_file(raw_bytes, filename=f"image{ext}", mime_type=mime)
+            else:
+                adapter.send_image(raw_bytes, mime_type=mime)
+        else:
+            print(f"[media] unknown outbound media type: {btype}")
 
 
 # ── channel plugin system ─────────────────────────────────────────────────────

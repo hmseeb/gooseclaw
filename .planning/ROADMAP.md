@@ -3,7 +3,7 @@
 ## Milestones
 
 - [x] **v1.0 Setup Wizard** - Phases 1-5 (shipped 2026-03-11)
-- [ ] **v2.0 Multi-Channel & Multi-Bot** - Phases 6-10 (in progress)
+- [x] **v2.0 Multi-Channel & Multi-Bot** - Phases 6-10 (shipped 2026-03-13)
 
 ## Phases
 
@@ -22,11 +22,11 @@
 
 **Milestone Goal:** Make channel plugins first-class citizens with full parity to Telegram, and support multiple Telegram bots with independent provider/model configs on a single gateway.
 
-- [ ] **Phase 6: Shared Infrastructure Extraction** - Extract SessionManager and CommandRouter from Telegram-specific code into shared abstractions
-- [ ] **Phase 7: Channel Plugin Parity** - Wire channel plugins to shared infrastructure for commands, locks, cancellation, and typing indicators
-- [ ] **Phase 8: Notification Channel Targeting** - Complete /api/notify and cron scheduler support for per-channel delivery
-- [ ] **Phase 9: Multi-Bot Core** - Multiple Telegram bots on one gateway with independent sessions, provider routing, and backward-compatible config
-- [ ] **Phase 10: Multi-Bot Lifecycle** - Hot-add and hot-remove bots via API without container restart
+- [x] **Phase 6: Shared Infrastructure Extraction** - Extract SessionManager and CommandRouter from Telegram-specific code into shared abstractions (completed 2026-03-13)
+- [x] **Phase 7: Channel Plugin Parity** - Wire channel plugins to shared infrastructure for commands, locks, cancellation, and typing indicators (completed 2026-03-13)
+- [x] **Phase 8: Notification Channel Targeting** - Complete /api/notify and cron scheduler support for per-channel delivery (completed 2026-03-13)
+- [x] **Phase 9: Multi-Bot Core** - Multiple Telegram bots on one gateway with independent sessions, provider routing, and backward-compatible config (completed 2026-03-13)
+- [x] **Phase 10: Multi-Bot Lifecycle** - Hot-add and hot-remove bots via API without container restart (completed 2026-03-13)
 
 ## Phase Details
 
@@ -121,7 +121,7 @@ Phase 9 depends on Phase 6 (not Phase 7/8), so Phase 9 could start after Phase 6
 | 3. Gateway Resilience and Live Feedback | v1.0 | 2/2 | Complete | 2026-03-10 |
 | 4. Advanced Multi-Model Settings | v1.0 | 1/1 | Complete | 2026-03-11 |
 | 5. Production Hardening | v1.0 | 6/6 | Complete | 2026-03-10 |
-| 6. Shared Infrastructure Extraction | v2.0 | 0/3 | Planned | - |
+| 6. Shared Infrastructure Extraction | v2.0 | 3/3 | Complete | 2026-03-13 |
 | 7. Channel Plugin Parity | v2.0 | 3/3 | Complete | 2026-03-13 |
 | 8. Notification Channel Targeting | v2.0 | 1/1 | Complete | 2026-03-13 |
 | 9. Multi-Bot Core | v2.0 | 3/3 | Complete | 2026-03-13 |

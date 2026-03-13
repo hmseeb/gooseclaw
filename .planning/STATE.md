@@ -98,9 +98,10 @@ Recent decisions affecting current work:
 |---|-------------|------|--------|-----------|
 | 1 | Setup wizard settings dashboard | 2026-03-10 | 720048c | quick/1-.../ |
 | 2 | Add expires_at to job engine | 2026-03-13 | ff87edd | quick/2-.../ |
+| 3 | Make pairing codes single-use + rotate | 2026-03-13 | 4c09ee4 | quick/3-.../ |
 
 ## Session Continuity
 
 Last session: 2026-03-13
-Stopped at: v2.0 milestone complete. All 20 requirements satisfied. 265 tests passing.
+Stopped at: Completed quick-3. Pairing codes now single-use with auto-rotation. 267 tests passing.
 Resume file: None

@@ -6628,5 +6628,96 @@ class TestPasswordAuth(unittest.TestCase):
         self.assertFalse(is_hashed)
 
 
+# ── atomic write / backup for setup.json ────────────────────────────────────
+
+class TestAtomicSetupWrite(unittest.TestCase):
+    """Tests for setup.json atomic writes with .bak backup."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self._orig_config_dir = gateway.CONFIG_DIR
+        self._orig_setup_file = gateway.SETUP_FILE
+        gateway.CONFIG_DIR = self.tmpdir
+        gateway.SETUP_FILE = os.path.join(self.tmpdir, "setup.json")
+
+    def tearDown(self):
+        gateway.CONFIG_DIR = self._orig_config_dir
+        gateway.SETUP_FILE = self._orig_setup_file
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_save_creates_bak_on_second_write(self):
+        """First save has no .bak, second save creates .bak with first config."""
+        first = {"provider": "openai", "version": 1}
+        gateway.save_setup(first)
+        bak_path = gateway.SETUP_FILE + ".bak"
+        # no .bak after first write (nothing to back up)
+        self.assertFalse(os.path.exists(bak_path))
+
+        second = {"provider": "anthropic", "version": 2}
+        gateway.save_setup(second)
+        # .bak should now exist and contain the first config
+        self.assertTrue(os.path.exists(bak_path))
+        with open(bak_path) as f:
+            bak_data = json.load(f)
+        self.assertEqual(bak_data, first)
+
+        # main file should contain the second config
+        with open(gateway.SETUP_FILE) as f:
+            main_data = json.load(f)
+        self.assertEqual(main_data, second)
+
+    def test_load_falls_back_to_bak_on_corruption(self):
+        """If setup.json is corrupted, load_setup returns .bak content."""
+        good_config = {"provider": "openai", "token": "sk-test"}
+        gateway.save_setup(good_config)
+
+        # corrupt the main file
+        with open(gateway.SETUP_FILE, "w") as f:
+            f.write("{corrupt json!!! not valid")
+
+        # write a valid .bak
+        with open(gateway.SETUP_FILE + ".bak", "w") as f:
+            json.dump(good_config, f)
+
+        result = gateway.load_setup()
+        self.assertEqual(result, good_config)
+
+    def test_load_returns_none_when_both_missing(self):
+        """load_setup returns None when neither setup.json nor .bak exist."""
+        result = gateway.load_setup()
+        self.assertIsNone(result)
+
+    def test_load_returns_none_when_both_corrupt(self):
+        """load_setup returns None when both files are corrupted."""
+        with open(gateway.SETUP_FILE, "w") as f:
+            f.write("not json")
+        with open(gateway.SETUP_FILE + ".bak", "w") as f:
+            f.write("also not json")
+        result = gateway.load_setup()
+        self.assertIsNone(result)
+
+    def test_atomic_write_no_partial_on_crash(self):
+        """If .tmp exists but replace didn't happen, original file is intact."""
+        original = {"provider": "openai", "intact": True}
+        gateway.save_setup(original)
+
+        # simulate a crash: .tmp left behind, main file untouched
+        tmp_path = gateway.SETUP_FILE + ".tmp"
+        with open(tmp_path, "w") as f:
+            f.write("partial write garbage")
+
+        # load should still return the good config
+        result = gateway.load_setup()
+        self.assertEqual(result, original)
+
+    def test_save_sets_restrictive_permissions(self):
+        """setup.json should have 0600 permissions after save."""
+        gateway.save_setup({"provider": "test"})
+        import stat
+        mode = os.stat(gateway.SETUP_FILE).st_mode & 0o777
+        self.assertEqual(mode, 0o600)
+
+
 if __name__ == "__main__":
     unittest.main()

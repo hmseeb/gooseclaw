@@ -3227,5 +3227,167 @@ class TestBotLifecycleAPI(unittest.TestCase):
         handler.send_response.assert_called_with(401)
 
 
+class TestUXPaperCuts(unittest.TestCase):
+    """Tests for UX paper cut fixes: auth recovery hint, pairing code in save response, bots UI."""
+
+    # ── 1. Auth token recovery hint in setup.html ──
+
+    def test_setup_html_contains_recovery_hint(self):
+        """Success screen should mention /api/auth/recover for token recovery."""
+        setup_html_path = os.path.join(os.path.dirname(__file__), "setup.html")
+        with open(setup_html_path) as f:
+            content = f.read()
+        # the success screen (step-success) should contain a recovery hint
+        self.assertIn("/api/auth/recover", content,
+                      "setup.html success screen should mention the recovery endpoint")
+
+    def test_setup_html_recovery_hint_near_token_box(self):
+        """Recovery hint should appear in the success screen, not just anywhere."""
+        setup_html_path = os.path.join(os.path.dirname(__file__), "setup.html")
+        with open(setup_html_path) as f:
+            content = f.read()
+        # find the step-success div and check the recovery hint is inside it
+        success_start = content.find('id="step-success"')
+        self.assertGreater(success_start, 0, "step-success should exist in setup.html")
+        # find the next step div (step-dashboard)
+        success_end = content.find('id="step-dashboard"', success_start)
+        success_section = content[success_start:success_end]
+        self.assertIn("recover", success_section.lower(),
+                      "Recovery hint should be inside the success screen section")
+        self.assertIn("save", success_section.lower(),
+                      "Success screen should tell user to save their token")
+
+    # ── 2. Pairing code in save response ──
+
+    def setUp(self):
+        self.bm = gateway._bot_manager
+        with self.bm._lock:
+            self.bm._bots.clear()
+
+    def tearDown(self):
+        with self.bm._lock:
+            for bot in self.bm._bots.values():
+                bot.running = False
+            self.bm._bots.clear()
+
+    def _make_handler(self, path="/api/setup/save", method="POST", body=b"{}"):
+        handler = MagicMock(spec=gateway.GatewayHandler)
+        handler.path = path
+        handler.command = method
+        handler.headers = {}
+        handler.client_address = ("127.0.0.1", 12345)
+        handler._json_response = None
+        handler._read_body = MagicMock(return_value=body)
+
+        def mock_send_json(status, data):
+            handler._json_response = (status, data)
+        handler.send_json = mock_send_json
+        return handler
+
+    @patch("gateway._is_first_boot", return_value=False)
+    @patch("gateway.check_auth", return_value=True)
+    @patch("gateway.load_setup", return_value={"provider": "openai", "api_key": "sk-test"})
+    @patch("gateway.save_setup")
+    @patch("gateway.apply_config")
+    @patch("gateway.start_goose_web")
+    @patch("gateway.start_session_watcher")
+    @patch("gateway.start_job_engine")
+    @patch("gateway.start_cron_scheduler")
+    @patch("gateway.start_memory_writer")
+    @patch("gateway.validate_setup_config", return_value=(True, []))
+    def test_save_response_includes_pairing_code_when_bot_configured(
+        self, _validate, _mem, _cron, _job, _sess, _goose, _apply, _save, _load, _auth, _boot
+    ):
+        """When save includes telegram_bot_token, response should include pairing_code."""
+        # set up a bot that has a pairing code
+        bot = self.bm.add_bot("default", "tok:test123", channel_key="telegram")
+        bot.running = True
+        bot.pair_code = "PAIR42"
+
+        config = {"provider": "openai", "api_key": "sk-test", "telegram_bot_token": "tok:test123"}
+        handler = self._make_handler(body=json.dumps(config).encode())
+        gateway.GatewayHandler.handle_save(handler)
+
+        self.assertIsNotNone(handler._json_response)
+        status, data = handler._json_response
+        self.assertEqual(status, 200)
+        self.assertTrue(data.get("success"))
+        self.assertIn("pairing_code", data,
+                      "Save response should include pairing_code when telegram bot is configured")
+
+    @patch("gateway._is_first_boot", return_value=False)
+    @patch("gateway.check_auth", return_value=True)
+    @patch("gateway.load_setup", return_value={"provider": "openai", "api_key": "sk-test"})
+    @patch("gateway.save_setup")
+    @patch("gateway.apply_config")
+    @patch("gateway.start_goose_web")
+    @patch("gateway.start_session_watcher")
+    @patch("gateway.start_job_engine")
+    @patch("gateway.start_cron_scheduler")
+    @patch("gateway.start_memory_writer")
+    @patch("gateway.validate_setup_config", return_value=(True, []))
+    def test_save_response_no_pairing_code_without_telegram(
+        self, _validate, _mem, _cron, _job, _sess, _goose, _apply, _save, _load, _auth, _boot
+    ):
+        """When save has no telegram_bot_token, response should not include pairing_code."""
+        config = {"provider": "openai", "api_key": "sk-test"}
+        handler = self._make_handler(body=json.dumps(config).encode())
+        gateway.GatewayHandler.handle_save(handler)
+
+        self.assertIsNotNone(handler._json_response)
+        status, data = handler._json_response
+        self.assertEqual(status, 200)
+        self.assertTrue(data.get("success"))
+        self.assertNotIn("pairing_code", data,
+                         "Save response should NOT include pairing_code when no telegram configured")
+
+    # ── 3. Multi-bot management UI in admin.html ──
+
+    def test_admin_html_contains_bots_section(self):
+        """Admin dashboard should have a Bots section."""
+        admin_html_path = os.path.join(os.path.dirname(__file__), "admin.html")
+        with open(admin_html_path) as f:
+            content = f.read()
+        # check for bots section
+        self.assertIn("Bots", content,
+                      "admin.html should contain a Bots section title")
+
+    def test_admin_html_has_add_bot_form(self):
+        """Admin dashboard should have an add-bot form."""
+        admin_html_path = os.path.join(os.path.dirname(__file__), "admin.html")
+        with open(admin_html_path) as f:
+            content = f.read()
+        self.assertIn("bot-name", content,
+                      "admin.html should have a bot name input")
+        self.assertIn("bot-token", content,
+                      "admin.html should have a bot token input")
+        self.assertIn("/api/bots", content,
+                      "admin.html should reference the /api/bots endpoint")
+
+    def test_admin_html_has_remove_bot_button(self):
+        """Admin dashboard should have remove bot capability."""
+        admin_html_path = os.path.join(os.path.dirname(__file__), "admin.html")
+        with open(admin_html_path) as f:
+            content = f.read()
+        self.assertIn("removeBot", content,
+                      "admin.html should have a removeBot function")
+
+    def test_admin_html_shows_pairing_codes(self):
+        """Admin dashboard bots section should display pairing codes."""
+        admin_html_path = os.path.join(os.path.dirname(__file__), "admin.html")
+        with open(admin_html_path) as f:
+            content = f.read()
+        self.assertIn("pairing_code", content,
+                      "admin.html should display bot pairing codes")
+
+    def test_admin_html_has_bots_refresh(self):
+        """Admin dashboard should fetch bot data on load."""
+        admin_html_path = os.path.join(os.path.dirname(__file__), "admin.html")
+        with open(admin_html_path) as f:
+            content = f.read()
+        self.assertIn("refreshBots", content,
+                      "admin.html should have a refreshBots function")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -5842,6 +5842,12 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             if plaintext_token:
                 # one-time display to user -- not stored in setup.json
                 resp["auth_token"] = plaintext_token
+            # include pairing code if a telegram bot is configured
+            tg_token = config.get("telegram_bot_token", "")
+            if tg_token:
+                default_bot = _bot_manager.get_bot("default")
+                if default_bot and default_bot.pair_code:
+                    resp["pairing_code"] = default_bot.pair_code
             self.send_json(200, resp)
 
         except json.JSONDecodeError:

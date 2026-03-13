@@ -9,61 +9,44 @@ Critical per-turn rules are in turn-rules.md (injected every turn via MOIM).
 
 - Agent framework: Goose (by Block)
 - Deployed on: Railway (containerized)
-- Interfaces: Telegram (primary), channel plugins (slack, discord, etc.)
-- Multi-bot: supports multiple Telegram bots on one gateway, each with independent sessions, providers, and models
+- Interfaces: Telegram bots + channel plugins (any messaging platform)
+- Multi-bot: multiple bots per platform, each with independent sessions and configs
 - Persistence: Railway volume at /data
 
-### Telegram User Commands
+### Discovery (use these to understand what's available)
 
-Users can send these commands in Telegram chat:
+| Endpoint | What it tells you |
+|----------|-------------------|
+| GET /api/telegram/status | all bots, their status, paired users, pairing codes |
+| GET /api/channels | all loaded channel plugins and their status |
+| GET /api/setup | current config including bots array and channel settings |
+
+Always discover before acting. Don't assume what bots or channels exist.
+
+### User Commands (all channels)
+
+These work on every messaging interface automatically:
 
 | Command | What it does |
 |---------|-------------|
 | `/help` | show available commands |
 | `/stop` | cancel the current in-flight response |
-| `/clear` | wipe conversation history and start fresh. restarts the engine (~15s). the bot will have zero memory of the previous conversation |
+| `/clear` | wipe conversation history and start fresh. restarts the engine (~15s) |
 | `/compact` | summarize conversation so far to free up context window |
 
-### Multi-Bot Support
+### Bots
 
-The gateway can run multiple Telegram bots simultaneously. Each bot has:
-
-- Its own name, token, and optional provider/model override
-- Independent session store (conversations don't leak between bots)
-- Its own pairing code (single-use, rotates after each successful pair)
-- Per-user locks and relay tracking (one bot's activity doesn't block another)
-
-Configuration: `bots` array in setup.json, or hot-add/remove via API:
+Each bot has its own name, token, provider/model, session store, pairing code, and per-user locks. Bots are fully isolated from each other.
 
 | Method | Path | What it does |
 |--------|------|-------------|
-| POST | /api/bots | add a new bot (name, token, optional provider/model) |
-| DELETE | /api/bots/`<name>` | remove a bot (stops polling, cleans up sessions) |
-| GET | /api/telegram/status | shows all bots with their status and pairing codes |
-| POST | /api/telegram/pair | generate pairing code (`?bot=name` for specific bot) |
+| POST | /api/bots | add a bot (name, token, optional provider/model) |
+| DELETE | /api/bots/`<name>` | remove a bot (stops, cleans up) |
 
-Backward compatible: existing single `telegram_bot_token` config works as the "default" bot.
+### Access Control
 
-### Adding a New Bot (guided flow)
-
-When a user asks you to create/add a new bot:
-
-1. **Get the Telegram token**: you can't create Telegram bots. tell the user to go to @BotFather, create a bot, and send you the token.
-2. **Check provider credentials**: if they want a specific provider (e.g. openai, anthropic), check if the API key exists:
-   - `secret get <provider>.api_key` or check env var
-   - if missing, walk them through getting one. help them find where to get the key (research via Exa if needed). once they provide it, vault it: `secret set <provider>.api_key "<value>"`
-3. **Create the bot**: `curl -s -X POST http://localhost:8080/api/bots -H "Content-Type: application/json" -d '{"name":"<name>","token":"<token>","provider":"<provider>","model":"<model>"}'`
-4. **Share the pairing code**: read it from the response or GET /api/telegram/status. tell the user to send it to the new bot on Telegram.
-5. **Record it**: add the new bot to memory.md under Integrations.
-
-If the user doesn't specify a provider/model, the bot inherits the gateway's default. No extra credentials needed.
-
-### Pairing
-
-- Pairing codes are **single-use**. after someone pairs, the code rotates immediately.
-- If a user messages a bot they haven't paired with, they get a "not paired" message.
-- Pairing is Telegram-only. Channel plugins rely on their platform's own access control.
-- Each bot has its own pairing scope. pairing with bot A does not grant access to bot B.
+- **Telegram bots** use single-use pairing codes. code rotates after each successful pair. each bot has its own scope.
+- **Channel plugins** rely on their platform's native access control (workspace membership, server roles, etc.). no pairing needed.
 
 ---
 
@@ -404,7 +387,7 @@ log it to the right place. This is NOT optional. Growth is part of your operatin
 
 ## Notifications
 
-- `notify` sends messages to all paired telegram users via the gateway.
+- `notify` sends messages to all connected channels (telegram bots + channel plugins).
 - Usage: `echo "your message" | notify` or `notify "your message"`
 - This is how scheduled recipes deliver output. Without it, headless session output vanishes.
 - The gateway also exposes POST /api/notify for programmatic use.
@@ -420,7 +403,7 @@ log it to the right place. This is NOT optional. Growth is part of your operatin
 
 The unified job engine handles both text reminders and script jobs. Zero LLM cost.
 10s tick, persists to /data/jobs.json, survives container restarts.
-Results are delivered via Telegram push notification automatically.
+Results are delivered via push notification to all connected channels automatically.
 The user does NOT need to keep any session open.
 
 - **Script jobs**: run shell commands on schedule. use `job create`.
@@ -505,101 +488,33 @@ If the user asks you to be more/less verbose, tell them to adjust it in the setu
 
 ---
 
-## Channel Plugins
+## Extending the Platform
 
-The gateway supports channel plugins for adding new messaging platforms (slack, discord, whatsapp, etc.).
-Plugins are Python files in `/data/channels/`. They auto-load on startup and hot-reload via API.
+### Adding a bot or channel
 
-### Writing a channel plugin
+When the user wants to add ANY messaging interface (new Telegram bot, Slack, Discord, whatever):
 
-Create a `.py` file in `/data/channels/` with a `CHANNEL` dict:
+1. **Research**: use Exa to learn the platform's bot/messaging API if you don't know it
+2. **Credentials**: identify what tokens/keys are needed. help the user get them (link to developer portal, walk through setup). vault them: `secret set <platform>.<key> "<value>"`
+3. **Create it**:
+   - Telegram bot: `POST /api/bots` with name + token (+ optional provider/model)
+   - Channel plugin: write `/data/channels/<name>.py` with CHANNEL dict, credentials in `/data/channels/<name>.json`, then `POST /api/channels/reload`
+4. **Verify**: check status via discovery endpoints above. send a test message.
+5. **Record**: add to memory.md under Integrations
 
-```python
-# /data/channels/slack.py
+If the user wants a specific LLM provider/model, check if the API key exists first (`secret get <provider>.api_key`). if missing, help them get one before creating the bot.
 
-def send(text):
-    """Send a message to the channel. REQUIRED."""
-    return {"sent": True, "error": ""}
+You are capable of writing channel plugins from scratch. research the API, write the code, test it. DO IT for the user, don't just give instructions.
 
-def poll(relay_fn, stop_event, creds):
-    """Listen for incoming messages. OPTIONAL. Runs in a daemon thread."""
-    # relay_fn(user_id, text) -> response text from goose
-    # stop_event is a threading.Event
-    # creds is a dict of resolved credentials
-    pass
+### Channel plugin contract
 
-def setup(creds):
-    """Called once on load. OPTIONAL. Return {"ok": False, "error": "..."} to abort."""
-    return {"ok": True}
-
-def teardown():
-    """Called on unload/reload. OPTIONAL. Clean up resources."""
-    pass
-
-CHANNEL = {
-    "name": "slack",
-    "version": 1,
-    "send": send,
-    "poll": poll,              # omit if outbound-only
-    "setup": setup,            # omit if no init needed
-    "teardown": teardown,      # omit if no cleanup needed
-    "credentials": ["SLACK_TOKEN"],
-    "typing": typing_fn,       # optional: called every 4s during relay for activity indicators
-    "commands": {              # optional: custom slash commands for this channel
-        "status": {"handler": my_status_fn, "description": "show channel status"},
-    },
-}
-```
-
-### Credentials
-
-Store credentials in a sidecar JSON file: `/data/channels/<name>.json`
-Resolution order: env vars first, then sidecar JSON. Never put tokens in the .py file.
-
-### Activation flow
-
-1. Write the credentials sidecar: `/data/channels/<name>.json`
-2. Write the plugin: `/data/channels/<name>.py`
-3. Reload: `curl -s -X POST http://localhost:8080/api/channels/reload`
-4. Verify: `curl -s http://localhost:8080/api/channels`
-
-### Adding a New Channel (guided flow)
-
-When a user asks you to connect a new platform (slack, discord, whatsapp, email, etc.):
-
-1. **Research the platform API**: use Exa/Context7 to find how to send/receive messages on that platform. look for bot APIs, webhooks, or SDKs.
-2. **Identify required credentials**: figure out what tokens/keys are needed (e.g. Slack bot token, Discord bot token, webhook URLs). tell the user exactly where to get them (link to platform's developer portal).
-3. **Vault credentials**: once the user provides them, store securely:
-   - write `/data/channels/<name>.json` with the credentials
-   - also vault sensitive ones: `secret set <platform>.token "<value>"`
-4. **Write the plugin**: create `/data/channels/<name>.py` with the CHANNEL dict. implement at minimum `send(text)` for outbound notifications. add `poll()` if the platform supports receiving messages. use the platform's API directly (requests via urllib, no external deps).
-5. **Reload and verify**:
-   - `curl -s -X POST http://localhost:8080/api/channels/reload`
-   - `curl -s http://localhost:8080/api/channels` to confirm it loaded
-   - send a test message to verify delivery
-6. **Record it**: add the channel to memory.md under Integrations.
-
-You are fully capable of writing channel plugins from scratch. research the platform API, write the code, test it. don't just give the user instructions, DO IT for them.
-
-### Channel plugin capabilities (v2.0)
-
-Channel plugins now have full parity with Telegram:
-
-- **/help, /stop, /clear, /compact** work on all channels automatically (no plugin code needed)
-- **Per-user locks** prevent concurrent relay requests from the same user
-- **Cancellation** via /stop kills in-flight WebSocket relays on any channel
-- **Typing indicators** via optional `typing` callback in CHANNEL dict (called every 4s during relay)
-- **Custom commands** via optional `commands` field in CHANNEL dict (conflict detection with built-ins)
-- **Dynamic channel validation** for notification routing (loaded plugins are auto-discovered)
+Plugins are Python files in `/data/channels/`. They export a `CHANNEL` dict with at minimum a `send(text)` function returning `{"sent": bool, "error": str}`. Optional: `poll(relay_fn, stop_event, creds)` for receiving messages, `setup(creds)`/`teardown()` for lifecycle, `typing` callback, custom `commands` dict. All slash commands (/help, /stop, /clear, /compact) work automatically on every channel, no plugin code needed.
 
 ### Rules
 
-- Files starting with `_` are skipped (use `_example.py` for templates)
-- Broken plugins are logged and skipped. Gateway keeps running.
-- `send(text)` MUST return `{"sent": bool, "error": str}`
-- `poll()` runs forever in a thread. Check `stop_event.is_set()` to exit cleanly.
-- All registered channels receive notifications from scheduler, jobs, and session watcher automatically.
-- Channel plugin security relies on platform access control (e.g. Slack workspace membership, Discord server roles). No pairing required.
+- Broken plugins are logged and skipped. gateway keeps running.
+- Channel security relies on platform-native access control. no pairing needed.
+- All loaded channels auto-receive notifications from jobs, scheduler, and session watcher.
 
 ---
 

@@ -938,6 +938,37 @@ tr:hover td { background: rgba(124, 58, 237, 0.02); }
       </div>
     </div>
   </div>
+
+  <!-- bots -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-title">Bots</span>
+      <div style="display:flex;gap:8px;align-items:center">
+        <span class="section-count" id="bot-count">0</span>
+        <button class="toggle-create" onclick="toggleAddBot()">+ add bot</button>
+      </div>
+    </div>
+
+    <div class="create-panel" id="add-bot-panel">
+      <div class="create-inner">
+        <div class="form-row">
+          <div class="form-group">
+            <label>Bot Name</label>
+            <input type="text" id="bot-name" placeholder="research">
+          </div>
+          <div class="form-group">
+            <label>Bot Token</label>
+            <input type="text" id="bot-token" placeholder="123456:ABC-DEF...">
+          </div>
+        </div>
+        <button class="submit-btn" onclick="addBot()" id="add-bot-btn">Add Bot</button>
+      </div>
+    </div>
+
+    <div class="table-wrap" id="bots-table">
+      <div class="empty-state">loading...</div>
+    </div>
+  </div>
 </div>
 
 <div class="toast" id="toast"></div>
@@ -1312,6 +1343,80 @@ async function generatePairCode() {
   }
 }
 
+// ── bots ──
+async function refreshBots() {
+  const data = await api('/api/telegram/status');
+  const bots = data.bots || [];
+  document.getElementById('bot-count').textContent = bots.length;
+  const wrap = document.getElementById('bots-table');
+
+  if (bots.length === 0) {
+    wrap.innerHTML = '<div class="empty-state">no bots configured</div>';
+    return;
+  }
+
+  let html = '<table><tr><th>Name</th><th>Status</th><th>Paired</th><th>Pairing Code</th><th style="text-align:right">Actions</th></tr>';
+  for (const b of bots) {
+    const statusCls = b.running ? 'ok' : 'error';
+    const statusText = b.running ? 'running' : 'stopped';
+    const code = b.pairing_code || '\u2014';
+    html += '<tr>'
+      + '<td>' + escHtml(b.name) + '</td>'
+      + '<td><span class="status-badge ' + statusCls + '">' + statusText + '</span></td>'
+      + '<td>' + (b.paired_users || 0) + '</td>'
+      + '<td><span class="pair-code" style="font-size:14px;letter-spacing:2px">' + escHtml(code) + '</span></td>'
+      + '<td class="actions">'
+      + '<button class="action-btn danger" onclick="removeBot(\'' + escAttr(b.name) + '\')" title="remove">remove</button>'
+      + '</td></tr>';
+  }
+  html += '</table>';
+  wrap.innerHTML = html;
+}
+
+function toggleAddBot() {
+  document.getElementById('add-bot-panel').classList.toggle('open');
+}
+
+async function addBot() {
+  const name = document.getElementById('bot-name').value.trim();
+  const token = document.getElementById('bot-token').value.trim();
+  if (!name) { toast('bot name required', 'error'); return; }
+  if (!token) { toast('bot token required', 'error'); return; }
+
+  const btn = document.getElementById('add-bot-btn');
+  btn.disabled = true;
+
+  const data = await api('/api/bots', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, token }),
+  });
+
+  btn.disabled = false;
+
+  if (data.name) {
+    toast('bot added: ' + data.name);
+    document.getElementById('bot-name').value = '';
+    document.getElementById('bot-token').value = '';
+    document.getElementById('add-bot-panel').classList.remove('open');
+    refreshBots();
+    refreshStatus();
+  } else {
+    toast(data.error || 'failed to add bot', 'error');
+  }
+}
+
+async function removeBot(name) {
+  const data = await api('/api/bots/' + encodeURIComponent(name), { method: 'DELETE' });
+  if (data.removed) {
+    toast('bot removed: ' + name);
+    refreshBots();
+    refreshStatus();
+  } else {
+    toast(data.error || 'failed to remove bot', 'error');
+  }
+}
+
 // ── helpers ──
 function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 function escAttr(s) { return s.replace(/"/g, '&quot;').replace(/</g, '&lt;'); }
@@ -1333,7 +1438,7 @@ function formatDuration(s) {
 
 // ── init ──
 async function refresh() {
-  await Promise.all([refreshStatus(), refreshJobs(), refreshChannels()]);
+  await Promise.all([refreshStatus(), refreshJobs(), refreshChannels(), refreshBots()]);
 }
 
 refresh();

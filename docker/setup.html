@@ -1686,6 +1686,10 @@ body::after {
       <div class="token-box" id="tokenBox" style="display:none">
         <div class="token-label">Web UI Auth Token &mdash; save this</div>
         <code id="savedToken"></code>
+        <div style="margin-top:10px;font-size:12px;color:var(--text-secondary);text-align:left">
+          Save this token somewhere safe. It will not be shown again.<br>
+          Lost it? Use <code style="font-size:11px;background:rgba(255,255,255,0.06);padding:2px 6px;border-radius:4px">/api/auth/recover</code> with your recovery secret to reset it.
+        </div>
       </div>
       <div id="pairBox" style="display:none; max-width:400px">
         <div class="pair-card">
@@ -4352,8 +4356,15 @@ async function saveConfig() {
       }
       goToStep('success');
       pollStartupStatus();
-      /* fetch pairing code if telegram was configured */
-      if (document.getElementById('telegramToken')?.value) {
+      /* show pairing code: prefer inline response, fall back to polling */
+      if (data.pairing_code) {
+        const pairBox = document.getElementById('pairBox');
+        const pairCodeEl = document.getElementById('pairCode');
+        if (pairBox && pairCodeEl) {
+          pairCodeEl.textContent = data.pairing_code;
+          pairBox.style.display = 'block';
+        }
+      } else if (document.getElementById('telegramToken')?.value) {
         fetchPairCodeForSuccess();
       }
     } else {

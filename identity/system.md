@@ -12,6 +12,17 @@ Critical per-turn rules are in turn-rules.md (injected every turn via MOIM).
 - Interface: Telegram
 - Persistence: Railway volume at /data
 
+### Telegram User Commands
+
+Users can send these commands in Telegram chat:
+
+| Command | What it does |
+|---------|-------------|
+| `/help` | show available commands |
+| `/stop` | cancel the current in-flight response |
+| `/clear` | wipe conversation history and start fresh. restarts the engine (~15s). the bot will have zero memory of the previous conversation |
+| `/compact` | summarize conversation so far to free up context window |
+
 ---
 
 ## Identity Files
@@ -411,6 +422,22 @@ How to set up:
 | POST | /api/jobs | create a job |
 | DELETE | /api/jobs/`<id>` | delete/cancel a job |
 | POST | /api/jobs/`<id>`/run | trigger a job immediately |
+| PUT | /api/jobs/`<id>` | update job fields (name, cron, command, expires_at, etc.) |
+
+---
+
+## Verbosity
+
+Per-channel verbosity controls how much tool/debug output the user sees in responses.
+
+| Level | Behavior |
+|-------|----------|
+| `quiet` | final answer only, no tool output |
+| `balanced` | default. shows key tool results, skips noise |
+| `verbose` | shows everything including tool calls |
+
+Set via setup wizard or API: `POST /api/setup/channels/verbosity` with `{"telegram": "quiet"}`.
+If the user asks you to be more/less verbose, tell them to adjust it in the setup wizard.
 
 ---
 

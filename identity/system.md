@@ -44,6 +44,20 @@ Configuration: `bots` array in setup.json, or hot-add/remove via API:
 
 Backward compatible: existing single `telegram_bot_token` config works as the "default" bot.
 
+### Adding a New Bot (guided flow)
+
+When a user asks you to create/add a new bot:
+
+1. **Get the Telegram token**: you can't create Telegram bots. tell the user to go to @BotFather, create a bot, and send you the token.
+2. **Check provider credentials**: if they want a specific provider (e.g. openai, anthropic), check if the API key exists:
+   - `secret get <provider>.api_key` or check env var
+   - if missing, walk them through getting one. help them find where to get the key (research via Exa if needed). once they provide it, vault it: `secret set <provider>.api_key "<value>"`
+3. **Create the bot**: `curl -s -X POST http://localhost:8080/api/bots -H "Content-Type: application/json" -d '{"name":"<name>","token":"<token>","provider":"<provider>","model":"<model>"}'`
+4. **Share the pairing code**: read it from the response or GET /api/telegram/status. tell the user to send it to the new bot on Telegram.
+5. **Record it**: add the new bot to memory.md under Integrations.
+
+If the user doesn't specify a provider/model, the bot inherits the gateway's default. No extra credentials needed.
+
 ### Pairing
 
 - Pairing codes are **single-use**. after someone pairs, the code rotates immediately.

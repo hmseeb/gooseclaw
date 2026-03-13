@@ -5,14 +5,14 @@
 See: .planning/PROJECT.md (updated 2026-03-13)
 
 **Core value:** A user with zero DevOps knowledge can deploy and configure GooseClaw correctly on the first try
-**Current focus:** Phase 6 - Shared Infrastructure Extraction
+**Current focus:** Phase 7 - Channel Plugin Parity
 
 ## Current Position
 
-Phase: 6 of 10 (Shared Infrastructure Extraction)
-Plan: 3 of 3 in current phase
-Status: Phase 6 Complete
-Last activity: 2026-03-13 -- Completed 06-03 Wire integration (Phase 6 complete)
+Phase: 7 of 10 (Channel Plugin Parity)
+Plan: 1 of 3 in current phase
+Status: In Progress
+Last activity: 2026-03-13 -- Completed 07-01 Generalize command handlers + ChannelRelay command interception
 
 Progress: [======----] 60% (6/10 phases complete)
 
@@ -35,6 +35,7 @@ Progress: [======----] 60% (6/10 phases complete)
 | Phase 06 P01 | 3min | 2 tasks | 2 files |
 | Phase 06 P02 | 2min | 2 tasks | 2 files |
 | Phase 06 P03 | 7min | 2 tasks | 2 files |
+| Phase 07 P01 | 3min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -52,6 +53,9 @@ Recent decisions affecting current work:
 - [Phase 06]: SessionManager uses composite key channel:user_id with atomic disk persistence, ChannelState provides per-user locks and relay kill
 - [Phase 06]: /clear scoping fixed: only removes requesting user's session (INFRA-04), goose web restart still documented limitation
 - [Phase 06]: All telegram globals replaced with SessionManager/ChannelState/CommandRouter instances (INFRA-03)
+- [Phase 07]: Command handlers use ctx.get("channel_state", _telegram_state) for backward-compatible generalization
+- [Phase 07]: ChannelRelay has command interception and active relay tracking via its own ChannelState instance
+- [Phase 07]: _handle_cmd_compact uses _session_manager.get(channel) instead of telegram-specific _get_session_id
 
 ### Pending Todos
 
@@ -75,5 +79,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-03-13
-Stopped at: Completed 06-03-PLAN.md (Wire integration -- Phase 6 complete)
+Stopped at: Completed 07-01-PLAN.md (Generalize command handlers + ChannelRelay command interception)
 Resume file: None

@@ -49,6 +49,7 @@ import re
 import secrets
 import signal
 import socket
+import ssl
 import struct
 import subprocess
 import sys
@@ -732,6 +733,19 @@ ADMIN_HTML = os.path.join(APP_DIR, "docker", "admin.html")
 PORT = int(os.environ.get("PORT", 8080))
 GOOSE_WEB_PORT = 3001
 PROXY_TIMEOUT = int(os.environ.get("GOOSECLAW_PROXY_TIMEOUT", "60"))
+
+# goosed always enables TLS (self-signed cert on localhost).
+# all gateway -> goosed connections use HTTPS with verification disabled.
+_GOOSED_SSL_CTX = ssl.create_default_context()
+_GOOSED_SSL_CTX.check_hostname = False
+_GOOSED_SSL_CTX.verify_mode = ssl.CERT_NONE
+
+
+def _goosed_conn(timeout=10):
+    """Create an HTTPS connection to the local goosed server."""
+    return http.client.HTTPSConnection(
+        "127.0.0.1", GOOSE_WEB_PORT, timeout=timeout, context=_GOOSED_SSL_CTX
+    )
 
 goose_process = None
 goose_lock = threading.Lock()
@@ -4383,7 +4397,7 @@ def _fetch_scheduled_sessions():
     if not _INTERNAL_GOOSE_TOKEN:
         return []
     try:
-        conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=10)
+        conn = _goosed_conn(timeout=10)
         conn.request("GET", "/sessions", headers={
             "X-Secret-Key": _INTERNAL_GOOSE_TOKEN,
         })
@@ -4405,7 +4419,7 @@ def _fetch_session_messages(session_id):
     if not _INTERNAL_GOOSE_TOKEN:
         return []
     try:
-        conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=15)
+        conn = _goosed_conn(timeout=15)
         conn.request("GET", f"/sessions/{urllib.parse.quote(str(session_id))}", headers={
             "X-Secret-Key": _INTERNAL_GOOSE_TOKEN,
         })
@@ -4738,7 +4752,7 @@ def _create_goose_session():
 
     try:
         payload = json.dumps({"working_dir": "/data"}).encode("utf-8")
-        conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=10)
+        conn = _goosed_conn(timeout=10)
         conn.request("POST", "/agent/start", body=payload, headers={
             "Content-Type": "application/json",
             "X-Secret-Key": _INTERNAL_GOOSE_TOKEN,
@@ -4755,7 +4769,7 @@ def _create_goose_session():
                 return str(sid)
 
         # fallback: try GET /sessions to find the latest
-        conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=10)
+        conn = _goosed_conn(timeout=10)
         conn.request("GET", "/sessions", headers={
             "X-Secret-Key": _INTERNAL_GOOSE_TOKEN,
         })
@@ -5115,7 +5129,7 @@ def _update_goose_session_provider(session_id, model_config):
             "model": model,
             "session_id": session_id,
         }).encode()
-        conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=10)
+        conn = _goosed_conn(timeout=10)
         conn.request("POST", "/agent/update_provider", body=payload, headers={
             "Content-Type": "application/json",
             "X-Secret-Key": _INTERNAL_GOOSE_TOKEN,
@@ -5371,7 +5385,7 @@ def _do_rest_relay(user_text, session_id, content_blocks=None, sock_ref=None):
 
     conn = None
     try:
-        conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=300)
+        conn = _goosed_conn(timeout=300)
         if sock_ref is not None:
             sock_ref[0] = conn  # for external cancellation
 
@@ -5472,7 +5486,7 @@ def _do_rest_relay_streaming(user_text, session_id, flush_cb, verbosity="balance
     conn = None
 
     try:
-        conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=300)
+        conn = _goosed_conn(timeout=300)
         if sock_ref is not None:
             sock_ref[0] = conn
 
@@ -6059,7 +6073,7 @@ def start_goose_web():
                 print(f"[gateway] goosed exited during startup with code {exit_code}")
                 return False
             try:
-                conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=2)
+                conn = _goosed_conn(timeout=2)
                 conn.request("GET", "/status")
                 resp = conn.getresponse()
                 if resp.status == 200:
@@ -6124,7 +6138,7 @@ def goose_health_monitor():
             if consecutive_failures > 0:
                 # verify it's actually responding
                 try:
-                    conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=3)
+                    conn = _goosed_conn(timeout=3)
                     conn.request("GET", "/status")
                     resp = conn.getresponse()
                     conn.close()
@@ -6379,7 +6393,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
     def _ping_goosed(self):
         """Try to ping goosed subprocess. Returns 'healthy', 'unhealthy (HTTP N)', or 'unreachable'."""
         try:
-            conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=2)
+            conn = _goosed_conn(timeout=2)
             conn.request("GET", "/status")
             resp = conn.getresponse()
             conn.close()
@@ -7580,7 +7594,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             return
 
         try:
-            conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=PROXY_TIMEOUT)
+            conn = _goosed_conn(timeout=PROXY_TIMEOUT)
 
             # forward headers
             headers = {}

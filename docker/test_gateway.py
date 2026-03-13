@@ -6719,5 +6719,120 @@ class TestAtomicSetupWrite(unittest.TestCase):
         self.assertEqual(mode, 0o600)
 
 
+# ── get_safe_setup / redaction ───────────────────────────────────────────────
+
+class TestGetSafeSetup(unittest.TestCase):
+    """Tests for get_safe_setup() sensitive field redaction."""
+
+    REDACTED = "***REDACTED***"
+
+    FULL_SETUP = {
+        "provider_type": "anthropic",
+        "model": "claude-sonnet-4-20250514",
+        "api_key": "sk-ant-REAL-KEY-123",
+        "password_hash": "pbkdf2:sha256:abc123",
+        "web_auth_token_hash": "sha256:hashed-token-value",
+        "claude_setup_token": "cst_real_token_456",
+        "azure_key": "az-key-789",
+        "telegram_bot_token": "123456:ABC-DEF",
+        "litellm_host": "http://internal-llm:4000",
+        "system_prompt": "You are helpful.",
+        "memory_idle_minutes": 10,
+        "models": [
+            {"id": "m1", "model": "claude-sonnet-4-20250514", "provider": "anthropic"}
+        ],
+    }
+
+    SENSITIVE_KEYS = [
+        "api_key",
+        "password_hash",
+        "web_auth_token_hash",
+        "claude_setup_token",
+        "azure_key",
+        "telegram_bot_token",
+        "litellm_host",
+    ]
+
+    @patch("gateway.load_setup")
+    def test_redacts_all_sensitive_fields(self, mock_load):
+        mock_load.return_value = dict(self.FULL_SETUP)
+        safe = gateway.get_safe_setup()
+        for key in self.SENSITIVE_KEYS:
+            self.assertEqual(safe[key], self.REDACTED,
+                             f"{key} should be redacted")
+
+    @patch("gateway.load_setup")
+    def test_preserves_non_sensitive_fields(self, mock_load):
+        mock_load.return_value = dict(self.FULL_SETUP)
+        safe = gateway.get_safe_setup()
+        self.assertEqual(safe["provider_type"], "anthropic")
+        self.assertEqual(safe["model"], "claude-sonnet-4-20250514")
+        self.assertEqual(safe["system_prompt"], "You are helpful.")
+        self.assertEqual(safe["memory_idle_minutes"], 10)
+        self.assertEqual(safe["models"],
+                         [{"id": "m1", "model": "claude-sonnet-4-20250514", "provider": "anthropic"}])
+
+    @patch("gateway.load_setup")
+    def test_returns_none_when_no_setup(self, mock_load):
+        mock_load.return_value = None
+        self.assertIsNone(gateway.get_safe_setup())
+
+    @patch("gateway.load_setup")
+    def test_missing_sensitive_key_not_injected(self, mock_load):
+        """If a sensitive key is absent from setup, get_safe_setup should not add it."""
+        mock_load.return_value = {"provider_type": "openai", "model": "gpt-4o"}
+        safe = gateway.get_safe_setup()
+        for key in self.SENSITIVE_KEYS:
+            self.assertNotIn(key, safe,
+                             f"{key} should not appear when absent from source")
+
+    @patch("gateway.load_setup")
+    def test_does_not_mutate_original(self, mock_load):
+        original = dict(self.FULL_SETUP)
+        mock_load.return_value = original
+        gateway.get_safe_setup()
+        # original should still have real values
+        self.assertEqual(original["api_key"], "sk-ant-REAL-KEY-123")
+
+    @patch("gateway.load_setup")
+    def test_redacts_saved_keys(self, mock_load):
+        setup = dict(self.FULL_SETUP)
+        setup["saved_keys"] = {
+            "anthropic": "sk-real-key",
+            "azure": {"key": "az-real", "endpoint": "https://my.azure.com"},
+        }
+        mock_load.return_value = setup
+        safe = gateway.get_safe_setup()
+        self.assertEqual(safe["saved_keys"]["anthropic"], self.REDACTED)
+        self.assertEqual(safe["saved_keys"]["azure"]["key"], self.REDACTED)
+        self.assertEqual(safe["saved_keys"]["azure"]["endpoint"], self.REDACTED)
+
+
+class TestGetConfigEndpointRedaction(unittest.TestCase):
+    """GET /api/setup/config should use get_safe_setup for redaction."""
+
+    @patch("gateway.get_safe_setup")
+    @patch("gateway.load_setup")
+    def test_config_endpoint_uses_get_safe_setup(self, mock_load, mock_safe):
+        """handle_get_config must delegate to get_safe_setup."""
+        mock_load.return_value = {"provider_type": "anthropic"}
+        mock_safe.return_value = {"provider_type": "anthropic", "api_key": "***REDACTED***"}
+        handler = MagicMock()
+        handler.path = "/api/setup/config"
+        sent = {}
+        def capture_send_json(code, data):
+            sent["code"] = code
+            sent["data"] = data
+        handler.send_json = capture_send_json
+
+        with patch("gateway.check_auth", return_value=True), \
+             patch("gateway.migrate_config_models"):
+            gateway.GatewayHandler.handle_get_config(handler)
+
+        mock_safe.assert_called_once()
+        self.assertTrue(sent["data"]["configured"])
+        self.assertEqual(sent["data"]["config"]["api_key"], "***REDACTED***")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -117,7 +117,7 @@ Plans:
 - [x] **Phase 12: Inbound Media Pipeline** - Download + normalize incoming media from Telegram (getFile API). MediaContent class. Base64 encoding for images. Replace MEDIA_REPLY with actual processing. (completed 2026-03-13)
 - [x] **Phase 13: Relay Protocol Upgrade** - Switch from custom WS text-only to goosed REST /reply with multimodal content blocks. Parse typed content blocks in responses. (completed 2026-03-13)
 - [x] **Phase 14: Outbound Rich Media** - Implement send_image, send_voice, send_file on Telegram adapter. Graceful degradation. Media-aware notify_all. (completed 2026-03-13)
-- [ ] **Phase 15: Reference Channel Plugin** - Build Slack or Discord plugin with full rich media using the v2 contract. Validates the abstraction.
+- [x] **Phase 15: Reference Channel Plugin** - Build Slack or Discord plugin with full rich media using the v2 contract. Validates the abstraction. (completed 2026-03-13)
 
 ## Phase Details (v3.0)
 
@@ -182,7 +182,7 @@ Plans:
   3. Media flows end-to-end (user sends image on platform → goose sees it → goose responds with image → user sees it)
   4. Adding this plugin required zero changes to gateway core code
   5. Plugin serves as a template for other channels
-**Plans:** TBD during phase planning
+**Plans:** 1/1 plans complete
 
 ## Progress
 
@@ -210,4 +210,4 @@ Phase 15 (reference plugin) depends on Phase 14 (outbound media).
 | 12. Inbound Media Pipeline | v3.0 | 2/2 | Complete | 2026-03-13 |
 | 13. Relay Protocol Upgrade | 2/2 | Complete   | 2026-03-13 | - |
 | 14. Outbound Rich Media | v3.0 | 2/2 | Complete | 2026-03-13 |
-| 15. Reference Channel Plugin | v3.0 | 0/? | Pending | - |
+| 15. Reference Channel Plugin | 1/1 | Complete   | 2026-03-13 | - |

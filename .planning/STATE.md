@@ -9,13 +9,13 @@ See: .planning/PROJECT.md (updated 2026-03-13)
 
 ## Current Position
 
-Phase: 14 of 15 (complete)
-Plan: 2 of 2 (done)
-Status: Phase 14 complete, full outbound media pipeline wired end-to-end
-Last activity: 2026-03-13 -- Phase 14 Plan 02 executed: media routing wired into BotInstance, ChannelRelay, legacy poll, notify_all. 447 tests passing.
+Phase: 15 of 15 (complete)
+Plan: 1 of 1 (done)
+Status: Phase 15 complete, Discord channel plugin with full media support proves v2 contract
+Last activity: 2026-03-13 -- Phase 15 Plan 01 executed: Discord plugin with DiscordOutboundAdapter, Gateway WebSocket polling, multipart uploads. 463 tests passing. Zero gateway.py changes.
 
 Progress v2.0: [==========] 100% (10/10 phases complete, shipped)
-Progress v3.0: [========..] 80% (4/5 phases complete)
+Progress v3.0: [==========] 100% (5/5 phases complete)
 
 ## Performance Metrics
 
@@ -52,6 +52,7 @@ Progress v3.0: [========..] 80% (4/5 phases complete)
 | Phase 13 P02 | 12min | 2 tasks | 2 files |
 | Phase 14 P01 | 4min | 2 tasks | 2 files |
 | Phase 14 P02 | 14min | 2 tasks | 2 files |
+| Phase 15 P01 | 6min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -111,6 +112,8 @@ Recent decisions affecting current work:
 - [Phase 14]: OutboundAdapter base class send_image/send_voice/send_file accept **kwargs for subclass signature compat
 - [Phase 14]: notify_all uses try/except TypeError for backward-compat media kwarg passing to old handlers
 - [Phase 14]: Media routing placed after text delivery in all relay paths, own try/except prevents media errors from crashing text delivery
+- [Phase 15]: Import gateway classes via sys.modules __main__ then direct import then fallback stubs for cross-context compatibility
+- [Phase 15]: v2 channel plugin pattern: CHANNEL dict with name, version=2, send, adapter, poll, credentials, setup
 
 ### Pending Todos
 
@@ -138,5 +141,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-03-13
-Stopped at: Completed 14-02-PLAN.md (media routing wiring). 447 tests passing. Full outbound media pipeline done. Phase 14 complete.
+Stopped at: Completed 15-01-PLAN.md (Discord channel plugin). 463 tests passing. v3.0 Rich Media & Channel Flexibility milestone complete.
 Resume file: None

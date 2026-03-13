@@ -137,8 +137,8 @@
 | MEDIA-12 | Phase 13 | Complete |
 | MEDIA-13 | Phase 14 | Complete |
 | MEDIA-14 | Phase 14 | Complete |
-| MEDIA-15 | Phase 15 | Pending |
-| MEDIA-16 | Phase 15 | Pending |
+| MEDIA-15 | Phase 15 | Complete |
+| MEDIA-16 | Phase 15 | Complete |
 
 **Coverage (v3.0):**
 - v3.0 requirements: 16 total

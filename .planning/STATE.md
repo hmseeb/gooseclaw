@@ -9,13 +9,13 @@ See: .planning/PROJECT.md (updated 2026-03-13)
 
 ## Current Position
 
-Phase: 13 of 15 (in progress)
-Plan: 1 of 2 (done)
-Status: Phase 13 Plan 01 complete, REST relay helpers shipped
-Last activity: 2026-03-13 -- Phase 13 Plan 01 executed: SSE parser + content blocks + REST relay functions, 408 tests passing
+Phase: 13 of 15 (complete)
+Plan: 2 of 2 (done)
+Status: Phase 13 complete, relay protocol fully upgraded to REST
+Last activity: 2026-03-13 -- Phase 13 Plan 02 executed: REST relay wired into all call sites, WS code removed, 416 tests passing
 
 Progress v2.0: [==========] 100% (10/10 phases complete, shipped)
-Progress v3.0: [====......] 40% (2/5 phases complete)
+Progress v3.0: [======....] 60% (3/5 phases complete)
 
 ## Performance Metrics
 
@@ -49,6 +49,7 @@ Progress v3.0: [====......] 40% (2/5 phases complete)
 | Phase 12 P01 | 3min | 2 tasks | 2 files |
 | Phase 12 P02 | 3min | 2 tasks | 2 files |
 | Phase 13 P01 | 3min | 2 tasks | 2 files |
+| Phase 13 P02 | 12min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -101,6 +102,9 @@ Recent decisions affecting current work:
 - [Phase 13]: REST relay returns 3-tuple (text, error, media_blocks) to carry image blocks for Phase 14
 - [Phase 13]: _extract_response_content handles nested toolResponse images for tool screenshot capture
 - [Phase 13]: Streaming relay reuses _StreamBuffer pattern from WS relay with identical flush semantics
+- [Phase 13]: _relay_to_goose_web returns 3-tuple (text, error, media_blocks), all 15 call sites updated
+- [Phase 13]: WS relay code fully removed (~280 lines), REST /reply + SSE is the sole relay path
+- [Phase 13]: content_blocks from InboundMessage media flow through BotInstance, ChannelRelay, and legacy poll loop
 
 ### Pending Todos
 
@@ -128,5 +132,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-03-13
-Stopped at: Completed 13-01-PLAN.md (REST relay helpers). 408 tests passing. SSE parser, content block builder, response extractor, _do_rest_relay, _do_rest_relay_streaming all shipped.
+Stopped at: Completed 13-02-PLAN.md (relay protocol upgrade). 416 tests passing. REST relay wired into all call sites, WS code removed, content_blocks flow through to goose.
 Resume file: None

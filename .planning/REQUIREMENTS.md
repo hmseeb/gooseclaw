@@ -132,9 +132,9 @@
 | MEDIA-07 | Phase 12 | Complete |
 | MEDIA-08 | Phase 12 | Complete |
 | MEDIA-09 | Phase 12 | Complete |
-| MEDIA-10 | Phase 13 | Pending |
-| MEDIA-11 | Phase 13 | Pending |
-| MEDIA-12 | Phase 13 | Pending |
+| MEDIA-10 | Phase 13 | Complete |
+| MEDIA-11 | Phase 13 | Complete |
+| MEDIA-12 | Phase 13 | Complete |
 | MEDIA-13 | Phase 14 | Pending |
 | MEDIA-14 | Phase 14 | Pending |
 | MEDIA-15 | Phase 15 | Pending |

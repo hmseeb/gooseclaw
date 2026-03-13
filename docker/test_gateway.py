@@ -2699,5 +2699,253 @@ class TestBotPairing(unittest.TestCase):
         self.assertIsNone(bot.pair_code)
 
 
+# ── BotManager wiring (09-03) ────────────────────────────────────────────────
+
+class TestBotWiring(unittest.TestCase):
+    """Tests that BotManager is wired into apply_config, startup, and _is_goose_gateway_running."""
+
+    def setUp(self):
+        """Clear _bot_manager between tests to avoid cross-contamination."""
+        bm = gateway._bot_manager
+        with bm._lock:
+            bm._bots.clear()
+
+    def tearDown(self):
+        bm = gateway._bot_manager
+        with bm._lock:
+            for bot in bm._bots.values():
+                bot.running = False
+            bm._bots.clear()
+
+    def test_bot_manager_module_level_exists(self):
+        """gateway._bot_manager is a BotManager instance."""
+        self.assertIsInstance(gateway._bot_manager, gateway.BotManager)
+
+    @patch("gateway.urllib.request.urlopen")
+    @patch("gateway._resolve_bot_configs")
+    @patch("gateway.load_setup", return_value={})
+    @patch("gateway.os.path.exists", return_value=False)
+    def test_apply_config_starts_bots_via_manager(self, _mock_exists, _mock_setup, mock_resolve, mock_urlopen):
+        """apply_config uses BotManager to start bots from resolved configs."""
+        mock_resolve.return_value = [{"name": "default", "token": "123:ABC"}]
+        mock_urlopen.return_value.__enter__ = lambda s: MagicMock(read=lambda: b'{"ok":true,"result":[]}')
+        mock_urlopen.return_value.__exit__ = MagicMock(return_value=False)
+
+        # Mock BotInstance.start to avoid real network/threads
+        with patch.object(gateway.BotInstance, "start"):
+            gateway.apply_config({"provider_type": "openai", "api_key": "sk-test"})
+
+        bot = gateway._bot_manager.get_bot("default")
+        self.assertIsNotNone(bot, "apply_config should create a 'default' bot in _bot_manager")
+
+    @patch("gateway.urllib.request.urlopen")
+    @patch("gateway._resolve_bot_configs")
+    @patch("gateway.load_setup", return_value={})
+    @patch("gateway.os.path.exists", return_value=False)
+    def test_apply_config_multi_bot(self, _mock_exists, _mock_setup, mock_resolve, mock_urlopen):
+        """apply_config with multiple bot configs creates all bots."""
+        mock_resolve.return_value = [
+            {"name": "default", "token": "111:AAA"},
+            {"name": "research", "token": "222:BBB"},
+        ]
+        mock_urlopen.return_value.__enter__ = lambda s: MagicMock(read=lambda: b'{"ok":true,"result":[]}')
+        mock_urlopen.return_value.__exit__ = MagicMock(return_value=False)
+
+        with patch.object(gateway.BotInstance, "start"):
+            gateway.apply_config({"provider_type": "openai", "api_key": "sk-test"})
+
+        self.assertIsNotNone(gateway._bot_manager.get_bot("default"))
+        self.assertIsNotNone(gateway._bot_manager.get_bot("research"))
+
+    @patch("gateway.urllib.request.urlopen")
+    @patch("gateway._resolve_bot_configs")
+    @patch("gateway.load_setup", return_value={})
+    @patch("gateway.os.path.exists", return_value=False)
+    def test_apply_config_default_bot_channel_key_telegram(self, _mock_exists, _mock_setup, mock_resolve, mock_urlopen):
+        """Default bot gets channel_key='telegram', not 'telegram:default'."""
+        mock_resolve.return_value = [{"name": "default", "token": "123:ABC"}]
+        mock_urlopen.return_value.__enter__ = lambda s: MagicMock(read=lambda: b'{"ok":true,"result":[]}')
+        mock_urlopen.return_value.__exit__ = MagicMock(return_value=False)
+
+        with patch.object(gateway.BotInstance, "start"):
+            gateway.apply_config({"provider_type": "openai", "api_key": "sk-test"})
+
+        bot = gateway._bot_manager.get_bot("default")
+        self.assertIsNotNone(bot)
+        self.assertEqual(bot.channel_key, "telegram")
+
+    def test_is_goose_gateway_running_uses_manager(self):
+        """_is_goose_gateway_running returns True when manager has running bots."""
+        bot = gateway._bot_manager.add_bot("test_running", "tok:running", channel_key="telegram")
+        bot.running = True
+        running, _ = gateway._is_goose_gateway_running()
+        self.assertTrue(running)
+
+    def test_is_goose_gateway_running_no_bots(self):
+        """_is_goose_gateway_running returns (False, []) with empty manager."""
+        running, errs = gateway._is_goose_gateway_running()
+        self.assertFalse(running)
+        self.assertEqual(errs, [])
+
+    @patch("gateway.urllib.request.urlopen")
+    def test_start_telegram_gateway_backward_compat(self, mock_urlopen):
+        """start_telegram_gateway creates a bot in _bot_manager (backward compat)."""
+        mock_urlopen.return_value.__enter__ = lambda s: MagicMock(read=lambda: b'{"ok":true,"result":[]}')
+        mock_urlopen.return_value.__exit__ = MagicMock(return_value=False)
+
+        with patch.object(gateway.BotInstance, "start"):
+            gateway.start_telegram_gateway("999:XYZ")
+
+        bot = gateway._bot_manager.get_bot("default")
+        self.assertIsNotNone(bot, "start_telegram_gateway should create 'default' bot in _bot_manager")
+
+
+class TestBotAPIEndpoints(unittest.TestCase):
+    """Tests that API endpoints work with BotManager."""
+
+    def setUp(self):
+        bm = gateway._bot_manager
+        with bm._lock:
+            bm._bots.clear()
+
+    def tearDown(self):
+        bm = gateway._bot_manager
+        with bm._lock:
+            for bot in bm._bots.values():
+                bot.running = False
+            bm._bots.clear()
+
+    def _make_handler(self, path="/api/telegram/status", method="GET"):
+        """Create a mock GatewayHandler for testing endpoints."""
+        handler = MagicMock(spec=gateway.GatewayHandler)
+        handler.path = path
+        handler.command = method
+        handler.headers = {}
+        handler.client_address = ("127.0.0.1", 12345)
+        handler._json_response = None
+
+        def mock_send_json(status, data):
+            handler._json_response = (status, data)
+
+        handler.send_json = mock_send_json
+        return handler
+
+    @patch("gateway._is_first_boot", return_value=False)
+    @patch("gateway.get_bot_token", return_value="tok:test")
+    @patch("gateway.get_paired_chat_ids", return_value=[])
+    def test_telegram_status_returns_bots_array(self, _mock_paired, _mock_token, _mock_boot):
+        """handle_telegram_status response includes 'bots' array."""
+        bot = gateway._bot_manager.add_bot("default", "tok:status", channel_key="telegram")
+        bot.running = True
+        bot.pair_code = "ABC123"
+
+        handler = self._make_handler()
+        gateway.GatewayHandler.handle_telegram_status(handler)
+
+        self.assertIsNotNone(handler._json_response)
+        status, data = handler._json_response
+        self.assertEqual(status, 200)
+        self.assertIn("bots", data, "Response should include 'bots' array")
+        self.assertIsInstance(data["bots"], list)
+        self.assertEqual(len(data["bots"]), 1)
+        self.assertEqual(data["bots"][0]["name"], "default")
+
+    @patch("gateway._is_first_boot", return_value=False)
+    @patch("gateway.get_bot_token", return_value="tok:test")
+    @patch("gateway.get_paired_chat_ids", return_value=["12345"])
+    def test_telegram_status_backward_compat_fields(self, _mock_paired, _mock_token, _mock_boot):
+        """handle_telegram_status still includes top-level backward-compat fields."""
+        bot = gateway._bot_manager.add_bot("default", "tok:compat", channel_key="telegram")
+        bot.running = True
+        bot.pair_code = "XYZ789"
+
+        handler = self._make_handler()
+        gateway.GatewayHandler.handle_telegram_status(handler)
+
+        status, data = handler._json_response
+        self.assertEqual(status, 200)
+        # backward-compat top-level fields
+        self.assertIn("running", data)
+        self.assertIn("bot_configured", data)
+        self.assertIn("paired_users", data)
+        self.assertIn("pairing_code", data)
+
+    @patch("gateway._is_first_boot", return_value=False)
+    @patch("gateway.check_auth", return_value=True)
+    def test_telegram_pair_default_bot(self, _mock_auth, _mock_boot):
+        """handle_telegram_pair with no bot name generates code for default bot."""
+        bot = gateway._bot_manager.add_bot("default", "tok:pair", channel_key="telegram")
+        bot.running = True
+
+        handler = self._make_handler(path="/api/telegram/pair", method="POST")
+        gateway.GatewayHandler.handle_telegram_pair(handler)
+
+        self.assertIsNotNone(handler._json_response)
+        status, data = handler._json_response
+        self.assertEqual(status, 200)
+        self.assertIn("code", data)
+        self.assertIsNotNone(data["code"])
+
+    @patch("gateway._is_first_boot", return_value=False)
+    @patch("gateway.check_auth", return_value=True)
+    def test_telegram_pair_named_bot(self, _mock_auth, _mock_boot):
+        """handle_telegram_pair with bot=research generates code for that bot."""
+        gateway._bot_manager.add_bot("default", "tok:d", channel_key="telegram")
+        research = gateway._bot_manager.add_bot("research", "tok:r", channel_key="telegram:research")
+        research.running = True
+
+        handler = self._make_handler(path="/api/telegram/pair?bot=research", method="POST")
+        gateway.GatewayHandler.handle_telegram_pair(handler)
+
+        self.assertIsNotNone(handler._json_response)
+        status, data = handler._json_response
+        self.assertEqual(status, 200)
+        self.assertIn("code", data)
+        self.assertEqual(data.get("bot"), "research")
+
+    @patch("gateway._is_first_boot", return_value=False)
+    @patch("gateway.check_auth", return_value=True)
+    def test_telegram_pair_unknown_bot(self, _mock_auth, _mock_boot):
+        """handle_telegram_pair with bot=nonexistent returns 400."""
+        handler = self._make_handler(path="/api/telegram/pair?bot=nonexistent", method="POST")
+        gateway.GatewayHandler.handle_telegram_pair(handler)
+
+        self.assertIsNotNone(handler._json_response)
+        status, data = handler._json_response
+        self.assertEqual(status, 400)
+        self.assertIn("error", data)
+
+
+class TestBotShutdown(unittest.TestCase):
+    """Tests that shutdown calls _bot_manager.stop_all()."""
+
+    def setUp(self):
+        bm = gateway._bot_manager
+        with bm._lock:
+            bm._bots.clear()
+
+    def tearDown(self):
+        bm = gateway._bot_manager
+        with bm._lock:
+            for bot in bm._bots.values():
+                bot.running = False
+            bm._bots.clear()
+
+    def test_shutdown_stops_all_bots(self):
+        """After stop_all, all bots should have running=False."""
+        bot1 = gateway._bot_manager.add_bot("bot1", "tok:1")
+        bot2 = gateway._bot_manager.add_bot("bot2", "tok:2")
+        bot1.running = True
+        bot2.running = True
+
+        gateway._bot_manager.stop_all()
+
+        # stop_all clears the registry, so get_all returns empty
+        self.assertEqual(len(gateway._bot_manager.get_all()), 0)
+        # but the bot objects themselves should have running=False
+        self.assertFalse(bot1.running)
+        self.assertFalse(bot2.running)
+
+
 if __name__ == "__main__":
     unittest.main()

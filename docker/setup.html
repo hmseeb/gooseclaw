@@ -1593,9 +1593,24 @@ body::after {
       </div>
     </div>
     <div class="field">
-      <label>Web Auth Token</label>
-      <input type="text" id="webAuthToken" placeholder="auto-generated if blank">
-      <div class="field-hint">set a memorable token or leave blank for a random one</div>
+      <label>Password</label>
+      <div class="secret-field-wrapper">
+        <input type="password" id="webPassword" placeholder="choose a password for web access">
+        <button type="button" class="secret-toggle-btn" onclick="toggleSecretVisibility(this)" title="Toggle visibility">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
+      </div>
+      <div class="field-hint">required. you'll use this to log in.</div>
+      <div id="passwordError" style="display:none;font-size:12px;color:var(--error);margin-top:4px"></div>
+    </div>
+    <div class="field">
+      <label>Confirm Password</label>
+      <div class="secret-field-wrapper">
+        <input type="password" id="webPasswordConfirm" placeholder="re-enter your password">
+        <button type="button" class="secret-toggle-btn" onclick="toggleSecretVisibility(this)" title="Toggle visibility">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
+      </div>
     </div>
     <div class="advanced-section">
       <button type="button" class="advanced-toggle" onclick="toggleAdvanced()" id="advancedToggle">
@@ -1629,7 +1644,7 @@ body::after {
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M8.5 3L4.5 7L8.5 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
         Back
       </button>
-      <button class="btn btn-primary" onclick="goToStep(4)">
+      <button class="btn btn-primary" onclick="validatePasswordAndContinue()">
         Continue
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5.5 3L9.5 7L5.5 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
@@ -1683,14 +1698,7 @@ body::after {
           </button>
         </div>
       </div>
-      <div class="token-box" id="tokenBox" style="display:none">
-        <div class="token-label">Web UI Auth Token &mdash; save this</div>
-        <code id="savedToken"></code>
-        <div style="margin-top:10px;font-size:12px;color:var(--text-secondary);text-align:left">
-          Save this token somewhere safe. It will not be shown again.<br>
-          Lost it? Use <code style="font-size:11px;background:rgba(255,255,255,0.06);padding:2px 6px;border-radius:4px">/api/auth/recover</code> with your recovery secret to reset it.
-        </div>
-      </div>
+      <!-- token box removed: password-based auth, no one-time token display -->
       <div id="pairBox" style="display:none; max-width:400px">
         <div class="pair-card">
           <div class="pair-card-header">
@@ -1801,11 +1809,11 @@ body::after {
         <button class="dashboard-edit-btn" onclick="startDashboardEdit('telegram')">edit</button>
       </div>
       <div class="dashboard-field" id="df-authtoken">
-        <span class="dashboard-field-label">Auth Token</span>
+        <span class="dashboard-field-label">Password</span>
         <span class="dashboard-field-value" id="dfv-authtoken"></span>
         <div class="dashboard-field-edit" id="dfe-authtoken">
           <div class="secret-field-wrapper">
-            <input type="password" id="dfi-authtoken" placeholder="leave blank to keep current">
+            <input type="password" id="dfi-authtoken" placeholder="enter new password">
             <button type="button" class="secret-toggle-btn" onclick="toggleSecretVisibility(this)" title="Toggle visibility">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
             </button>
@@ -1831,7 +1839,7 @@ body::after {
   <div class="step" id="step-recover">
     <div class="step-title">Account Recovery</div>
     <p style="color:var(--text-secondary);margin-bottom:20px;font-size:14px">
-      Lost your auth token? Enter the recovery secret to get a new one.<br>
+      Lost your password? Enter the recovery secret to reset your password.<br>
       <span style="color:var(--text-tertiary);font-size:12px">
         The recovery secret is the GOOSECLAW_RECOVERY_SECRET environment variable set in your deployment.
       </span>
@@ -1848,7 +1856,7 @@ body::after {
     <div id="recoveryResult" style="display:none"></div>
     <div class="btn-row">
       <button class="btn btn-primary" onclick="submitRecovery()">
-        Reset Auth Token
+        Reset Password
       </button>
     </div>
   </div>
@@ -2770,7 +2778,7 @@ function buildSummary() {
 
   const timezone = document.getElementById('timezone')?.value || 'UTC';
   const telegram = document.getElementById('telegramToken')?.value;
-  const webAuth = document.getElementById('webAuthToken')?.value;
+  const webAuth = document.getElementById('webPassword')?.value;
 
   const rows = [
     {
@@ -2794,9 +2802,9 @@ function buildSummary() {
       cls: telegram ? 'ok' : 'muted'
     },
     {
-      key: 'Auth Token',
-      val: webAuth ? 'Custom' : 'Auto-generated',
-      cls: webAuth ? '' : 'muted'
+      key: 'Password',
+      val: webAuth ? 'Set' : 'Not set',
+      cls: webAuth ? 'ok' : 'muted'
     },
   ];
 
@@ -2821,6 +2829,44 @@ function buildSummary() {
   </div>`;
 
   document.getElementById('configSummary').innerHTML = html;
+}
+
+/* ── password validation (step 3 -> step 4) ── */
+function validatePasswordAndContinue() {
+  const pw = document.getElementById('webPassword')?.value || '';
+  const pwConfirm = document.getElementById('webPasswordConfirm')?.value || '';
+  const errEl = document.getElementById('passwordError');
+
+  /* on first setup, password is required */
+  if (!isReconfigure && !pw) {
+    if (errEl) {
+      errEl.textContent = 'Password is required';
+      errEl.style.display = 'block';
+    }
+    return;
+  }
+
+  /* if password entered, validate length and match */
+  if (pw) {
+    if (pw.length < 4) {
+      if (errEl) {
+        errEl.textContent = 'Password must be at least 4 characters';
+        errEl.style.display = 'block';
+      }
+      return;
+    }
+    if (pw !== pwConfirm) {
+      if (errEl) {
+        errEl.textContent = 'Passwords do not match';
+        errEl.style.display = 'block';
+      }
+      return;
+    }
+  }
+
+  /* clear error and proceed */
+  if (errEl) errEl.style.display = 'none';
+  goToStep(4);
 }
 
 /* ── step navigation ── */
@@ -3214,12 +3260,11 @@ function renderDashboardValues(config) {
     }
   }
 
-  /* auth token */
+  /* password */
   const afv = document.getElementById('dfv-authtoken');
   if (afv) {
-    const at = config.web_auth_token;
-    afv.textContent = at ? '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022' : 'Auto-generated';
-    afv.className = 'dashboard-field-value' + (at ? '' : ' muted');
+    afv.textContent = 'Set';
+    afv.className = 'dashboard-field-value ok';
   }
 
 }
@@ -3250,13 +3295,8 @@ function startDashboardEdit(field) {
   } else if (field === 'authtoken') {
     const inp = document.getElementById('dfi-authtoken');
     if (inp) {
-      const at = dashboardConfig.web_auth_token;
-      if (at) {
-        inp.value = at;
-      } else {
-        inp.value = '';
-        inp.placeholder = 'leave blank to auto-generate';
-      }
+      inp.value = '';
+      inp.placeholder = 'enter new password (leave blank to keep current)';
     }
   }
 }
@@ -3282,7 +3322,7 @@ async function saveDashboardChanges() {
     config.telegram_bot_token = newTg || config.telegram_bot_token || '';
   }
 
-  /* auth token */
+  /* password */
   const atField = document.getElementById('df-authtoken');
   const newAt = document.getElementById('dfi-authtoken')?.value?.trim();
   if (atField && atField.classList.contains('editing') && newAt) {
@@ -4111,17 +4151,17 @@ async function submitRecovery() {
       body: JSON.stringify({ secret }),
     });
     const data = await resp.json();
-    if (data.success && data.auth_token) {
+    if (data.success && data.temporary_password) {
       resultEl.innerHTML = `
         <div style="background:var(--success-bg);border:1px solid rgba(52,211,153,0.2);border-radius:var(--radius-md);padding:16px;text-align:left">
-          <strong style="color:var(--success)">Token reset successfully!</strong><br>
-          <div class="token-box" style="margin-top:12px;display:block">
-            <div class="token-label">New Auth Token &mdash; save this</div>
-            <code>${data.auth_token}</code>
+          <strong style="color:var(--success)">Password reset successfully!</strong><br>
+          <div style="margin-top:12px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:12px">
+            <div style="font-size:12px;color:var(--text-secondary);margin-bottom:4px">Temporary password</div>
+            <code style="font-size:14px">${data.temporary_password}</code>
           </div>
           <p style="margin-top:12px;font-size:13px;color:var(--text-secondary)">
-            Use this token to log in. It won't be shown again.<br>
-            <a href="/setup" style="color:var(--text-accent)">Go to setup page</a>
+            Log in with this temporary password, then change it in settings.<br>
+            <a href="/login" style="color:var(--text-accent)">Go to login page</a>
           </p>
         </div>`;
     } else {
@@ -4253,7 +4293,7 @@ async function saveConfig() {
     model: document.getElementById('model')?.value || '',
     timezone: document.getElementById('timezone')?.value || 'UTC',
     telegram_bot_token: document.getElementById('telegramToken')?.value || '',
-    web_auth_token: document.getElementById('webAuthToken')?.value || '',
+    web_auth_token: document.getElementById('webPassword')?.value || '',
   };
 
   if (selectedProvider === 'claude-code') {
@@ -4321,7 +4361,7 @@ async function saveConfig() {
     delete config.telegram_bot_token;
   }
 
-  /* handle web_auth_token: keep existing if blank during reconfigure */
+  /* handle password: keep existing if blank during reconfigure */
   if (!config.web_auth_token && isReconfigure) {
     delete config.web_auth_token;
   }
@@ -4350,10 +4390,6 @@ async function saveConfig() {
     });
     const data = await resp.json();
     if (data.success) {
-      if (data.auth_token) {
-        document.getElementById('savedToken').textContent = data.auth_token;
-        document.getElementById('tokenBox').style.display = 'block';
-      }
       goToStep('success');
       pollStartupStatus();
       /* show pairing code: prefer inline response, fall back to polling */

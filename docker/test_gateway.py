@@ -3531,21 +3531,21 @@ class TestUXPaperCuts(unittest.TestCase):
         self.assertIn("/api/auth/recover", content,
                       "setup.html success screen should mention the recovery endpoint")
 
-    def test_setup_html_recovery_hint_near_token_box(self):
-        """Recovery hint should appear in the success screen, not just anywhere."""
+    def test_setup_html_success_screen_no_token_box(self):
+        """Success screen should NOT have a token display box (password-based auth now)."""
         setup_html_path = os.path.join(os.path.dirname(__file__), "setup.html")
         with open(setup_html_path) as f:
             content = f.read()
-        # find the step-success div and check the recovery hint is inside it
+        # find the step-success div
         success_start = content.find('id="step-success"')
         self.assertGreater(success_start, 0, "step-success should exist in setup.html")
         # find the next step div (step-dashboard)
         success_end = content.find('id="step-dashboard"', success_start)
         success_section = content[success_start:success_end]
-        self.assertIn("recover", success_section.lower(),
-                      "Recovery hint should be inside the success screen section")
-        self.assertIn("save", success_section.lower(),
-                      "Success screen should tell user to save their token")
+        self.assertNotIn("savedToken", success_section,
+                         "Success screen should not have token display (password auth)")
+        self.assertNotIn("tokenBox", success_section,
+                         "Success screen should not have token box (password auth)")
 
     # ── 2. Pairing code in save response ──
 

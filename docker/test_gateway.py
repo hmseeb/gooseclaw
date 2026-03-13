@@ -1281,5 +1281,284 @@ class TestNoTelegramGlobals(unittest.TestCase):
         self.assertIsInstance(gateway._command_router, gateway.CommandRouter)
 
 
+# ── Generalized Command Handlers (CHAN-01) ───────────────────────────────────
+
+class TestGeneralizedCommandHandlers(unittest.TestCase):
+    """Tests that command handlers use ctx['channel'] and ctx['channel_state']
+    instead of hardcoded _telegram_state and 'telegram'."""
+
+    def setUp(self):
+        gateway._session_manager._sessions.clear()
+        gateway._telegram_state._active_relays.clear()
+
+    def tearDown(self):
+        gateway._session_manager._sessions.clear()
+        gateway._telegram_state._active_relays.clear()
+
+    def test_stop_uses_ctx_channel_state(self):
+        """_handle_cmd_stop uses ctx['channel_state'] instead of _telegram_state."""
+        state = gateway.ChannelState()
+        mock_sock = MagicMock()
+        cancel_event = threading.Event()
+        state.set_active_relay("user1", [mock_sock, cancel_event])
+
+        send_fn = MagicMock()
+        ctx = {
+            "channel": "slack",
+            "user_id": "user1",
+            "send_fn": send_fn,
+            "channel_state": state,
+        }
+        gateway._handle_cmd_stop(ctx)
+        # should have popped from our custom state, not _telegram_state
+        self.assertIsNone(state.pop_active_relay("user1"))
+        send_fn.assert_called_with("Stopped.")
+
+    def test_stop_falls_back_to_telegram_state(self):
+        """_handle_cmd_stop falls back to _telegram_state when no channel_state in ctx."""
+        mock_sock = MagicMock()
+        cancel_event = threading.Event()
+        gateway._telegram_state.set_active_relay("user2", [mock_sock, cancel_event])
+
+        send_fn = MagicMock()
+        ctx = {
+            "user_id": "user2",
+            "send_fn": send_fn,
+        }
+        gateway._handle_cmd_stop(ctx)
+        # should have popped from _telegram_state
+        self.assertIsNone(gateway._telegram_state.pop_active_relay("user2"))
+        send_fn.assert_called_with("Stopped.")
+
+    def test_clear_uses_ctx_channel_and_state(self):
+        """_handle_cmd_clear uses ctx['channel'] and ctx['channel_state']."""
+        state = gateway.ChannelState()
+        mock_sock = MagicMock()
+        cancel_event = threading.Event()
+        state.set_active_relay("user3", [mock_sock, cancel_event])
+        gateway._session_manager.set("slack", "user3", "old_sid")
+
+        send_fn = MagicMock()
+        ctx = {
+            "channel": "slack",
+            "user_id": "user3",
+            "send_fn": send_fn,
+            "channel_state": state,
+        }
+        with patch("gateway._restart_goose_and_prewarm"):
+            gateway._handle_cmd_clear(ctx)
+
+        # should have killed relay on our custom state
+        self.assertIsNone(state.pop_active_relay("user3"))
+        # should have popped from "slack", not "telegram"
+        self.assertIsNone(gateway._session_manager.get("slack", "user3"))
+        send_fn.assert_called_once()
+
+    def test_clear_falls_back_to_telegram(self):
+        """_handle_cmd_clear falls back to _telegram_state and 'telegram' when no ctx keys."""
+        mock_sock = MagicMock()
+        cancel_event = threading.Event()
+        gateway._telegram_state.set_active_relay("user4", [mock_sock, cancel_event])
+        gateway._session_manager.set("telegram", "user4", "old_sid")
+
+        send_fn = MagicMock()
+        ctx = {
+            "user_id": "user4",
+            "send_fn": send_fn,
+        }
+        with patch("gateway._restart_goose_and_prewarm"):
+            gateway._handle_cmd_clear(ctx)
+
+        # should have used _telegram_state and "telegram" channel
+        self.assertIsNone(gateway._telegram_state.pop_active_relay("user4"))
+        self.assertIsNone(gateway._session_manager.get("telegram", "user4"))
+
+    @patch("gateway._relay_to_goose_web", return_value=("Compacted summary", ""))
+    def test_compact_uses_ctx_channel(self, mock_relay):
+        """_handle_cmd_compact uses ctx['channel'] instead of hardcoded 'telegram'."""
+        gateway._session_manager.set("slack", "user5", "sid_5")
+        send_fn = MagicMock()
+        ctx = {
+            "channel": "slack",
+            "user_id": "user5",
+            "send_fn": send_fn,
+        }
+        gateway._handle_cmd_compact(ctx)
+        # _relay_to_goose_web should have been called with channel="slack"
+        call_kwargs = mock_relay.call_args
+        self.assertEqual(call_kwargs[1].get("channel") or call_kwargs[0][3] if len(call_kwargs[0]) > 3 else call_kwargs[1].get("channel"), "slack")
+
+    def test_help_works_any_channel(self):
+        """_handle_cmd_help works for any channel without crashing."""
+        send_fn = MagicMock()
+        ctx = {
+            "channel": "slack",
+            "user_id": "user6",
+            "send_fn": send_fn,
+        }
+        gateway._handle_cmd_help(ctx)
+        send_fn.assert_called_once()
+        self.assertIn("/help", send_fn.call_args[0][0])
+
+
+# ── ChannelRelay Command Interception (CHAN-01) ──────────────────────────────
+
+class TestChannelRelayCommands(unittest.TestCase):
+    """Tests that ChannelRelay intercepts commands before relaying to goose."""
+
+    def setUp(self):
+        gateway._session_manager._sessions.clear()
+
+    def tearDown(self):
+        gateway._session_manager._sessions.clear()
+
+    @patch.object(gateway._command_router, "dispatch", return_value=True)
+    @patch.object(gateway._command_router, "is_command", return_value=True)
+    def test_relay_intercepts_help(self, mock_is_cmd, mock_dispatch):
+        """ChannelRelay intercepts /help and dispatches via command router."""
+        relay = gateway.ChannelRelay("test_ch")
+        send_fn = MagicMock()
+        result = relay("user1", "/help", send_fn)
+        mock_dispatch.assert_called_once()
+        self.assertEqual(result, "")
+
+    @patch.object(gateway._command_router, "dispatch", return_value=True)
+    @patch.object(gateway._command_router, "is_command", return_value=True)
+    def test_relay_intercepts_stop(self, mock_is_cmd, mock_dispatch):
+        """ChannelRelay intercepts /stop and dispatches via command router."""
+        relay = gateway.ChannelRelay("test_ch")
+        send_fn = MagicMock()
+        result = relay("user1", "/stop", send_fn)
+        mock_dispatch.assert_called_once()
+        self.assertEqual(result, "")
+
+    @patch.object(gateway._command_router, "dispatch", return_value=True)
+    @patch.object(gateway._command_router, "is_command", return_value=True)
+    def test_relay_intercepts_clear(self, mock_is_cmd, mock_dispatch):
+        """ChannelRelay intercepts /clear and dispatches via command router."""
+        relay = gateway.ChannelRelay("test_ch")
+        send_fn = MagicMock()
+        result = relay("user1", "/clear", send_fn)
+        mock_dispatch.assert_called_once()
+        self.assertEqual(result, "")
+
+    @patch.object(gateway._command_router, "dispatch", return_value=True)
+    @patch.object(gateway._command_router, "is_command", return_value=True)
+    def test_relay_passes_correct_ctx(self, mock_is_cmd, mock_dispatch):
+        """ChannelRelay passes correct ctx dict to dispatch."""
+        relay = gateway.ChannelRelay("test_ch")
+        send_fn = MagicMock()
+        relay("user1", "/help", send_fn)
+        ctx = mock_dispatch.call_args[0][1]
+        self.assertEqual(ctx["channel"], "test_ch")
+        self.assertEqual(ctx["user_id"], "user1")
+        self.assertIs(ctx["send_fn"], send_fn)
+        self.assertIsInstance(ctx["channel_state"], gateway.ChannelState)
+
+    def test_relay_unknown_command_sends_error(self):
+        """ChannelRelay sends error for unknown commands (e.g. /foo)."""
+        relay = gateway.ChannelRelay("test_ch")
+        send_fn = MagicMock()
+        result = relay("user1", "/foo", send_fn)
+        send_fn.assert_called_once()
+        self.assertIn("Unknown command", send_fn.call_args[0][0])
+        self.assertEqual(result, "")
+
+    @patch("gateway._relay_to_goose_web", return_value=("hello back", ""))
+    @patch("gateway.load_setup", return_value=None)
+    def test_relay_non_command_still_relays(self, mock_setup, mock_relay):
+        """Regular text is not intercepted and gets relayed to goose."""
+        relay = gateway.ChannelRelay("test_ch")
+        send_fn = MagicMock()
+        result = relay("user1", "hello", send_fn)
+        mock_relay.assert_called()
+
+    @patch.object(gateway._command_router, "dispatch", return_value=True)
+    @patch.object(gateway._command_router, "is_command", return_value=True)
+    def test_relay_command_returns_empty_string(self, mock_is_cmd, mock_dispatch):
+        """Commands return empty string from relay."""
+        relay = gateway.ChannelRelay("test_ch")
+        result = relay("user1", "/help", MagicMock())
+        self.assertEqual(result, "")
+
+
+# ── ChannelRelay Active Relay Tracking + /stop (CHAN-03) ─────────────────────
+
+class TestChannelRelayStop(unittest.TestCase):
+    """Tests for active relay tracking and /stop cancellation on ChannelRelay."""
+
+    def setUp(self):
+        gateway._session_manager._sessions.clear()
+
+    def tearDown(self):
+        gateway._session_manager._sessions.clear()
+
+    @patch("gateway.load_setup", return_value=None)
+    @patch("gateway._relay_to_goose_web", return_value=("response", ""))
+    def test_relay_sets_active_relay(self, mock_relay, mock_setup):
+        """ChannelRelay sets active relay on its _state before relaying."""
+        relay = gateway.ChannelRelay("test_ch")
+        # Spy on set_active_relay
+        original_set = relay._state.set_active_relay
+        calls = []
+        def spy_set(uid, ref):
+            calls.append((uid, ref))
+            return original_set(uid, ref)
+        relay._state.set_active_relay = spy_set
+
+        relay("user1", "hello")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], "user1")
+        # sock_ref should be a list with [None, Event]
+        self.assertIsInstance(calls[0][1], list)
+
+    @patch("gateway.load_setup", return_value=None)
+    @patch("gateway._relay_to_goose_web", return_value=("response", ""))
+    def test_relay_pops_active_relay_after_complete(self, mock_relay, mock_setup):
+        """ChannelRelay pops active relay after relay completes (finally block)."""
+        relay = gateway.ChannelRelay("test_ch")
+        relay("user1", "hello")
+        # After completion, pop should return None (already popped)
+        self.assertIsNone(relay._state.pop_active_relay("user1"))
+
+    def test_stop_kills_channel_relay(self):
+        """_handle_cmd_stop kills active relay on the channel's own state."""
+        relay = gateway.ChannelRelay("test_ch")
+        mock_sock = MagicMock()
+        cancel_event = threading.Event()
+        relay._state.set_active_relay("user1", [mock_sock, cancel_event])
+
+        send_fn = MagicMock()
+        ctx = {
+            "channel": "test_ch",
+            "user_id": "user1",
+            "send_fn": send_fn,
+            "channel_state": relay._state,
+        }
+        gateway._handle_cmd_stop(ctx)
+        # socket should be closed, cancel event set
+        mock_sock.close.assert_called()
+        self.assertTrue(cancel_event.is_set())
+        send_fn.assert_called_with("Stopped.")
+
+    @patch("gateway.load_setup", return_value=None)
+    def test_relay_respects_cancelled_flag(self, mock_setup):
+        """When cancelled is set during relay, relay returns '' and doesn't send response."""
+        relay = gateway.ChannelRelay("test_ch")
+        send_fn = MagicMock()
+
+        def fake_relay(*args, **kwargs):
+            # Simulate /stop happening during relay
+            sock_ref = kwargs.get("sock_ref")
+            if sock_ref and len(sock_ref) > 1:
+                sock_ref[1].set()  # set the cancelled event
+            return ("should not see this", "")
+
+        with patch("gateway._relay_to_goose_web", side_effect=fake_relay):
+            result = relay("user1", "hello", send_fn)
+
+        self.assertEqual(result, "")
+
+
 if __name__ == "__main__":
     unittest.main()

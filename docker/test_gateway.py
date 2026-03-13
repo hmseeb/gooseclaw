@@ -1560,5 +1560,225 @@ class TestChannelRelayStop(unittest.TestCase):
         self.assertEqual(result, "")
 
 
+# ── ChannelRelay Per-User Locks (CHAN-02) ────────────────────────────────────
+
+class TestChannelRelayLocks(unittest.TestCase):
+    """Tests for per-user concurrency locks in ChannelRelay."""
+
+    def setUp(self):
+        gateway._session_manager._sessions.clear()
+        self._held_locks = []
+
+    def tearDown(self):
+        gateway._session_manager._sessions.clear()
+        # release any locks we acquired in tests
+        for lock in self._held_locks:
+            try:
+                lock.release()
+            except RuntimeError:
+                pass
+
+    @patch("gateway.load_setup", return_value=None)
+    @patch("gateway._relay_to_goose_web", return_value=("ok", ""))
+    def test_relay_acquires_user_lock(self, mock_relay, mock_setup):
+        """Relay acquires and releases user lock around relay call."""
+        relay = gateway.ChannelRelay("test_ch")
+        relay("user1", "hello")
+        # Lock should NOT be held after relay returns
+        lock = relay._state.get_user_lock("user1")
+        acquired = lock.acquire(timeout=0.1)
+        self.assertTrue(acquired, "Lock should be released after relay completes")
+        if acquired:
+            lock.release()
+
+    @patch("gateway.load_setup", return_value=None)
+    @patch("gateway._relay_to_goose_web", return_value=("ok", ""))
+    def test_concurrent_relay_gets_busy_message(self, mock_relay, mock_setup):
+        """When user lock is already held, relay sends 'Still thinking' and returns ''."""
+        relay = gateway.ChannelRelay("test_ch")
+        # Pre-acquire the user lock to simulate concurrent relay
+        lock = relay._state.get_user_lock("user1")
+        lock.acquire()
+        self._held_locks.append(lock)
+
+        send_fn = MagicMock()
+        result = relay("user1", "hello", send_fn)
+
+        # Should get busy message
+        send_fn.assert_called_once()
+        msg = send_fn.call_args[0][0]
+        self.assertIn("Still thinking", msg)
+        self.assertIn("/stop", msg)
+        # Should return empty string, not relay response
+        self.assertEqual(result, "")
+        # Relay should NOT have been called
+        mock_relay.assert_not_called()
+
+    @patch("gateway.load_setup", return_value=None)
+    @patch("gateway._relay_to_goose_web", return_value=("ok", ""))
+    def test_concurrent_relay_no_send_fn_blocks_longer(self, mock_relay, mock_setup):
+        """Without send_fn, lock timeout is longer (can't notify user)."""
+        relay = gateway.ChannelRelay("test_ch")
+        lock = relay._state.get_user_lock("user1")
+        lock.acquire()
+        self._held_locks.append(lock)
+
+        # Call in a thread with short timeout to verify it blocks longer than 2s
+        result_holder = [None]
+        done = threading.Event()
+
+        def call_relay():
+            result_holder[0] = relay("user1", "hello")  # no send_fn
+            done.set()
+
+        t = threading.Thread(target=call_relay, daemon=True)
+        t.start()
+        # With no send_fn, timeout should be > 2s, so this should NOT complete in 1s
+        completed_fast = done.wait(timeout=1.0)
+        self.assertFalse(completed_fast,
+            "Without send_fn, relay should block longer than with send_fn")
+        # Release the lock so the thread can finish
+        lock.release()
+        self._held_locks.remove(lock)
+        done.wait(timeout=5)
+
+    @patch("gateway.load_setup", return_value=None)
+    @patch("gateway._relay_to_goose_web", return_value=("ok", ""))
+    def test_different_users_not_blocked(self, mock_relay, mock_setup):
+        """Different users have separate locks; one user's lock doesn't block another."""
+        relay = gateway.ChannelRelay("test_ch")
+        lock = relay._state.get_user_lock("user1")
+        lock.acquire()
+        self._held_locks.append(lock)
+
+        # user2 should relay normally despite user1's lock being held
+        result = relay("user2", "hello")
+        mock_relay.assert_called()
+        self.assertNotEqual(result, "")
+
+    @patch("gateway.load_setup", return_value=None)
+    @patch("gateway._relay_to_goose_web", side_effect=Exception("boom"))
+    def test_lock_released_on_relay_error(self, mock_relay, mock_setup):
+        """Lock is released even when relay raises an exception."""
+        relay = gateway.ChannelRelay("test_ch")
+        try:
+            relay("user1", "hello")
+        except Exception:
+            pass
+        # Lock should be released after error
+        lock = relay._state.get_user_lock("user1")
+        acquired = lock.acquire(timeout=0.1)
+        self.assertTrue(acquired, "Lock should be released after relay error")
+        if acquired:
+            lock.release()
+
+    @patch("gateway.load_setup", return_value=None)
+    def test_lock_released_on_cancel(self, mock_setup):
+        """Lock is released when relay is cancelled."""
+        relay = gateway.ChannelRelay("test_ch")
+
+        def fake_relay(*args, **kwargs):
+            sock_ref = kwargs.get("sock_ref")
+            if sock_ref and len(sock_ref) > 1:
+                sock_ref[1].set()  # simulate /stop cancellation
+            return ("cancelled", "")
+
+        with patch("gateway._relay_to_goose_web", side_effect=fake_relay):
+            relay("user1", "hello")
+
+        # Lock should be released after cancellation
+        lock = relay._state.get_user_lock("user1")
+        acquired = lock.acquire(timeout=0.1)
+        self.assertTrue(acquired, "Lock should be released after cancellation")
+        if acquired:
+            lock.release()
+
+
+# ── ChannelRelay Typing Indicators (CHAN-06) ─────────────────────────────────
+
+class TestChannelRelayTyping(unittest.TestCase):
+    """Tests for typing indicator callbacks in ChannelRelay."""
+
+    def setUp(self):
+        gateway._session_manager._sessions.clear()
+
+    def tearDown(self):
+        gateway._session_manager._sessions.clear()
+
+    @patch("gateway.load_setup", return_value=None)
+    def test_typing_callback_called_during_relay(self, mock_setup):
+        """Typing callback fires during relay with correct user_id."""
+        mock_typing = MagicMock()
+        relay = gateway.ChannelRelay("test_ch", typing_cb=mock_typing)
+
+        def slow_relay(*args, **kwargs):
+            time.sleep(0.15)
+            return ("response", "")
+
+        with patch("gateway._relay_to_goose_web", side_effect=slow_relay):
+            relay("user1", "hello")
+
+        mock_typing.assert_called()
+        # Should have been called with the user_id
+        mock_typing.assert_any_call("user1")
+
+    @patch("gateway.load_setup", return_value=None)
+    @patch("gateway._relay_to_goose_web", return_value=("response", ""))
+    def test_typing_stops_after_relay_completes(self, mock_relay, mock_setup):
+        """Typing callback stops being called after relay completes."""
+        mock_typing = MagicMock()
+        relay = gateway.ChannelRelay("test_ch", typing_cb=mock_typing)
+        relay("user1", "hello")
+
+        # Record call count right after relay
+        count_after = mock_typing.call_count
+        time.sleep(0.2)
+        # Call count should not increase after relay is done
+        self.assertEqual(mock_typing.call_count, count_after,
+            "Typing callback should stop after relay completes")
+
+    @patch("gateway.load_setup", return_value=None)
+    @patch("gateway._relay_to_goose_web", return_value=("response", ""))
+    def test_no_typing_when_no_callback(self, mock_relay, mock_setup):
+        """Relay works normally without typing callback (default None)."""
+        relay = gateway.ChannelRelay("test_ch")
+        result = relay("user1", "hello")
+        # Should complete without error
+        self.assertIsNotNone(result)
+
+    @patch("gateway.load_setup", return_value=None)
+    @patch("gateway._relay_to_goose_web", return_value=("ok", ""))
+    def test_typing_callback_error_does_not_crash_relay(self, mock_relay, mock_setup):
+        """Buggy typing callback does not crash relay."""
+        def bad_typing(uid):
+            raise Exception("typing crash")
+
+        relay = gateway.ChannelRelay("test_ch", typing_cb=bad_typing)
+
+        def slow_relay(*args, **kwargs):
+            time.sleep(0.15)
+            return ("ok", "")
+
+        with patch("gateway._relay_to_goose_web", side_effect=slow_relay):
+            result = relay("user1", "hello")
+
+        self.assertEqual(result, "ok")
+
+    @patch.object(gateway._command_router, "dispatch", return_value=True)
+    @patch.object(gateway._command_router, "is_command", return_value=True)
+    def test_typing_not_started_for_commands(self, mock_is_cmd, mock_dispatch):
+        """Commands don't trigger typing callback (they return before relay)."""
+        mock_typing = MagicMock()
+        relay = gateway.ChannelRelay("test_ch", typing_cb=mock_typing)
+        relay("user1", "/help", MagicMock())
+        mock_typing.assert_not_called()
+
+    def test_channel_relay_accepts_typing_cb(self):
+        """ChannelRelay constructor accepts and stores typing_cb parameter."""
+        cb = lambda uid: None
+        relay = gateway.ChannelRelay("test", typing_cb=cb)
+        self.assertIs(relay._typing_cb, cb)
+
+
 if __name__ == "__main__":
     unittest.main()

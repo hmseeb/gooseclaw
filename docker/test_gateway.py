@@ -2691,12 +2691,34 @@ class TestBotPairing(unittest.TestCase):
             os.unlink(tmp)
 
     def test_check_pairing_consumes_code(self):
-        """_check_pairing with matching code returns True and sets pair_code to None."""
+        """_check_pairing with matching code returns True and rotates to a new code."""
         bot = gateway.BotInstance("test", "tok")
         bot.pair_code = "XYZ789"
         result = bot._check_pairing(chat_id="999", text="XYZ789")
         self.assertTrue(result)
-        self.assertIsNone(bot.pair_code)
+        self.assertIsNotNone(bot.pair_code)
+        self.assertNotEqual(bot.pair_code, "XYZ789")
+
+    def test_check_pairing_rotates_code_after_match(self):
+        """After successful pair, a new 6-char code is generated (not None)."""
+        bot = gateway.BotInstance("test", "tok")
+        bot.pair_code = "XYZ789"
+        result = bot._check_pairing(chat_id="999", text="XYZ789")
+        self.assertTrue(result)
+        self.assertIsNotNone(bot.pair_code)
+        self.assertNotEqual(bot.pair_code, "XYZ789")
+        self.assertEqual(len(bot.pair_code), 6)
+
+    def test_old_pairing_code_rejected_after_use(self):
+        """Old pairing code cannot be reused after successful pair."""
+        bot = gateway.BotInstance("test", "tok")
+        bot.pair_code = "ABC123"
+        result1 = bot._check_pairing(chat_id="111", text="ABC123")
+        self.assertTrue(result1)
+        new_code = bot.pair_code
+        result2 = bot._check_pairing(chat_id="222", text="ABC123")
+        self.assertFalse(result2)
+        self.assertEqual(bot.pair_code, new_code)
 
 
 # ── BotManager wiring (09-03) ────────────────────────────────────────────────

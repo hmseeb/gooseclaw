@@ -9,13 +9,13 @@ See: .planning/PROJECT.md (updated 2026-03-13)
 
 ## Current Position
 
-Phase: 11 of 15 (complete)
+Phase: 12 of 15 (complete)
 Plan: 2 of 2 (done)
-Status: Phase 11 complete, v2 channel contract types + wiring shipped
-Last activity: 2026-03-13 -- Phase 11 executed: 4 types + wiring, 345 tests passing
+Status: Phase 12 complete, inbound media pipeline shipped
+Last activity: 2026-03-13 -- Phase 12 executed: MediaContent + download helpers + poll/relay wiring, 380 tests passing
 
 Progress v2.0: [==========] 100% (10/10 phases complete, shipped)
-Progress v3.0: [==........] 20% (1/5 phases complete)
+Progress v3.0: [====......] 40% (2/5 phases complete)
 
 ## Performance Metrics
 
@@ -46,6 +46,8 @@ Progress v3.0: [==........] 20% (1/5 phases complete)
 | Phase 10 P01 | 4min | 2 tasks | 2 files |
 | Phase 11 P01 | 3min | 2 tasks | 2 files |
 | Phase 11 P02 | 2min | 2 tasks | 2 files |
+| Phase 12 P01 | 3min | 2 tasks | 2 files |
+| Phase 12 P02 | 3min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -89,6 +91,12 @@ Recent decisions affecting current work:
 - [Phase 11]: _load_channel stores adapter in _loaded_channels, registers adapter.send_text for notifications
 - [Phase 11]: BotInstance._poll_loop creates InboundMessage envelopes, passes as inbound_msg kwarg to _do_message_relay
 - [Phase 11]: Media messages still get MEDIA_REPLY but InboundMessage envelope is created for future Phase 12 use
+- [Phase 12]: MediaContent class normalizes media with kind/mime_type/data/filename, to_base64(), to_content_block()
+- [Phase 12]: Downloads happen in relay thread (not poll loop) to keep poll responsive
+- [Phase 12]: Poll loop builds file_id reference dicts, relay thread downloads + creates MediaContent
+- [Phase 12]: MEDIA_REPLY no longer sent to paired users, media flows through relay
+- [Phase 12]: MIME resolution: Telegram hint > mimetypes.guess_type(file_path) > fallback map
+- [Phase 12]: Legacy _telegram_poll_loop updated with same media download pattern
 
 ### Pending Todos
 
@@ -116,5 +124,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-03-13
-Stopped at: Completed Phase 11 (Channel Contract v2). 345 tests passing. InboundMessage, OutboundAdapter, ChannelCapabilities, LegacyOutboundAdapter implemented and wired.
+Stopped at: Completed Phase 12 (Inbound Media Pipeline). 380 tests passing. MediaContent, download helpers, poll/relay wiring all shipped. MEDIA_REPLY removed for paired users.
 Resume file: None

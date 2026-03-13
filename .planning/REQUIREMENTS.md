@@ -128,10 +128,10 @@
 | MEDIA-03 | Phase 11 | Complete |
 | MEDIA-04 | Phase 11 | Complete |
 | MEDIA-05 | Phase 11 | Complete |
-| MEDIA-06 | Phase 12 | Pending |
-| MEDIA-07 | Phase 12 | Pending |
-| MEDIA-08 | Phase 12 | Pending |
-| MEDIA-09 | Phase 12 | Pending |
+| MEDIA-06 | Phase 12 | Complete |
+| MEDIA-07 | Phase 12 | Complete |
+| MEDIA-08 | Phase 12 | Complete |
+| MEDIA-09 | Phase 12 | Complete |
 | MEDIA-10 | Phase 13 | Pending |
 | MEDIA-11 | Phase 13 | Pending |
 | MEDIA-12 | Phase 13 | Pending |

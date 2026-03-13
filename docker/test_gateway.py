@@ -2450,5 +2450,238 @@ class TestBotIsolation(unittest.TestCase):
         self.assertEqual(sm.get("telegram:bot_b", "user1"), "session_b")
 
 
+# ── Bot poll loop tests ───────────────────────────────────────────────────────
+
+class TestBotPollLoop(unittest.TestCase):
+    """Tests for BotInstance._poll_loop internals (parameterized channel_key, state, pair_code)."""
+
+    def test_poll_loop_uses_instance_channel_key(self):
+        """_do_message_relay passes self.channel_key to _session_manager."""
+        bot = gateway.BotInstance("research", "tok123")
+        self.assertEqual(bot.channel_key, "telegram:research")
+        with patch.object(gateway._session_manager, "get", return_value="sess1") as mock_get, \
+             patch.object(gateway._session_manager, "set") as mock_set, \
+             patch("gateway._relay_to_goose_web", return_value=("hi", "")) as mock_relay, \
+             patch("gateway.send_telegram_message") as mock_send, \
+             patch("gateway._send_typing_action"), \
+             patch("gateway.load_setup", return_value=None), \
+             patch("gateway._memory_touch"):
+            bot._do_message_relay(chat_id="123", text="hello", bot_token="tok123")
+            mock_get.assert_called_with("telegram:research", "123")
+
+    def test_poll_loop_uses_instance_state_for_relay(self):
+        """_do_message_relay calls self.state.set_active_relay (not _telegram_state)."""
+        bot = gateway.BotInstance("research", "tok123")
+        with patch.object(bot.state, "set_active_relay") as mock_set, \
+             patch.object(bot.state, "pop_active_relay") as mock_pop, \
+             patch.object(gateway._session_manager, "get", return_value="sess1"), \
+             patch("gateway._relay_to_goose_web", return_value=("ok", "")) as mock_relay, \
+             patch("gateway.send_telegram_message"), \
+             patch("gateway._send_typing_action"), \
+             patch("gateway.load_setup", return_value=None), \
+             patch("gateway._memory_touch"):
+            bot._do_message_relay(chat_id="123", text="hello", bot_token="tok123")
+            mock_set.assert_called_once()
+            mock_pop.assert_called_once()
+
+    def test_poll_loop_uses_instance_state_for_lock(self):
+        """_do_message_relay uses self.state.get_user_lock."""
+        bot = gateway.BotInstance("research", "tok123")
+        with patch.object(bot.state, "get_user_lock", return_value=threading.Lock()) as mock_lock, \
+             patch.object(gateway._session_manager, "get", return_value="sess1"), \
+             patch("gateway._relay_to_goose_web", return_value=("ok", "")) as mock_relay, \
+             patch("gateway.send_telegram_message"), \
+             patch("gateway._send_typing_action"), \
+             patch("gateway.load_setup", return_value=None), \
+             patch("gateway._memory_touch"):
+            bot._do_message_relay(chat_id="123", text="hello", bot_token="tok123")
+            mock_lock.assert_called_with("123")
+
+    def test_poll_loop_uses_instance_pair_code(self):
+        """_check_pairing uses self.pair_code, not global telegram_pair_code."""
+        bot = gateway.BotInstance("research", "tok123")
+        bot.pair_code = "ABC123"
+        result = bot._check_pairing(chat_id="456", text="ABC123")
+        self.assertTrue(result)
+
+    def test_poll_loop_verbosity_uses_channel_key(self):
+        """_do_message_relay calls get_verbosity_for_channel with self.channel_key."""
+        bot = gateway.BotInstance("research", "tok123")
+        setup = {"channel_verbosity": {"telegram:research": "quiet"}}
+        with patch.object(gateway._session_manager, "get", return_value="sess1"), \
+             patch("gateway._relay_to_goose_web", return_value=("ok", "")) as mock_relay, \
+             patch("gateway.send_telegram_message"), \
+             patch("gateway._send_typing_action"), \
+             patch("gateway.load_setup", return_value=setup), \
+             patch("gateway._memory_touch"), \
+             patch("gateway.get_verbosity_for_channel", return_value="quiet") as mock_verb:
+            bot._do_message_relay(chat_id="123", text="hello", bot_token="tok123")
+            mock_verb.assert_called_with(setup, "telegram:research")
+
+
+class TestBotStartStop(unittest.TestCase):
+    """Tests for BotInstance.start() and stop() lifecycle."""
+
+    @patch("gateway.urllib.request.urlopen")
+    @patch.object(gateway._session_manager, "load")
+    @patch("gateway.register_notification_handler")
+    def test_start_sets_running(self, mock_reg, mock_load, mock_url):
+        bot = gateway.BotInstance("test", "tok")
+        bot.start()
+        self.assertTrue(bot.running)
+        bot.stop()
+
+    @patch("gateway.urllib.request.urlopen")
+    @patch.object(gateway._session_manager, "load")
+    @patch("gateway.register_notification_handler")
+    def test_start_generates_pair_code(self, mock_reg, mock_load, mock_url):
+        bot = gateway.BotInstance("test", "tok")
+        bot.start()
+        self.assertIsNotNone(bot.pair_code)
+        bot.stop()
+
+    @patch("gateway.urllib.request.urlopen")
+    @patch("gateway.register_notification_handler")
+    def test_start_loads_sessions(self, mock_reg, mock_url):
+        with patch.object(gateway._session_manager, "load") as mock_load:
+            bot = gateway.BotInstance("test", "tok")
+            bot.start()
+            mock_load.assert_called_with(bot.channel_key)
+            bot.stop()
+
+    @patch("gateway.urllib.request.urlopen")
+    @patch.object(gateway._session_manager, "load")
+    def test_start_registers_notification(self, mock_load, mock_url):
+        with patch("gateway.register_notification_handler") as mock_reg:
+            bot = gateway.BotInstance("test", "tok")
+            bot.start()
+            mock_reg.assert_called_once()
+            call_args = mock_reg.call_args
+            self.assertEqual(call_args[0][0], bot.channel_key)
+            bot.stop()
+
+    @patch("gateway.urllib.request.urlopen")
+    @patch.object(gateway._session_manager, "load")
+    @patch("gateway.register_notification_handler")
+    def test_stop_sets_running_false(self, mock_reg, mock_load, mock_url):
+        bot = gateway.BotInstance("test", "tok")
+        bot.start()
+        self.assertTrue(bot.running)
+        bot.stop()
+        self.assertFalse(bot.running)
+
+    @patch("gateway.urllib.request.urlopen")
+    @patch.object(gateway._session_manager, "load")
+    @patch("gateway.register_notification_handler")
+    def test_start_twice_noop(self, mock_reg, mock_load, mock_url):
+        bot = gateway.BotInstance("test", "tok")
+        bot.start()
+        thread1 = bot._thread
+        bot.start()
+        thread2 = bot._thread
+        self.assertIs(thread1, thread2)
+        bot.stop()
+
+
+class TestBotNotification(unittest.TestCase):
+    """Tests for per-bot notification handlers."""
+
+    def test_notification_handler_uses_bot_token(self):
+        """_make_notify_handler creates a closure using the bot's token."""
+        bot = gateway.BotInstance("mybot", "tok_mybot")
+        handler = bot._make_notify_handler()
+        with patch("gateway.send_telegram_message", return_value=(True, "")) as mock_send, \
+             patch("gateway.get_paired_chat_ids", return_value=["111"]):
+            handler("test msg")
+            mock_send.assert_called_with("tok_mybot", "111", "test msg")
+
+    @patch("gateway.urllib.request.urlopen")
+    @patch.object(gateway._session_manager, "load")
+    def test_default_bot_registers_as_telegram(self, mock_load, mock_url):
+        """Default bot registers notification handler as 'telegram'."""
+        bot = gateway.BotInstance("default", "tok", channel_key="telegram")
+        with patch("gateway.register_notification_handler") as mock_reg:
+            bot.start()
+            mock_reg.assert_called_once()
+            self.assertEqual(mock_reg.call_args[0][0], "telegram")
+            bot.stop()
+
+    @patch("gateway.urllib.request.urlopen")
+    @patch.object(gateway._session_manager, "load")
+    def test_named_bot_registers_as_telegram_name(self, mock_load, mock_url):
+        """Named bot registers notification handler as 'telegram:name'."""
+        bot = gateway.BotInstance("research", "tok")
+        with patch("gateway.register_notification_handler") as mock_reg:
+            bot.start()
+            mock_reg.assert_called_once()
+            self.assertEqual(mock_reg.call_args[0][0], "telegram:research")
+            bot.stop()
+
+
+class TestBotPairing(unittest.TestCase):
+    """Tests for per-bot pairing."""
+
+    def test_add_pairing_default_platform(self):
+        """_add_pairing_to_config with platform='telegram' writes platform: telegram."""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write("gateway_pairings:\n")
+            tmp = f.name
+        try:
+            with patch("gateway.GOOSE_CONFIG_PATH", tmp):
+                gateway._add_pairing_to_config("12345", platform="telegram")
+            with open(tmp) as f:
+                content = f.read()
+            self.assertIn("platform: telegram", content)
+            self.assertIn("user_id: '12345'", content)
+        finally:
+            os.unlink(tmp)
+
+    def test_add_pairing_named_bot_platform(self):
+        """_add_pairing_to_config with platform='telegram:research' writes that platform."""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write("gateway_pairings:\n")
+            tmp = f.name
+        try:
+            with patch("gateway.GOOSE_CONFIG_PATH", tmp):
+                gateway._add_pairing_to_config("67890", platform="telegram:research")
+            with open(tmp) as f:
+                content = f.read()
+            self.assertIn("platform: telegram:research", content)
+            self.assertIn("user_id: '67890'", content)
+        finally:
+            os.unlink(tmp)
+
+    def test_get_paired_chat_ids_filters_by_platform(self):
+        """get_paired_chat_ids(platform=...) filters by platform."""
+        config_content = (
+            "gateway_pairings:\n"
+            "  - platform: telegram\n"
+            "    user_id: '111'\n"
+            "    state: paired\n"
+            "  - platform: telegram:research\n"
+            "    user_id: '222'\n"
+            "    state: paired\n"
+        )
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(config_content)
+            tmp = f.name
+        try:
+            with patch("gateway.GOOSE_CONFIG_PATH", tmp):
+                ids_default = gateway.get_paired_chat_ids(platform="telegram")
+                ids_research = gateway.get_paired_chat_ids(platform="telegram:research")
+            self.assertEqual(ids_default, ["111"])
+            self.assertEqual(ids_research, ["222"])
+        finally:
+            os.unlink(tmp)
+
+    def test_check_pairing_consumes_code(self):
+        """_check_pairing with matching code returns True and sets pair_code to None."""
+        bot = gateway.BotInstance("test", "tok")
+        bot.pair_code = "XYZ789"
+        result = bot._check_pairing(chat_id="999", text="XYZ789")
+        self.assertTrue(result)
+        self.assertIsNone(bot.pair_code)
+
+
 if __name__ == "__main__":
     unittest.main()

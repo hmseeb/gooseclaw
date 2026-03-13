@@ -483,7 +483,18 @@ class BotInstance:
 
                     chat_id = str(msg.get("chat", {}).get("id", ""))
                     text = msg.get("text", "").strip()
-                    if not chat_id or not text:
+
+                    if not chat_id:
+                        continue
+
+                    # media without text: reply to paired users only
+                    if not text and _has_media(msg):
+                        paired_ids = get_paired_chat_ids(platform=self.channel_key)
+                        if chat_id in paired_ids:
+                            send_telegram_message(self.token, chat_id, MEDIA_REPLY)
+                        continue
+
+                    if not text:
                         continue
 
                     paired_ids = get_paired_chat_ids(platform=self.channel_key)
@@ -1118,6 +1129,19 @@ def _markdown_to_telegram_html(text):
 def _strip_html(text):
     """Strip HTML tags for plain-text fallback."""
     return re.sub(r'<[^>]+>', '', text)
+
+
+MEDIA_REPLY = "i can only handle text for now. can you type what you need?"
+
+_MEDIA_KEYS = frozenset({
+    "photo", "voice", "document", "sticker",
+    "video", "audio", "video_note", "animation",
+})
+
+
+def _has_media(msg):
+    """Return True if the Telegram message contains any media attachment."""
+    return any(key in msg for key in _MEDIA_KEYS)
 
 
 def send_telegram_message(bot_token, chat_id, text):
@@ -4229,6 +4253,73 @@ def _memory_writer_loop():
             print(f"[memory-writer] loop error: {e}")
 
 
+def _classify_fact(fact):
+    """Classify a fact into the correct user.md section based on keyword heuristics.
+
+    Uses word-boundary matching to avoid false positives (e.g. "woodworking"
+    should not match "work").
+    """
+    lower = fact.lower()
+
+    def _has_word(keywords):
+        """Check if any keyword appears as a whole word (word-boundary match)."""
+        for kw in keywords:
+            if re.search(r'\b' + re.escape(kw) + r'\b', lower):
+                return True
+        return False
+
+    # people/contacts/relationships (check first, most specific)
+    people_kw = ["cofounder", "co-founder", "manager", "colleague", "friend",
+                 "wife", "husband", "partner", "brother", "sister", "boss",
+                 "contact", "relationship", "mentor", "teammate"]
+    if _has_word(people_kw):
+        return "People"
+
+    # preferences (check before work, "want" and "like" are common)
+    pref_kw = ["prefer", "prefers", "like", "likes", "want", "wants",
+               "always use", "always uses", "rather", "favorite", "favourite"]
+    if _has_word(pref_kw):
+        return "Preferences (Observed)"
+
+    # interests / personal (check before work to avoid "woodworking" -> "work")
+    interest_kw = ["hobby", "hobbies", "interest", "interested", "personal",
+                   "side project", "passion", "curious"]
+    if _has_word(interest_kw):
+        return "Interests & Context"
+
+    # work context / projects
+    work_kw = ["project", "deadline", "company", "work", "team", "sprint",
+               "client", "standup", "roadmap", "milestone"]
+    if _has_word(work_kw):
+        return "Work Context"
+
+    return "Important Context"
+
+
+def _fact_already_exists(fact, section_content):
+    """Check if a fact (or close variant) already exists in a section. Simple lowercase substring check."""
+    if not section_content:
+        return False
+    return fact.lower() in section_content.lower()
+
+
+def _get_section_content(full_content, section_header):
+    """Extract the text between a section header and the next ## header."""
+    pattern = re.escape(section_header) + r'\n(.*?)(?=\n## |\Z)'
+    match = re.search(pattern, full_content, re.DOTALL)
+    return match.group(1) if match else ""
+
+
+def _append_to_section(content, section_header, additions, timestamp):
+    """Append additions text right after a section header in content."""
+    if section_header in content:
+        content = content.replace(
+            section_header,
+            f"{section_header}\n\n<!-- auto-extracted {timestamp} -->\n{additions}\n"
+        )
+    return content
+
+
 def _process_memory_extraction(response_text):
     """Parse extraction response and append to identity files."""
     # try to find JSON in the response
@@ -4250,51 +4341,76 @@ def _process_memory_extraction(response_text):
     identity_dir = os.path.join(DATA_DIR, "identity")
     timestamp = time.strftime("%Y-%m-%d %H:%M")
 
-    # append user facts to user.md
+    # append user facts to user.md, routed to correct sections
     user_facts = data.get("user_facts", [])
     if user_facts:
         user_file = os.path.join(identity_dir, "user.md")
         if os.path.exists(user_file):
             with open(user_file, "r") as f:
                 content = f.read()
-            additions = "\n".join(f"- {fact}" for fact in user_facts)
-            # append to Important Context section
-            if "## Important Context" in content:
-                content = content.replace(
-                    "## Important Context",
-                    f"## Important Context\n\n<!-- auto-extracted {timestamp} -->\n{additions}\n"
-                )
+
+            # group facts by target section
+            by_section = {}
+            for fact in user_facts:
+                section = _classify_fact(fact)
+                section_header = f"## {section}"
+                # dedup: check if fact already exists anywhere in the file
+                if _fact_already_exists(fact, content):
+                    print(f"[memory-writer] skipping duplicate fact: {fact}")
+                    continue
+                by_section.setdefault(section_header, []).append(fact)
+
+            # append each group to its section
+            added = 0
+            for section_header, facts in by_section.items():
+                additions = "\n".join(f"- {fact}" for fact in facts)
+                content = _append_to_section(content, section_header, additions, timestamp)
+                added += len(facts)
+
+            if added > 0:
                 with open(user_file, "w") as f:
                     f.write(content)
-                print(f"[memory-writer] added {len(user_facts)} facts to user.md")
+                print(f"[memory-writer] added {added} facts to user.md")
 
-    # append corrections to learnings
+    # append corrections to learnings (full schema format)
     corrections = data.get("corrections", [])
     if corrections:
         learnings_file = os.path.join(identity_dir, "learnings", "LEARNINGS.md")
         if os.path.exists(learnings_file):
             with open(learnings_file, "a") as f:
                 date_str = time.strftime("%Y%m%d")
+                iso_ts = time.strftime("%Y-%m-%dT%H:%M:%S")
                 for i, correction in enumerate(corrections):
-                    f.write(f"\n### LRN-{date_str}-AUTO\n- {correction}\n")
+                    entry_id = f"LRN-{date_str}-AUTO-{i + 1}" if len(corrections) > 1 else f"LRN-{date_str}-AUTO"
+                    f.write(
+                        f"\n## [{entry_id}] auto-extracted\n\n"
+                        f"**Logged**: {iso_ts}\n"
+                        f"**Priority**: low\n"
+                        f"**Status**: active\n"
+                        f"**Category**: auto-extracted\n\n"
+                        f"### Summary\n{correction}\n"
+                    )
             print(f"[memory-writer] added {len(corrections)} corrections to LEARNINGS.md")
 
-    # append preferences to user.md Preferences section
+    # append preferences to user.md Preferences section (with dedup)
     preferences = data.get("preferences", [])
     if preferences:
         user_file = os.path.join(identity_dir, "user.md")
         if os.path.exists(user_file):
             with open(user_file, "r") as f:
                 content = f.read()
-            additions = "\n".join(f"- {pref}" for pref in preferences)
-            if "## Preferences (Observed)" in content:
-                content = content.replace(
-                    "## Preferences (Observed)",
-                    f"## Preferences (Observed)\n\n<!-- auto-extracted {timestamp} -->\n{additions}\n"
-                )
+            section_header = "## Preferences (Observed)"
+            section_content = _get_section_content(content, section_header)
+
+            new_prefs = [p for p in preferences if not _fact_already_exists(p, content)]
+            if new_prefs:
+                additions = "\n".join(f"- {pref}" for pref in new_prefs)
+                content = _append_to_section(content, section_header, additions, timestamp)
                 with open(user_file, "w") as f:
                     f.write(content)
-                print(f"[memory-writer] added {len(preferences)} preferences to user.md")
+                print(f"[memory-writer] added {len(new_prefs)} preferences to user.md")
+            else:
+                print(f"[memory-writer] skipping {len(preferences)} duplicate preferences")
 
     # append context to memory.md
     context = data.get("context", [])
@@ -4303,15 +4419,13 @@ def _process_memory_extraction(response_text):
         if os.path.exists(memory_file):
             with open(memory_file, "r") as f:
                 content = f.read()
-            additions = "\n".join(f"- {ctx}" for ctx in context)
-            if "## Lessons Learned" in content:
-                content = content.replace(
-                    "## Lessons Learned",
-                    f"## Lessons Learned\n\n<!-- auto-extracted {timestamp} -->\n{additions}\n"
-                )
+            new_ctx = [c for c in context if not _fact_already_exists(c, content)]
+            if new_ctx:
+                additions = "\n".join(f"- {ctx}" for ctx in new_ctx)
+                content = _append_to_section(content, "## Lessons Learned", additions, timestamp)
                 with open(memory_file, "w") as f:
                     f.write(content)
-                print(f"[memory-writer] added {len(context)} context items to memory.md")
+                print(f"[memory-writer] added {len(new_ctx)} context items to memory.md")
 
 
 def start_memory_writer():
@@ -5000,7 +5114,18 @@ def _telegram_poll_loop(bot_token):
 
                 chat_id = str(msg.get("chat", {}).get("id", ""))
                 text = msg.get("text", "").strip()
-                if not chat_id or not text:
+
+                if not chat_id:
+                    continue
+
+                # media without text: reply to paired users only
+                if not text and _has_media(msg):
+                    paired_ids = get_paired_chat_ids()
+                    if chat_id in paired_ids:
+                        send_telegram_message(bot_token, chat_id, MEDIA_REPLY)
+                    continue
+
+                if not text:
                     continue
 
                 paired_ids = get_paired_chat_ids()

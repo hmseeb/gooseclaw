@@ -519,6 +519,293 @@ class TestProcessMemoryExtraction(unittest.TestCase):
         assert "use bun not npm" in written or handle().write.called
 
 
+# ── _classify_fact ──────────────────────────────────────────────────────────
+
+class TestClassifyFact(unittest.TestCase):
+    """Tests for _classify_fact() keyword-based section routing."""
+
+    def test_people_keywords(self):
+        assert gateway._classify_fact("Sarah is his cofounder") == "People"
+        assert gateway._classify_fact("met with his contact John") == "People"
+        assert gateway._classify_fact("his wife Amy handles finances") == "People"
+        assert gateway._classify_fact("relationship with manager is tense") == "People"
+
+    def test_work_context_keywords(self):
+        assert gateway._classify_fact("the project deadline is Friday") == "Work Context"
+        assert gateway._classify_fact("works at ACME company") == "Work Context"
+        assert gateway._classify_fact("his work involves data pipelines") == "Work Context"
+        assert gateway._classify_fact("deadline for Q2 report is March 30") == "Work Context"
+
+    def test_preferences_keywords(self):
+        assert gateway._classify_fact("prefers dark mode") == "Preferences (Observed)"
+        assert gateway._classify_fact("likes using vim") == "Preferences (Observed)"
+        assert gateway._classify_fact("wants responses in bullet points") == "Preferences (Observed)"
+        assert gateway._classify_fact("always uses bun over npm") == "Preferences (Observed)"
+
+    def test_interests_keywords(self):
+        assert gateway._classify_fact("hobby is woodworking") == "Interests & Context"
+        assert gateway._classify_fact("interested in machine learning") == "Interests & Context"
+        assert gateway._classify_fact("personal goal is to run a marathon") == "Interests & Context"
+
+    def test_default_fallback(self):
+        assert gateway._classify_fact("has a meeting tomorrow at 3pm") == "Important Context"
+        assert gateway._classify_fact("random fact about stuff") == "Important Context"
+
+
+# ── _fact_already_exists ───────────────────────────────────────────────────
+
+class TestFactAlreadyExists(unittest.TestCase):
+    """Tests for _fact_already_exists() dedup check."""
+
+    def test_exact_match(self):
+        section = "- prefers dark mode\n- uses vim\n"
+        assert gateway._fact_already_exists("prefers dark mode", section) is True
+
+    def test_case_insensitive(self):
+        section = "- Prefers Dark Mode\n"
+        assert gateway._fact_already_exists("prefers dark mode", section) is True
+
+    def test_no_match(self):
+        section = "- likes coffee\n- uses vim\n"
+        assert gateway._fact_already_exists("prefers dark mode", section) is False
+
+    def test_empty_section(self):
+        assert gateway._fact_already_exists("anything", "") is False
+
+    def test_substring_match(self):
+        section = "- user prefers dark mode in all apps\n"
+        assert gateway._fact_already_exists("prefers dark mode", section) is True
+
+    def test_reverse_substring(self):
+        """Fact is longer but section contains the core."""
+        section = "- dark mode\n"
+        assert gateway._fact_already_exists("dark mode", section) is True
+
+
+# ── _process_memory_extraction dedup ───────────────────────────────────────
+
+class TestMemoryExtractionDedup(unittest.TestCase):
+    """Tests that _process_memory_extraction skips duplicate facts."""
+
+    def test_user_fact_already_in_section_skipped(self):
+        """If a fact already exists in the target section, it should not be appended again."""
+        existing = (
+            "# User\n"
+            "## Work Context\n\n"
+            "## Preferences (Observed)\n\n"
+            "- prefers dark mode\n\n"
+            "## Important Context\n\n"
+            "- likes coffee\n"
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            identity_dir = os.path.join(tmpdir, "identity")
+            os.makedirs(identity_dir)
+            user_file = os.path.join(identity_dir, "user.md")
+            with open(user_file, "w") as f:
+                f.write(existing)
+
+            with patch.object(gateway, "DATA_DIR", tmpdir):
+                response = json.dumps({"user_facts": ["prefers dark mode"]})
+                gateway._process_memory_extraction(response)
+
+            with open(user_file) as f:
+                content = f.read()
+            # should only appear once (the original)
+            count = content.lower().count("prefers dark mode")
+            assert count == 1, f"Expected 1 occurrence, found {count}"
+
+    def test_preference_already_in_section_skipped(self):
+        """Preferences that already exist should not be duplicated."""
+        existing = (
+            "# User\n"
+            "## Preferences (Observed)\n\n"
+            "- always uses bun\n\n"
+            "## Important Context\n"
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            identity_dir = os.path.join(tmpdir, "identity")
+            os.makedirs(identity_dir)
+            user_file = os.path.join(identity_dir, "user.md")
+            with open(user_file, "w") as f:
+                f.write(existing)
+
+            with patch.object(gateway, "DATA_DIR", tmpdir):
+                response = json.dumps({"preferences": ["always uses bun"]})
+                gateway._process_memory_extraction(response)
+
+            with open(user_file) as f:
+                content = f.read()
+            count = content.lower().count("always uses bun")
+            assert count == 1, f"Expected 1 occurrence, found {count}"
+
+
+# ── _process_memory_extraction section routing ─────────────────────────────
+
+class TestMemoryExtractionRouting(unittest.TestCase):
+    """Tests that user_facts route to the correct sections based on content."""
+
+    def _make_user_md(self, tmpdir):
+        identity_dir = os.path.join(tmpdir, "identity")
+        os.makedirs(identity_dir, exist_ok=True)
+        user_file = os.path.join(identity_dir, "user.md")
+        with open(user_file, "w") as f:
+            f.write(
+                "# User\n"
+                "## Basics\n\n"
+                "## Work Context\n\n"
+                "## Communication Preferences\n\n"
+                "## Interests & Context\n\n"
+                "## People\n\n"
+                "## Patterns & Habits\n\n"
+                "## Preferences (Observed)\n\n"
+                "## Important Context\n\n"
+            )
+        return user_file
+
+    def test_people_fact_routed_to_people_section(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            user_file = self._make_user_md(tmpdir)
+            with patch.object(gateway, "DATA_DIR", tmpdir):
+                response = json.dumps({"user_facts": ["Sarah is his cofounder"]})
+                gateway._process_memory_extraction(response)
+            with open(user_file) as f:
+                content = f.read()
+            # fact should be between ## People and ## Patterns & Habits
+            people_idx = content.index("## People")
+            patterns_idx = content.index("## Patterns & Habits")
+            fact_idx = content.index("Sarah is his cofounder")
+            assert people_idx < fact_idx < patterns_idx, \
+                "People fact should be in the People section"
+
+    def test_work_fact_routed_to_work_context(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            user_file = self._make_user_md(tmpdir)
+            with patch.object(gateway, "DATA_DIR", tmpdir):
+                response = json.dumps({"user_facts": ["the project deadline is Friday"]})
+                gateway._process_memory_extraction(response)
+            with open(user_file) as f:
+                content = f.read()
+            work_idx = content.index("## Work Context")
+            comm_idx = content.index("## Communication Preferences")
+            fact_idx = content.index("the project deadline is Friday")
+            assert work_idx < fact_idx < comm_idx, \
+                "Work fact should be in the Work Context section"
+
+    def test_preference_fact_routed_to_preferences(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            user_file = self._make_user_md(tmpdir)
+            with patch.object(gateway, "DATA_DIR", tmpdir):
+                response = json.dumps({"user_facts": ["prefers dark mode"]})
+                gateway._process_memory_extraction(response)
+            with open(user_file) as f:
+                content = f.read()
+            pref_idx = content.index("## Preferences (Observed)")
+            important_idx = content.index("## Important Context")
+            fact_idx = content.index("prefers dark mode")
+            assert pref_idx < fact_idx < important_idx, \
+                "Preference fact should be in the Preferences (Observed) section"
+
+    def test_interest_fact_routed_to_interests(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            user_file = self._make_user_md(tmpdir)
+            with patch.object(gateway, "DATA_DIR", tmpdir):
+                response = json.dumps({"user_facts": ["hobby is woodworking"]})
+                gateway._process_memory_extraction(response)
+            with open(user_file) as f:
+                content = f.read()
+            interest_idx = content.index("## Interests & Context")
+            people_idx = content.index("## People")
+            fact_idx = content.index("hobby is woodworking")
+            assert interest_idx < fact_idx < people_idx, \
+                "Interest fact should be in the Interests & Context section"
+
+    def test_default_fact_routed_to_important_context(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            user_file = self._make_user_md(tmpdir)
+            with patch.object(gateway, "DATA_DIR", tmpdir):
+                response = json.dumps({"user_facts": ["has a meeting tomorrow at 3pm"]})
+                gateway._process_memory_extraction(response)
+            with open(user_file) as f:
+                content = f.read()
+            important_idx = content.index("## Important Context")
+            fact_idx = content.index("has a meeting tomorrow at 3pm")
+            assert fact_idx > important_idx, \
+                "Default fact should be in Important Context section"
+
+
+# ── _process_memory_extraction learnings format ────────────────────────────
+
+class TestMemoryExtractionLearningsFormat(unittest.TestCase):
+    """Tests that corrections are written with the full learnings schema."""
+
+    def test_correction_has_full_schema_fields(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            identity_dir = os.path.join(tmpdir, "identity")
+            learnings_dir = os.path.join(identity_dir, "learnings")
+            os.makedirs(learnings_dir)
+            learnings_file = os.path.join(learnings_dir, "LEARNINGS.md")
+            with open(learnings_file, "w") as f:
+                f.write("# Learnings\n")
+
+            with patch.object(gateway, "DATA_DIR", tmpdir):
+                response = json.dumps({"corrections": ["use bun not npm"]})
+                gateway._process_memory_extraction(response)
+
+            with open(learnings_file) as f:
+                content = f.read()
+
+            # check for the full schema fields
+            assert "## [LRN-" in content, "Should use ## heading with [LRN-...] format"
+            assert "**Priority**: low" in content, "Should include Priority field"
+            assert "**Status**: active" in content, "Should include Status field"
+            assert "**Category**: auto-extracted" in content, "Should include Category field"
+            assert "### Summary" in content, "Should include Summary subsection"
+            assert "use bun not npm" in content, "Should contain the correction text"
+
+    def test_correction_entry_id_format(self):
+        """Entry ID should be LRN-YYYYMMDD-AUTO."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            identity_dir = os.path.join(tmpdir, "identity")
+            learnings_dir = os.path.join(identity_dir, "learnings")
+            os.makedirs(learnings_dir)
+            learnings_file = os.path.join(learnings_dir, "LEARNINGS.md")
+            with open(learnings_file, "w") as f:
+                f.write("# Learnings\n")
+
+            with patch.object(gateway, "DATA_DIR", tmpdir):
+                response = json.dumps({"corrections": ["test correction"]})
+                gateway._process_memory_extraction(response)
+
+            with open(learnings_file) as f:
+                content = f.read()
+
+            # should match pattern like ## [LRN-20260313-AUTO]
+            assert re.search(r'## \[LRN-\d{8}-AUTO\]', content), \
+                f"Entry ID should match LRN-YYYYMMDD-AUTO format, got:\n{content}"
+
+    def test_multiple_corrections_numbered(self):
+        """Multiple corrections in one extraction should get unique IDs."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            identity_dir = os.path.join(tmpdir, "identity")
+            learnings_dir = os.path.join(identity_dir, "learnings")
+            os.makedirs(learnings_dir)
+            learnings_file = os.path.join(learnings_dir, "LEARNINGS.md")
+            with open(learnings_file, "w") as f:
+                f.write("# Learnings\n")
+
+            with patch.object(gateway, "DATA_DIR", tmpdir):
+                response = json.dumps({"corrections": ["fix A", "fix B"]})
+                gateway._process_memory_extraction(response)
+
+            with open(learnings_file) as f:
+                content = f.read()
+
+            # both should be present with different IDs
+            ids = re.findall(r'## \[LRN-\d{8}-AUTO-(\d+)\]', content)
+            assert len(ids) == 2, f"Expected 2 unique IDs, got {ids} in:\n{content}"
+            assert ids[0] != ids[1], "IDs should be unique"
+
+
 # ── _memory_writer_loop idle detection ──────────────────────────────────────
 
 class TestMemoryWriterIdleDetection(unittest.TestCase):
@@ -3387,6 +3674,229 @@ class TestUXPaperCuts(unittest.TestCase):
             content = f.read()
         self.assertIn("refreshBots", content,
                       "admin.html should have a refreshBots function")
+
+
+# ── media message handling tests ─────────────────────────────────────────────
+
+class TestMediaMessageHandling(unittest.TestCase):
+    """Tests for media message replies in the poll loop."""
+
+    def test_has_media_detects_photo(self):
+        """_has_media returns True when message contains a photo."""
+        msg = {"chat": {"id": 1}, "photo": [{"file_id": "abc"}]}
+        self.assertTrue(gateway._has_media(msg))
+
+    def test_has_media_detects_voice(self):
+        """_has_media returns True for voice messages."""
+        msg = {"chat": {"id": 1}, "voice": {"file_id": "abc"}}
+        self.assertTrue(gateway._has_media(msg))
+
+    def test_has_media_detects_document(self):
+        """_has_media returns True for documents/files."""
+        msg = {"chat": {"id": 1}, "document": {"file_id": "abc"}}
+        self.assertTrue(gateway._has_media(msg))
+
+    def test_has_media_detects_sticker(self):
+        """_has_media returns True for stickers."""
+        msg = {"chat": {"id": 1}, "sticker": {"file_id": "abc"}}
+        self.assertTrue(gateway._has_media(msg))
+
+    def test_has_media_detects_video(self):
+        """_has_media returns True for video."""
+        msg = {"chat": {"id": 1}, "video": {"file_id": "abc"}}
+        self.assertTrue(gateway._has_media(msg))
+
+    def test_has_media_detects_audio(self):
+        """_has_media returns True for audio."""
+        msg = {"chat": {"id": 1}, "audio": {"file_id": "abc"}}
+        self.assertTrue(gateway._has_media(msg))
+
+    def test_has_media_detects_video_note(self):
+        """_has_media returns True for video notes (round videos)."""
+        msg = {"chat": {"id": 1}, "video_note": {"file_id": "abc"}}
+        self.assertTrue(gateway._has_media(msg))
+
+    def test_has_media_detects_animation(self):
+        """_has_media returns True for animations/GIFs."""
+        msg = {"chat": {"id": 1}, "animation": {"file_id": "abc"}}
+        self.assertTrue(gateway._has_media(msg))
+
+    def test_has_media_false_for_text_only(self):
+        """_has_media returns False for text-only messages."""
+        msg = {"chat": {"id": 1}, "text": "hello"}
+        self.assertFalse(gateway._has_media(msg))
+
+    def test_has_media_false_for_empty_message(self):
+        """_has_media returns False for empty message objects."""
+        msg = {"chat": {"id": 1}}
+        self.assertFalse(gateway._has_media(msg))
+
+    def test_media_reply_constant_exists(self):
+        """The MEDIA_REPLY constant should be defined."""
+        self.assertTrue(hasattr(gateway, "MEDIA_REPLY"))
+        self.assertIn("text", gateway.MEDIA_REPLY.lower())
+
+    def test_paired_user_photo_gets_canned_reply(self):
+        """Paired user sending a photo should get the canned media reply."""
+        bot = gateway.BotInstance("test", "tok123")
+        bot.running = True
+        fake_update = {
+            "ok": True,
+            "result": [{
+                "update_id": 1,
+                "message": {
+                    "chat": {"id": 42},
+                    "photo": [{"file_id": "abc", "width": 100, "height": 100}],
+                },
+            }],
+        }
+        empty_response = {"ok": True, "result": []}
+
+        # simulate one poll cycle: first call returns media msg, second stops loop
+        call_count = [0]
+        def fake_urlopen(req, timeout=None):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                resp = MagicMock()
+                resp.read.return_value = json.dumps(fake_update).encode()
+                resp.__enter__ = lambda s: s
+                resp.__exit__ = MagicMock(return_value=False)
+                return resp
+            bot.running = False
+            resp = MagicMock()
+            resp.read.return_value = json.dumps(empty_response).encode()
+            resp.__enter__ = lambda s: s
+            resp.__exit__ = MagicMock(return_value=False)
+            return resp
+
+        with patch("gateway.get_paired_chat_ids", return_value=["42"]), \
+             patch("gateway.send_telegram_message") as mock_send, \
+             patch("gateway.urllib.request.urlopen", side_effect=fake_urlopen):
+            bot._poll_loop()
+
+        mock_send.assert_called_once_with("tok123", "42", gateway.MEDIA_REPLY)
+
+    def test_paired_user_voice_gets_canned_reply(self):
+        """Paired user sending a voice note should get the canned media reply."""
+        bot = gateway.BotInstance("test", "tok123")
+        bot.running = True
+        fake_update = {
+            "ok": True,
+            "result": [{
+                "update_id": 1,
+                "message": {
+                    "chat": {"id": 42},
+                    "voice": {"file_id": "abc", "duration": 5},
+                },
+            }],
+        }
+        empty_response = {"ok": True, "result": []}
+
+        call_count = [0]
+        def fake_urlopen(req, timeout=None):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                resp = MagicMock()
+                resp.read.return_value = json.dumps(fake_update).encode()
+                resp.__enter__ = lambda s: s
+                resp.__exit__ = MagicMock(return_value=False)
+                return resp
+            bot.running = False
+            resp = MagicMock()
+            resp.read.return_value = json.dumps(empty_response).encode()
+            resp.__enter__ = lambda s: s
+            resp.__exit__ = MagicMock(return_value=False)
+            return resp
+
+        with patch("gateway.get_paired_chat_ids", return_value=["42"]), \
+             patch("gateway.send_telegram_message") as mock_send, \
+             patch("gateway.urllib.request.urlopen", side_effect=fake_urlopen):
+            bot._poll_loop()
+
+        mock_send.assert_called_once_with("tok123", "42", gateway.MEDIA_REPLY)
+
+    def test_unpaired_user_photo_gets_no_reply(self):
+        """Unpaired user sending a photo should get NO reply (silence)."""
+        bot = gateway.BotInstance("test", "tok123")
+        bot.running = True
+        fake_update = {
+            "ok": True,
+            "result": [{
+                "update_id": 1,
+                "message": {
+                    "chat": {"id": 99},
+                    "photo": [{"file_id": "abc", "width": 100, "height": 100}],
+                },
+            }],
+        }
+        empty_response = {"ok": True, "result": []}
+
+        call_count = [0]
+        def fake_urlopen(req, timeout=None):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                resp = MagicMock()
+                resp.read.return_value = json.dumps(fake_update).encode()
+                resp.__enter__ = lambda s: s
+                resp.__exit__ = MagicMock(return_value=False)
+                return resp
+            bot.running = False
+            resp = MagicMock()
+            resp.read.return_value = json.dumps(empty_response).encode()
+            resp.__enter__ = lambda s: s
+            resp.__exit__ = MagicMock(return_value=False)
+            return resp
+
+        with patch("gateway.get_paired_chat_ids", return_value=["42"]), \
+             patch("gateway.send_telegram_message") as mock_send, \
+             patch("gateway.urllib.request.urlopen", side_effect=fake_urlopen):
+            bot._poll_loop()
+
+        mock_send.assert_not_called()
+
+    def test_text_message_not_treated_as_media(self):
+        """A normal text message should NOT trigger the media reply."""
+        bot = gateway.BotInstance("test", "tok123")
+        bot.running = True
+        fake_update = {
+            "ok": True,
+            "result": [{
+                "update_id": 1,
+                "message": {
+                    "chat": {"id": 42},
+                    "text": "hello",
+                },
+            }],
+        }
+        empty_response = {"ok": True, "result": []}
+
+        call_count = [0]
+        def fake_urlopen(req, timeout=None):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                resp = MagicMock()
+                resp.read.return_value = json.dumps(fake_update).encode()
+                resp.__enter__ = lambda s: s
+                resp.__exit__ = MagicMock(return_value=False)
+                return resp
+            bot.running = False
+            resp = MagicMock()
+            resp.read.return_value = json.dumps(empty_response).encode()
+            resp.__enter__ = lambda s: s
+            resp.__exit__ = MagicMock(return_value=False)
+            return resp
+
+        with patch("gateway.get_paired_chat_ids", return_value=["42"]), \
+             patch("gateway.send_telegram_message") as mock_send, \
+             patch("gateway.urllib.request.urlopen", side_effect=fake_urlopen), \
+             patch.object(bot, "_do_message_relay"):
+            bot._poll_loop()
+
+        # send_telegram_message should NOT be called with the MEDIA_REPLY
+        for call in mock_send.call_args_list:
+            if len(call.args) >= 3:
+                self.assertNotEqual(call.args[2], gateway.MEDIA_REPLY,
+                                    "Text message should not trigger media reply")
 
 
 if __name__ == "__main__":

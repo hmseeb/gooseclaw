@@ -88,11 +88,12 @@ Plans:
   3. Per-user session locks and active relay tracking are scoped per-bot (one bot's lock does not block another bot's users)
   4. Each bot routes to its own LLM provider/model via extended channel_routes keyed by bot name
   5. Existing single-bot `telegram_bot_token` config continues to work as the default bot with no migration required
-**Plans**: TBD
+**Plans:** 3 plans
 
 Plans:
-- [ ] 09-01: TBD
-- [ ] 09-02: TBD
+- [ ] 09-01-PLAN.md -- TDD: BotInstance and BotManager classes, config resolution, validation (BOT-01, BOT-02, BOT-03, BOT-07)
+- [ ] 09-02-PLAN.md -- TDD: Poll loop refactor into BotInstance, notification handlers, per-bot pairing (BOT-02, BOT-03, BOT-04)
+- [ ] 09-03-PLAN.md -- TDD: Wire BotManager into startup, shutdown, and API endpoints (BOT-04, BOT-07)
 
 ### Phase 10: Multi-Bot Lifecycle
 **Goal**: Operators can dynamically add and remove bots without restarting the container
@@ -123,5 +124,5 @@ Phase 9 depends on Phase 6 (not Phase 7/8), so Phase 9 could start after Phase 6
 | 6. Shared Infrastructure Extraction | v2.0 | 0/3 | Planned | - |
 | 7. Channel Plugin Parity | v2.0 | 3/3 | Complete | 2026-03-13 |
 | 8. Notification Channel Targeting | v2.0 | 1/1 | Complete | 2026-03-13 |
-| 9. Multi-Bot Core | v2.0 | 0/? | Not started | - |
+| 9. Multi-Bot Core | v2.0 | 0/3 | Planned | - |
 | 10. Multi-Bot Lifecycle | v2.0 | 0/? | Not started | - |

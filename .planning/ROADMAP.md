@@ -4,7 +4,7 @@
 
 - [x] **v1.0 Setup Wizard** - Phases 1-5 (shipped 2026-03-11)
 - [x] **v2.0 Multi-Channel & Multi-Bot** - Phases 6-10 (shipped 2026-03-13)
-- [ ] **v3.0 Rich Media & Channel Flexibility** - Phases 11-15
+- [x] **v3.0 Rich Media & Channel Flexibility** - Phases 11-15 (shipped 2026-03-13)
 
 ## Phases
 

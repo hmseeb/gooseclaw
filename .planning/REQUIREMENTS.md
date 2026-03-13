@@ -147,4 +147,4 @@
 
 ---
 *Requirements defined: 2026-03-13*
-*Last updated: 2026-03-13 after v3.0 milestone scoping*
+*Last updated: 2026-03-13 -- v3.0 milestone shipped, all 16 requirements complete*

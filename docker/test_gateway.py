@@ -2951,5 +2951,255 @@ class TestBotShutdown(unittest.TestCase):
         self.assertFalse(bot2.running)
 
 
+class TestBotLifecycleAPI(unittest.TestCase):
+    """Tests for hot-add and hot-remove bot API endpoints (BOT-05, BOT-06)."""
+
+    def setUp(self):
+        bm = gateway._bot_manager
+        with bm._lock:
+            bm._bots.clear()
+        # save and clear notification handlers
+        self._orig_handlers = gateway._notification_handlers[:]
+        gateway._notification_handlers.clear()
+
+    def tearDown(self):
+        bm = gateway._bot_manager
+        with bm._lock:
+            for bot in bm._bots.values():
+                bot.running = False
+            bm._bots.clear()
+        # restore notification handlers
+        gateway._notification_handlers[:] = self._orig_handlers
+
+    def _make_handler(self, path="/api/bots", method="POST"):
+        """Create a mock GatewayHandler for testing endpoints."""
+        handler = MagicMock(spec=gateway.GatewayHandler)
+        handler.path = path
+        handler.command = method
+        handler.headers = {}
+        handler.client_address = ("127.0.0.1", 12345)
+        handler._json_response = None
+
+        def mock_send_json(status, data):
+            handler._json_response = (status, data)
+
+        handler.send_json = mock_send_json
+        return handler
+
+    # ── unregister_notification_handler ──
+
+    def test_unregister_notification_handler(self):
+        """register a handler, unregister it by name, verify it's gone."""
+        gateway.register_notification_handler("test_chan", lambda t: {"sent": True})
+        self.assertEqual(len(gateway._notification_handlers), 1)
+
+        gateway.unregister_notification_handler("test_chan")
+
+        self.assertEqual(len(gateway._notification_handlers), 0)
+
+    def test_unregister_nonexistent_handler(self):
+        """unregister a handler that doesn't exist, should not raise."""
+        gateway.unregister_notification_handler("nonexistent")
+        # no exception = pass
+
+    # ── BotManager.remove_bot enhanced cleanup ──
+
+    def test_remove_bot_calls_stop(self):
+        """remove_bot should call bot.stop() which sets running=False and joins thread."""
+        bot = gateway._bot_manager.add_bot("test_stop", "tok:stop")
+        bot.running = True
+
+        gateway._bot_manager.remove_bot("test_stop")
+
+        self.assertFalse(bot.running)
+        self.assertIsNone(gateway._bot_manager.get_bot("test_stop"))
+
+    def test_remove_bot_clears_sessions(self):
+        """remove_bot should clear sessions for the bot's channel_key."""
+        bot = gateway._bot_manager.add_bot("test_sess", "tok:sess", channel_key="telegram:test_sess")
+        gateway._session_manager.set("telegram:test_sess", "user1", "sid1")
+        self.assertEqual(gateway._session_manager.get("telegram:test_sess", "user1"), "sid1")
+
+        gateway._bot_manager.remove_bot("test_sess")
+
+        self.assertIsNone(gateway._session_manager.get("telegram:test_sess", "user1"))
+
+    def test_remove_bot_unregisters_notification(self):
+        """remove_bot should unregister the notification handler for the bot's channel_key."""
+        bot = gateway._bot_manager.add_bot("test_notif", "tok:notif", channel_key="telegram:test_notif")
+        gateway.register_notification_handler("telegram:test_notif", lambda t: {"sent": True})
+        self.assertEqual(len(gateway._notification_handlers), 1)
+
+        gateway._bot_manager.remove_bot("test_notif")
+
+        self.assertEqual(len(gateway._notification_handlers), 0)
+
+    # ── POST /api/bots (hot-add) ──
+
+    @patch("gateway._is_first_boot", return_value=False)
+    @patch("gateway.save_setup")
+    @patch("gateway.load_setup", return_value={"provider_type": "anthropic", "bots": []})
+    @patch.object(gateway.BotInstance, "start")
+    def test_add_bot_success(self, _mock_start, _mock_load, _mock_save, _mock_boot):
+        """POST with {name, token} returns 201 with bot name and status."""
+        handler = self._make_handler()
+        handler._read_body = MagicMock(return_value=json.dumps({"name": "research", "token": "111:AAA"}).encode())
+
+        gateway.GatewayHandler.handle_add_bot(handler)
+
+        self.assertIsNotNone(handler._json_response)
+        status, data = handler._json_response
+        self.assertEqual(status, 201)
+        self.assertEqual(data["name"], "research")
+        self.assertEqual(data["status"], "running")
+
+    @patch("gateway._is_first_boot", return_value=False)
+    def test_add_bot_missing_name(self, _mock_boot):
+        """POST with no name returns 400."""
+        handler = self._make_handler()
+        handler._read_body = MagicMock(return_value=json.dumps({"token": "111:AAA"}).encode())
+
+        gateway.GatewayHandler.handle_add_bot(handler)
+
+        status, data = handler._json_response
+        self.assertEqual(status, 400)
+
+    @patch("gateway._is_first_boot", return_value=False)
+    def test_add_bot_missing_token(self, _mock_boot):
+        """POST with no token returns 400."""
+        handler = self._make_handler()
+        handler._read_body = MagicMock(return_value=json.dumps({"name": "research"}).encode())
+
+        gateway.GatewayHandler.handle_add_bot(handler)
+
+        status, data = handler._json_response
+        self.assertEqual(status, 400)
+
+    @patch("gateway._is_first_boot", return_value=False)
+    def test_add_bot_invalid_token_format(self, _mock_boot):
+        """POST with token lacking colon returns 400."""
+        handler = self._make_handler()
+        handler._read_body = MagicMock(return_value=json.dumps({"name": "research", "token": "badtoken"}).encode())
+
+        gateway.GatewayHandler.handle_add_bot(handler)
+
+        status, data = handler._json_response
+        self.assertEqual(status, 400)
+
+    @patch("gateway._is_first_boot", return_value=False)
+    @patch("gateway.save_setup")
+    @patch("gateway.load_setup", return_value={"provider_type": "anthropic", "bots": []})
+    @patch.object(gateway.BotInstance, "start")
+    def test_add_bot_duplicate_name(self, _mock_start, _mock_load, _mock_save, _mock_boot):
+        """POST with name that already exists in _bot_manager returns 409."""
+        gateway._bot_manager.add_bot("research", "222:BBB")
+        handler = self._make_handler()
+        handler._read_body = MagicMock(return_value=json.dumps({"name": "research", "token": "111:AAA"}).encode())
+
+        gateway.GatewayHandler.handle_add_bot(handler)
+
+        status, data = handler._json_response
+        self.assertEqual(status, 409)
+
+    @patch("gateway._is_first_boot", return_value=False)
+    @patch("gateway.save_setup")
+    @patch("gateway.load_setup", return_value={"provider_type": "anthropic", "bots": []})
+    @patch.object(gateway.BotInstance, "start")
+    def test_add_bot_persists_to_setup(self, _mock_start, _mock_load, mock_save, _mock_boot):
+        """POST with valid bot calls save_setup with config containing new bot."""
+        handler = self._make_handler()
+        handler._read_body = MagicMock(return_value=json.dumps({"name": "research", "token": "111:AAA"}).encode())
+
+        gateway.GatewayHandler.handle_add_bot(handler)
+
+        self.assertTrue(mock_save.called)
+        saved_config = mock_save.call_args[0][0]
+        bot_names = [b["name"] for b in saved_config.get("bots", [])]
+        self.assertIn("research", bot_names)
+
+    # ── DELETE /api/bots/<name> (hot-remove) ──
+
+    @patch("gateway._is_first_boot", return_value=False)
+    @patch("gateway.save_setup")
+    @patch("gateway.load_setup", return_value={"provider_type": "anthropic", "bots": [{"name": "research", "token": "111:AAA"}]})
+    def test_remove_bot_success(self, _mock_load, _mock_save, _mock_boot):
+        """DELETE /api/bots/research returns 200 and bot is gone."""
+        bot = gateway._bot_manager.add_bot("research", "111:AAA")
+        handler = self._make_handler(path="/api/bots/research", method="DELETE")
+
+        gateway.GatewayHandler.handle_remove_bot(handler, "research")
+
+        status, data = handler._json_response
+        self.assertEqual(status, 200)
+        self.assertEqual(data["removed"], "research")
+        self.assertIsNone(gateway._bot_manager.get_bot("research"))
+
+    @patch("gateway._is_first_boot", return_value=False)
+    def test_remove_bot_not_found(self, _mock_boot):
+        """DELETE /api/bots/nonexistent returns 404."""
+        handler = self._make_handler(path="/api/bots/nonexistent", method="DELETE")
+
+        gateway.GatewayHandler.handle_remove_bot(handler, "nonexistent")
+
+        status, data = handler._json_response
+        self.assertEqual(status, 404)
+
+    @patch("gateway._is_first_boot", return_value=False)
+    @patch("gateway.save_setup")
+    @patch("gateway.load_setup", return_value={"provider_type": "anthropic", "bots": [{"name": "research", "token": "111:AAA"}]})
+    def test_remove_bot_persists_to_setup(self, _mock_load, mock_save, _mock_boot):
+        """DELETE removes bot from setup.json bots array."""
+        gateway._bot_manager.add_bot("research", "111:AAA")
+        handler = self._make_handler(path="/api/bots/research", method="DELETE")
+
+        gateway.GatewayHandler.handle_remove_bot(handler, "research")
+
+        self.assertTrue(mock_save.called)
+        saved_config = mock_save.call_args[0][0]
+        bot_names = [b["name"] for b in saved_config.get("bots", [])]
+        self.assertNotIn("research", bot_names)
+
+    @patch("gateway._is_first_boot", return_value=False)
+    @patch("gateway.save_setup")
+    @patch("gateway.load_setup", return_value={"provider_type": "anthropic", "bots": [{"name": "a", "token": "1:A"}, {"name": "b", "token": "2:B"}]})
+    def test_remove_bot_does_not_affect_others(self, _mock_load, _mock_save, _mock_boot):
+        """Removing bot 'a' does not affect bot 'b'."""
+        gateway._bot_manager.add_bot("a", "1:A")
+        bot_b = gateway._bot_manager.add_bot("b", "2:B")
+        bot_b.running = True
+        handler = self._make_handler(path="/api/bots/a", method="DELETE")
+
+        gateway.GatewayHandler.handle_remove_bot(handler, "a")
+
+        self.assertIsNotNone(gateway._bot_manager.get_bot("b"))
+        self.assertTrue(bot_b.running)
+
+    # ── Auth ──
+
+    @patch("gateway._is_first_boot", return_value=False)
+    @patch("gateway.check_auth", return_value=False)
+    def test_add_bot_requires_auth(self, _mock_auth, _mock_boot):
+        """POST from non-localhost without auth returns 401."""
+        handler = self._make_handler()
+        handler.client_address = ("1.2.3.4", 12345)
+        handler._read_body = MagicMock(return_value=json.dumps({"name": "x", "token": "1:X"}).encode())
+
+        gateway.GatewayHandler.handle_add_bot(handler)
+
+        # should have called send_response(401)
+        handler.send_response.assert_called_with(401)
+
+    @patch("gateway._is_first_boot", return_value=False)
+    @patch("gateway.check_auth", return_value=False)
+    def test_remove_bot_requires_auth(self, _mock_auth, _mock_boot):
+        """DELETE from non-localhost without auth returns 401."""
+        handler = self._make_handler(path="/api/bots/x", method="DELETE")
+        handler.client_address = ("1.2.3.4", 12345)
+
+        gateway.GatewayHandler.handle_remove_bot(handler, "x")
+
+        handler.send_response.assert_called_with(401)
+
+
 if __name__ == "__main__":
     unittest.main()

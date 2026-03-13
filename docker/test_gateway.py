@@ -3899,5 +3899,210 @@ class TestMediaMessageHandling(unittest.TestCase):
                                     "Text message should not trigger media reply")
 
 
+# ── InboundMessage ─────────────────────────────────────────────────────────
+
+
+class TestInboundMessage(unittest.TestCase):
+    """Tests for InboundMessage channel-agnostic envelope (MEDIA-01)."""
+
+    def test_text_only(self):
+        msg = gateway.InboundMessage(user_id="123", text="hello")
+        self.assertEqual(msg.text, "hello")
+        self.assertTrue(msg.has_text)
+        self.assertFalse(msg.has_media)
+        self.assertEqual(msg.media, [])
+        self.assertEqual(msg.metadata, {})
+
+    def test_with_media(self):
+        msg = gateway.InboundMessage(
+            user_id="123",
+            media=[{"type": "image", "url": "http://x"}],
+        )
+        self.assertTrue(msg.has_media)
+
+    def test_defaults(self):
+        msg = gateway.InboundMessage(user_id="123")
+        self.assertEqual(msg.text, "")
+        self.assertEqual(msg.channel, "")
+        self.assertEqual(msg.media, [])
+        self.assertEqual(msg.metadata, {})
+
+    def test_user_id_coerced_to_string(self):
+        msg = gateway.InboundMessage(user_id=123)
+        self.assertEqual(msg.user_id, "123")
+
+    def test_with_metadata(self):
+        msg = gateway.InboundMessage(user_id="123", metadata={"msg_id": "abc"})
+        self.assertEqual(msg.metadata, {"msg_id": "abc"})
+
+    def test_text_with_media(self):
+        msg = gateway.InboundMessage(
+            user_id="123",
+            text="check this out",
+            media=[{"type": "image", "url": "http://x"}],
+        )
+        self.assertTrue(msg.has_text)
+        self.assertTrue(msg.has_media)
+
+
+# ── OutboundAdapter ────────────────────────────────────────────────────────
+
+
+class TestOutboundAdapter(unittest.TestCase):
+    """Tests for OutboundAdapter base class (MEDIA-02)."""
+
+    def _make_adapter(self):
+        """Create a concrete adapter that records send_text calls."""
+        class RecordingAdapter(gateway.OutboundAdapter):
+            def __init__(self):
+                self.sent = []
+            def send_text(self, text):
+                self.sent.append(text)
+                return {"sent": True}
+        return RecordingAdapter()
+
+    def test_send_text_not_implemented(self):
+        with self.assertRaises(NotImplementedError):
+            gateway.OutboundAdapter().send_text("hi")
+
+    def test_send_image_degrades_to_text(self):
+        adapter = self._make_adapter()
+        adapter.send_image("http://img.png", "caption")
+        self.assertEqual(adapter.sent, ["caption\nhttp://img.png"])
+
+    def test_send_voice_degrades_to_text(self):
+        adapter = self._make_adapter()
+        adapter.send_voice("http://voice.ogg", "transcript text")
+        self.assertEqual(adapter.sent, ["transcript text"])
+
+    def test_send_voice_no_transcript(self):
+        adapter = self._make_adapter()
+        adapter.send_voice("http://voice.ogg")
+        self.assertEqual(adapter.sent, ["[Voice message: http://voice.ogg]"])
+
+    def test_send_file_degrades_to_text(self):
+        adapter = self._make_adapter()
+        adapter.send_file("http://file.pdf", "doc.pdf")
+        self.assertEqual(adapter.sent, ["[File: doc.pdf] http://file.pdf"])
+
+    def test_send_buttons_degrades_to_text(self):
+        adapter = self._make_adapter()
+        adapter.send_buttons("Pick one:", [{"label": "A"}, {"label": "B"}])
+        expected = "Pick one:\n\n1. A\n2. B"
+        self.assertEqual(adapter.sent, [expected])
+
+    def test_capabilities_returns_text_only_defaults(self):
+        caps = gateway.OutboundAdapter().capabilities()
+        self.assertIsInstance(caps, gateway.ChannelCapabilities)
+        self.assertFalse(caps.supports_images)
+        self.assertFalse(caps.supports_voice)
+        self.assertFalse(caps.supports_files)
+        self.assertFalse(caps.supports_buttons)
+
+
+# ── ChannelCapabilities ────────────────────────────────────────────────────
+
+
+class TestChannelCapabilities(unittest.TestCase):
+    """Tests for ChannelCapabilities declaration (MEDIA-03)."""
+
+    def test_defaults_all_false(self):
+        caps = gateway.ChannelCapabilities()
+        self.assertFalse(caps.supports_images)
+        self.assertFalse(caps.supports_voice)
+        self.assertFalse(caps.supports_files)
+        self.assertFalse(caps.supports_buttons)
+        self.assertFalse(caps.supports_streaming)
+        self.assertEqual(caps.max_file_size, 0)
+        self.assertEqual(caps.max_text_length, 0)
+
+    def test_custom_values(self):
+        caps = gateway.ChannelCapabilities(supports_images=True, max_file_size=50000000)
+        self.assertTrue(caps.supports_images)
+        self.assertEqual(caps.max_file_size, 50000000)
+
+    def test_to_dict(self):
+        caps = gateway.ChannelCapabilities(supports_images=True)
+        d = caps.to_dict()
+        self.assertIsInstance(d, dict)
+        self.assertTrue(d["supports_images"])
+        self.assertFalse(d["supports_voice"])
+
+
+# ── GracefulDegradation ───────────────────────────────────────────────────
+
+
+class TestGracefulDegradation(unittest.TestCase):
+    """Tests for graceful degradation in OutboundAdapter (MEDIA-04)."""
+
+    def _make_adapter(self):
+        class RecordingAdapter(gateway.OutboundAdapter):
+            def __init__(self):
+                self.sent = []
+            def send_text(self, text):
+                self.sent.append(text)
+                return {"sent": True}
+        return RecordingAdapter()
+
+    def test_image_to_text_fallback(self):
+        adapter = self._make_adapter()
+        adapter.send_image("http://example.com/photo.jpg")
+        self.assertIn("http://example.com/photo.jpg", adapter.sent[0])
+
+    def test_voice_to_transcript_fallback(self):
+        adapter = self._make_adapter()
+        adapter.send_voice("http://voice.ogg", "here is the transcript")
+        self.assertEqual(adapter.sent, ["here is the transcript"])
+
+    def test_file_to_link_fallback(self):
+        adapter = self._make_adapter()
+        adapter.send_file("http://file.pdf", "report.pdf")
+        self.assertIn("http://file.pdf", adapter.sent[0])
+        self.assertIn("report.pdf", adapter.sent[0])
+
+    def test_override_skips_degradation(self):
+        class CustomImageAdapter(gateway.OutboundAdapter):
+            def __init__(self):
+                self.image_calls = []
+                self.text_calls = []
+            def send_text(self, text):
+                self.text_calls.append(text)
+                return {"sent": True}
+            def send_image(self, url, caption=""):
+                self.image_calls.append((url, caption))
+                return {"sent": True}
+
+        adapter = CustomImageAdapter()
+        adapter.send_image("http://x", "cap")
+        self.assertEqual(adapter.image_calls, [("http://x", "cap")])
+        self.assertEqual(adapter.text_calls, [])
+
+
+# ── LegacyOutboundAdapter ─────────────────────────────────────────────────
+
+
+class TestLegacyOutboundAdapter(unittest.TestCase):
+    """Tests for LegacyOutboundAdapter backward compat shim."""
+
+    def test_wraps_send_fn(self):
+        mock_fn = MagicMock(return_value={"sent": True})
+        adapter = gateway.LegacyOutboundAdapter(mock_fn)
+        result = adapter.send_text("hi")
+        mock_fn.assert_called_once_with("hi")
+        self.assertEqual(result, {"sent": True})
+
+    def test_image_degrades_through_legacy(self):
+        mock_fn = MagicMock(return_value={"sent": True})
+        adapter = gateway.LegacyOutboundAdapter(mock_fn)
+        adapter.send_image("http://x", "cap")
+        mock_fn.assert_called_once_with("cap\nhttp://x")
+
+    def test_capabilities_text_only(self):
+        adapter = gateway.LegacyOutboundAdapter(lambda t: None)
+        caps = adapter.capabilities()
+        self.assertFalse(caps.supports_images)
+        self.assertFalse(caps.supports_voice)
+
+
 if __name__ == "__main__":
     unittest.main()

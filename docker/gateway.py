@@ -3327,6 +3327,81 @@ def start_cron_scheduler():
     threading.Thread(target=_cron_scheduler_loop, daemon=True).start()
 
 
+# ── channel contract v2 types ─────────────────────────────────────────────────
+
+
+class InboundMessage:
+    """Channel-agnostic inbound message envelope."""
+    def __init__(self, user_id, text="", channel="", media=None, metadata=None):
+        self.user_id = str(user_id)
+        self.text = text or ""
+        self.channel = channel or ""
+        self.media = media if media is not None else []
+        self.metadata = metadata if metadata is not None else {}
+
+    @property
+    def has_media(self):
+        return bool(self.media)
+
+    @property
+    def has_text(self):
+        return bool(self.text.strip())
+
+
+class ChannelCapabilities:
+    """Declares what a channel supports."""
+    def __init__(self, **kwargs):
+        self.supports_images = kwargs.get("supports_images", False)
+        self.supports_voice = kwargs.get("supports_voice", False)
+        self.supports_files = kwargs.get("supports_files", False)
+        self.supports_buttons = kwargs.get("supports_buttons", False)
+        self.supports_streaming = kwargs.get("supports_streaming", False)
+        self.max_file_size = kwargs.get("max_file_size", 0)
+        self.max_text_length = kwargs.get("max_text_length", 0)
+
+    def to_dict(self):
+        return {k: v for k, v in self.__dict__.items() if not k.startswith("_")}
+
+
+class OutboundAdapter:
+    """Base class for channel output. Override send_text (required).
+    Other send_* methods degrade to send_text by default."""
+
+    def capabilities(self):
+        return ChannelCapabilities()
+
+    def send_text(self, text):
+        raise NotImplementedError("send_text() is required")
+
+    def send_image(self, url, caption=""):
+        fallback = f"{caption}\n{url}" if caption else url
+        return self.send_text(fallback.strip())
+
+    def send_voice(self, url, transcript=""):
+        fallback = transcript or f"[Voice message: {url}]"
+        return self.send_text(fallback)
+
+    def send_file(self, url, filename=""):
+        fallback = f"[File: {filename}] {url}" if filename else url
+        return self.send_text(fallback)
+
+    def send_buttons(self, text, buttons):
+        lines = [text, ""]
+        for i, btn in enumerate(buttons, 1):
+            label = btn.get("label", btn.get("text", f"Option {i}"))
+            lines.append(f"{i}. {label}")
+        return self.send_text("\n".join(lines))
+
+
+class LegacyOutboundAdapter(OutboundAdapter):
+    """Wraps a legacy send(text) function as an OutboundAdapter."""
+    def __init__(self, send_fn):
+        self._send_fn = send_fn
+
+    def send_text(self, text):
+        return self._send_fn(text)
+
+
 # ── channel plugin system ─────────────────────────────────────────────────────
 #
 # Each channel is a .py file in /data/channels/ with a CHANNEL dict:

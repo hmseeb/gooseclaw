@@ -287,13 +287,9 @@ telegram_lock = threading.Lock()
 telegram_pair_code = None
 telegram_pair_lock = threading.Lock()
 _telegram_running = False  # True while the Python polling thread is active
-_telegram_sessions_file = os.path.join(DATA_DIR, "telegram_sessions.json")
-_telegram_sessions = {}  # chat_id (str) -> session_id (str)
-_telegram_sessions_lock = threading.Lock()
-_telegram_active_relays = {}   # chat_id (str) -> [socket] ref (active WS relay)
-_telegram_active_relays_lock = threading.Lock()
-_telegram_chat_locks = {}      # chat_id (str) -> threading.Lock (one relay at a time)
-_telegram_chat_locks_lock = threading.Lock()
+_session_manager = SessionManager(persist_dir=DATA_DIR)
+_telegram_state = ChannelState()
+_command_router = CommandRouter()
 
 # ── per-channel model routing state ────────────────────────────────────────
 # Tracks which model was last set on each goose session so we avoid
@@ -1869,32 +1865,29 @@ def _is_goose_gateway_running():
 # ── telegram session persistence ────────────────────────────────────────────
 
 def _load_telegram_sessions():
-    """Load telegram session mapping from disk."""
-    global _telegram_sessions
-    try:
-        if os.path.exists(_telegram_sessions_file):
-            with open(_telegram_sessions_file) as f:
-                data = json.load(f)
-            if isinstance(data, dict):
-                with _telegram_sessions_lock:
-                    _telegram_sessions = data
-                print(f"[telegram] loaded {len(data)} session(s) from {_telegram_sessions_file}")
-    except Exception as e:
-        print(f"[telegram] warn: could not load sessions: {e}")
+    """Load telegram session mapping from disk via SessionManager.
+    Also handles migration from old telegram_sessions.json format."""
+    _session_manager.load("telegram")
+    # migrate from old file format if new file doesn't exist
+    old_file = os.path.join(DATA_DIR, "telegram_sessions.json")
+    if os.path.exists(old_file):
+        new_file = os.path.join(DATA_DIR, "sessions_telegram.json")
+        if not os.path.exists(new_file):
+            try:
+                with open(old_file) as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    for chat_key, sid in data.items():
+                        _session_manager.set("telegram", chat_key, sid)
+                    print(f"[telegram] migrated {len(data)} sessions from old format")
+            except Exception as e:
+                print(f"[telegram] warn: could not migrate old sessions: {e}")
 
 
 def _save_telegram_sessions():
-    """Persist telegram session mapping to disk."""
-    with _telegram_sessions_lock:
-        data = dict(_telegram_sessions)
-    try:
-        os.makedirs(os.path.dirname(_telegram_sessions_file), exist_ok=True)
-        tmp = _telegram_sessions_file + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(data, f, indent=2)
-        os.replace(tmp, _telegram_sessions_file)
-    except Exception as e:
-        print(f"[telegram] warn: could not save sessions: {e}")
+    """Persist telegram session mapping to disk via SessionManager.
+    Kept as a wrapper for backward compatibility with existing callers."""
+    _session_manager._save("telegram")
 
 
 # ── job engine (unified timer + script runner) ────────────────────────────
@@ -2923,27 +2916,8 @@ class ChannelRelay:
 
     def __init__(self, channel_name):
         self._name = channel_name
-        self._sessions_file = os.path.join(DATA_DIR, f"channel_sessions_{channel_name}.json")
-        self._sessions = {}
-        self._lock = threading.Lock()
-        # load existing sessions
-        try:
-            if os.path.exists(self._sessions_file):
-                with open(self._sessions_file) as f:
-                    self._sessions.update(json.load(f))
-        except Exception:
-            pass
-
-    def _save(self):
-        try:
-            with self._lock:
-                data = dict(self._sessions)
-            tmp = self._sessions_file + ".tmp"
-            with open(tmp, "w") as f:
-                json.dump(data, f, indent=2)
-            os.replace(tmp, self._sessions_file)
-        except Exception as e:
-            print(f"[channels] warn: could not save sessions for {self._name}: {e}")
+        # Load any persisted sessions for this channel
+        _session_manager.load(channel_name)
 
     def __call__(self, user_id, text, send_fn=None):
         """Relay a message from channel user to goose web. Returns response text.
@@ -2953,14 +2927,11 @@ class ChannelRelay:
         don't pass send_fn get the original single-response behavior.
         """
         user_key = str(user_id)
-        with self._lock:
-            session_id = self._sessions.get(user_key)
+        session_id = _session_manager.get(self._name, user_key)
 
         if not session_id:
             session_id = f"{self._name}_{user_key}_{time.strftime('%Y%m%d_%H%M%S')}"
-            with self._lock:
-                self._sessions[user_key] = session_id
-            self._save()
+            _session_manager.set(self._name, user_key, session_id)
 
         # determine streaming params
         setup = load_setup()
@@ -2976,9 +2947,7 @@ class ChannelRelay:
         if error:
             # try new session on failure
             session_id = f"{self._name}_{user_key}_{time.strftime('%Y%m%d_%H%M%S')}"
-            with self._lock:
-                self._sessions[user_key] = session_id
-            self._save()
+            _session_manager.set(self._name, user_key, session_id)
             response_text, error = relay_fn(text, session_id)
 
         if error:
@@ -2987,9 +2956,7 @@ class ChannelRelay:
 
     def reset_session(self, user_id):
         """Reset a user's session (for /clear command)."""
-        with self._lock:
-            self._sessions.pop(str(user_id), None)
-        self._save()
+        _session_manager.pop(self._name, str(user_id))
 
 
 def _deregister_notification_handler(name):
@@ -3347,46 +3314,29 @@ def start_session_watcher():
 
 def _get_chat_lock(chat_id):
     """Get or create a per-chat lock. Ensures only one relay runs at a time per chat."""
-    chat_key = str(chat_id)
-    with _telegram_chat_locks_lock:
-        if chat_key not in _telegram_chat_locks:
-            _telegram_chat_locks[chat_key] = threading.Lock()
-        return _telegram_chat_locks[chat_key]
-
-
-_KNOWN_COMMANDS = {"/help", "/stop", "/clear", "/compact"}
-
-_prewarm_events = {}  # chat_key (str) -> threading.Event (set when prewarm done)
+    return _telegram_state.get_user_lock(chat_id)
 
 
 def is_known_command(text):
     """Check if text is a recognized slash command."""
-    if not text or not text.startswith("/"):
-        return False
-    return text.lower().split()[0] in _KNOWN_COMMANDS
+    return _command_router.is_command(text)
 
 
 def _clear_chat(chat_id):
-    """Kill active relay and clear session for a chat. Used by /clear."""
+    """Kill active relay and clear session for a chat. Used by /clear.
+    INFRA-04: Only removes the requesting user's session, not all sessions."""
     chat_key = str(chat_id)
 
     # kill active relay (same as /stop)
-    with _telegram_active_relays_lock:
-        sock_ref = _telegram_active_relays.pop(chat_key, None)
-    if sock_ref and sock_ref[0]:
-        # set cancelled flag BEFORE closing socket so retry logic sees it
-        if len(sock_ref) > 1 and hasattr(sock_ref[1], 'set'):
-            sock_ref[1].set()
-        try:
-            sock_ref[0].close()
-        except Exception:
-            pass
+    _telegram_state.kill_relay(chat_key)
 
-    # remove ALL sessions — goose web restart invalidates them all
-    with _telegram_sessions_lock:
-        old = _telegram_sessions.pop(chat_key, None)
-        _telegram_sessions.clear()
-    _save_telegram_sessions()
+    # remove ONLY this user's session (not all sessions)
+    # NOTE: _restart_goose_and_prewarm still restarts goose web, which invalidates
+    # all goose web sessions. Other users' _session_manager entries remain but will
+    # get new sessions on next message (stale session triggers retry logic in
+    # _relay_to_goose_web). This is a documented limitation until goose web supports
+    # per-session cleanup.
+    old = _session_manager.pop("telegram", chat_key)
     return old
 
 
@@ -3416,17 +3366,15 @@ def _get_session_id(chat_id):
     If a prewarm is in progress, waits for it instead of creating a duplicate.
     """
     chat_key = str(chat_id)
-    with _telegram_sessions_lock:
-        sid = _telegram_sessions.get(chat_key)
+    sid = _session_manager.get("telegram", chat_key)
     if sid:
         return sid
 
-    # check if prewarm is in progress — wait for it instead of creating duplicate
-    evt = _prewarm_events.get(chat_key)
+    # check if prewarm is in progress -- wait for it instead of creating duplicate
+    evt = _telegram_state._prewarm_events.get(chat_key)
     if evt:
         evt.wait(timeout=15)
-        with _telegram_sessions_lock:
-            sid = _telegram_sessions.get(chat_key)
+        sid = _session_manager.get("telegram", chat_key)
         if sid:
             return sid
 
@@ -3437,9 +3385,7 @@ def _get_session_id(chat_id):
         sid = str(uuid.uuid4())
         print(f"[telegram] warn: could not start agent, using random session {sid}")
 
-    with _telegram_sessions_lock:
-        _telegram_sessions[chat_key] = sid
-    _save_telegram_sessions()
+    _session_manager.set("telegram", chat_key, sid)
     print(f"[telegram] new session {sid} for chat {chat_key}")
     return sid
 
@@ -3448,11 +3394,11 @@ def _prewarm_session(chat_id):
     """Create a new goose session in background thread and store it for chat_id.
 
     Called after /clear so the next user message doesn't pay the cold-start cost.
-    Uses _prewarm_events so _get_session_id can wait instead of creating a duplicate.
+    Uses _telegram_state._prewarm_events so _get_session_id can wait instead of creating a duplicate.
     """
     chat_key = str(chat_id)
     evt = threading.Event()
-    _prewarm_events[chat_key] = evt
+    _telegram_state._prewarm_events[chat_key] = evt
 
     def _do_prewarm():
         try:
@@ -3460,25 +3406,93 @@ def _prewarm_session(chat_id):
             if not sid:
                 print(f"[telegram] prewarm failed for chat {chat_key}")
                 return
-            with _telegram_sessions_lock:
-                # don't clobber if user already sent a message and got a session
-                if chat_key not in _telegram_sessions:
-                    _telegram_sessions[chat_key] = sid
-                    _stored = True
-                else:
-                    _stored = False
-            # save OUTSIDE lock to avoid deadlock (_save_telegram_sessions acquires same lock)
-            if _stored:
-                _save_telegram_sessions()
+            existing = _session_manager.get("telegram", chat_key)
+            if not existing:
+                _session_manager.set("telegram", chat_key, sid)
                 print(f"[telegram] prewarmed session {sid} for chat {chat_key}")
             else:
-                print(f"[telegram] prewarm skipped, chat {chat_key} already has session")
+                print(f"[telegram] prewarm skipped, session exists for {chat_key}")
         finally:
             evt.set()
-            _prewarm_events.pop(chat_key, None)
+            _telegram_state._prewarm_events.pop(chat_key, None)
 
     t = threading.Thread(target=_do_prewarm, daemon=True)
     t.start()
+
+
+# ── command handlers (registered on _command_router) ─────────────────────────
+
+def _handle_cmd_help(ctx):
+    """Handle /help command."""
+    help_text = (
+        "\U0001fabf *GooseClaw Commands*\n\n"
+        + _command_router.get_help_text()
+    )
+    ctx["send_fn"](help_text)
+
+
+def _handle_cmd_stop(ctx):
+    """Handle /stop command."""
+    chat_id = ctx["user_id"]
+    sock_ref = _telegram_state.pop_active_relay(chat_id)
+    if sock_ref and sock_ref[0]:
+        try:
+            if len(sock_ref) > 1 and hasattr(sock_ref[1], 'set'):
+                sock_ref[1].set()
+            sid = _session_manager.get("telegram", chat_id)
+            if sid:
+                try:
+                    _ws_send_text(sock_ref[0], json.dumps({
+                        "type": "cancel",
+                        "session_id": sid,
+                    }))
+                except Exception:
+                    pass
+            sock_ref[0].close()
+        except Exception:
+            pass
+        ctx["send_fn"]("Stopped.")
+        print(f"[telegram] /stop killed relay for chat {chat_id}")
+    else:
+        ctx["send_fn"]("Nothing running.")
+
+
+def _handle_cmd_clear(ctx):
+    """Handle /clear command."""
+    chat_id = ctx["user_id"]
+    old = _clear_chat(chat_id)
+    ctx["send_fn"]("\U0001f504 Session cleared. Restarting engine, give it ~15s...")
+    threading.Thread(
+        target=_restart_goose_and_prewarm,
+        args=(chat_id,),
+        daemon=True,
+    ).start()
+    print(f"[telegram] session cleared for chat {chat_id} (old: {old}), restarting goose web")
+
+
+def _handle_cmd_compact(ctx):
+    """Handle /compact command."""
+    chat_id = ctx["user_id"]
+    bot_token = ctx.get("bot_token")
+    if bot_token:
+        _send_typing_action(bot_token, chat_id)
+    session_id = _get_session_id(chat_id)
+    response_text, error = _relay_to_goose_web(
+        "Please summarize our conversation so far into key points, "
+        "then we can continue from this summary. Be concise.",
+        session_id, chat_id=chat_id, channel="telegram"
+    )
+    if error:
+        ctx["send_fn"](f"Error: {error}")
+    else:
+        ctx["send_fn"](f"\U0001f4dd Compacted:\n\n{response_text}")
+
+
+# register commands on the module-level router
+_command_router.register("help", _handle_cmd_help, "this message")
+_command_router.register("stop", _handle_cmd_stop, "cancel the current response")
+_command_router.register("clear", _handle_cmd_clear, "wipe conversation and start fresh")
+_command_router.register("compact", _handle_cmd_compact, "summarize history to save tokens")
 
 
 def _create_goose_session():
@@ -3596,8 +3610,7 @@ def _memory_writer_loop():
 
             for chat_id in idle_chats:
                 # get session for this chat
-                with _telegram_sessions_lock:
-                    sid = _telegram_sessions.get(chat_id)
+                sid = _session_manager.get("telegram", chat_id)
                 if not sid or sid in _memory_processed_sessions:
                     # already processed or no session, clear activity tracker
                     with _memory_last_activity_lock:
@@ -3963,13 +3976,12 @@ def _relay_to_goose_web(user_text, session_id, chat_id=None, channel=None,
                  and hasattr(sock_ref[1], 'is_set') and sock_ref[1].is_set())
     if err and chat_id and not cancelled:
         reason = err if err else "empty response"
-        print(f"[telegram] relay failed ({reason}), creating new session")
+        ch = channel or "telegram"
+        print(f"[{ch}] relay failed ({reason}), creating new session")
         new_sid = _create_goose_session()
         if new_sid:
-            with _telegram_sessions_lock:
-                _telegram_sessions[str(chat_id)] = new_sid
-            _save_telegram_sessions()
-            print(f"[telegram] retrying with new session {new_sid}")
+            _session_manager.set(ch, str(chat_id), new_sid)
+            print(f"[{ch}] retrying with new session {new_sid}")
             return relay_fn(user_text, new_sid)
 
     return text, err
@@ -4427,80 +4439,20 @@ def _telegram_poll_loop(bot_token):
                     # ── handle local slash commands before relaying ──
                     lower = text.lower()
 
-                    if lower == "/help":
-                        help_text = (
-                            "🪿 *GooseClaw Commands*\n\n"
-                            "/stop — cancel the current response\n"
-                            "/clear — wipe conversation and start fresh\n"
-                            "/compact — summarize history to save tokens\n"
-                            "/help — this message"
-                        )
-                        send_telegram_message(bot_token, chat_id, help_text)
-                        continue
-
-                    if lower == "/stop":
-                        # kill any active relay for this chat
-                        with _telegram_active_relays_lock:
-                            sock_ref = _telegram_active_relays.pop(chat_id, None)
-                        if sock_ref and sock_ref[0]:
-                            try:
-                                # set cancelled flag so relay thread won't send partial text
-                                if len(sock_ref) > 1 and hasattr(sock_ref[1], 'set'):
-                                    sock_ref[1].set()
-                                # send cancel signal before closing so goose aborts sub-agents
-                                sid = None
-                                with _telegram_sessions_lock:
-                                    sid = _telegram_sessions.get(chat_id)
-                                if sid:
-                                    try:
-                                        _ws_send_text(sock_ref[0], json.dumps({
-                                            "type": "cancel",
-                                            "session_id": sid,
-                                        }))
-                                    except Exception:
-                                        pass
-                                sock_ref[0].close()
-                            except Exception:
-                                pass
-                            send_telegram_message(bot_token, chat_id, "Stopped.")
-                            print(f"[telegram] /stop killed relay for chat {chat_id}")
-                        else:
-                            send_telegram_message(bot_token, chat_id, "Nothing running.")
-                        continue
-
-                    if lower == "/clear":
-                        old = _clear_chat(chat_id)
-                        send_telegram_message(
-                            bot_token, chat_id,
-                            "🔄 Session cleared. Restarting engine, give it ~15s..."
-                        )
-                        # restart goose web in background to kill claude subprocess
-                        # then prewarm a new session
-                        threading.Thread(
-                            target=_restart_goose_and_prewarm,
-                            args=(chat_id,),
-                            daemon=True,
-                        ).start()
-                        print(f"[telegram] session cleared for chat {chat_id} (old: {old}), restarting goose web")
-                        continue
-
-                    if lower == "/compact":
-                        # relay /compact to goose as a regular message — it handles summarization
-                        _send_typing_action(bot_token, chat_id)
-                        session_id = _get_session_id(chat_id)
-                        response_text, error = _relay_to_goose_web(
-                            "Please summarize our conversation so far into key points, "
-                            "then we can continue from this summary. Be concise.",
-                            session_id, chat_id=chat_id, channel="telegram"
-                        )
-                        if error:
-                            send_telegram_message(bot_token, chat_id, f"Error: {error}")
-                        else:
-                            send_telegram_message(bot_token, chat_id, f"📝 Compacted:\n\n{response_text}")
+                    if _command_router.is_command(lower):
+                        ctx = {
+                            "channel": "telegram",
+                            "user_id": chat_id,
+                            "bot_token": bot_token,
+                            "send_fn": lambda t, _bt=bot_token, _cid=chat_id: send_telegram_message(_bt, _cid, t),
+                        }
+                        if not _command_router.dispatch(text, ctx):
+                            send_telegram_message(bot_token, chat_id,
+                                f"Unknown command: {text.split()[0]}\nSend /help for available commands.")
                         continue
 
                     # ── catch unknown slash commands ──
-                    if lower.startswith("/") and not is_known_command(lower):
+                    if lower.startswith("/"):
                         send_telegram_message(
                             bot_token, chat_id,
                             f"Unknown command: {text.split()[0]}\nSend /help for available commands."
@@ -4523,8 +4475,7 @@ def _telegram_poll_loop(bot_token):
                             _cancelled = threading.Event()
                             _sock_ref = [None, _cancelled]
 
-                            with _telegram_active_relays_lock:
-                                _telegram_active_relays[_chat_id] = _sock_ref
+                            _telegram_state.set_active_relay(_chat_id, _sock_ref)
 
                             _tg_setup = load_setup()
                             _tg_verbosity = get_verbosity_for_channel(_tg_setup, "telegram") if _tg_setup else "balanced"
@@ -4603,8 +4554,7 @@ def _telegram_poll_loop(bot_token):
                                 except Exception:
                                     pass
                         finally:
-                            with _telegram_active_relays_lock:
-                                _telegram_active_relays.pop(_chat_id, None)
+                            _telegram_state.pop_active_relay(_chat_id)
                             _chat_lock.release()
 
                     threading.Thread(target=_do_relay, daemon=True).start()

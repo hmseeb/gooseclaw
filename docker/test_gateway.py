@@ -5709,5 +5709,225 @@ class TestTelegramOutboundAdapter(unittest.TestCase):
         self.assertIn(("x" * 1024).encode(), body)
 
 
+# ── BotInstance media routing tests (14-02) ──────────────────────────────────
+
+class TestBotMediaRouting(unittest.TestCase):
+    """Tests for BotInstance._do_message_relay routing media blocks through TelegramOutboundAdapter."""
+
+    def _make_bot(self):
+        bot = gateway.BotInstance("test", "tok:test", channel_key="telegram:test")
+        return bot
+
+    @patch("gateway._route_media_blocks")
+    @patch("gateway.TelegramOutboundAdapter")
+    @patch("gateway._relay_to_goose_web")
+    @patch("gateway.send_telegram_message", return_value=(True, ""))
+    @patch("gateway._send_typing_action")
+    @patch("gateway.load_setup", return_value=None)
+    @patch("gateway._memory_touch")
+    @patch.object(gateway._session_manager, "get", return_value="sess1")
+    def test_image_sent_after_text(self, _sm, _mem, _setup, _typing, mock_send,
+                                    mock_relay, mock_adapter_cls, mock_route):
+        """After text delivery, media blocks should be routed via TelegramOutboundAdapter."""
+        media = [{"type": "image", "data": "aGVsbG8=", "mimeType": "image/png"}]
+        mock_relay.return_value = ("hello", "", media)
+        bot = self._make_bot()
+        bot._do_message_relay(chat_id="123", text="hi", bot_token="tok:test")
+        mock_adapter_cls.assert_called_once_with("tok:test", "123")
+        mock_route.assert_called_once_with(media, mock_adapter_cls.return_value)
+
+    @patch("gateway._route_media_blocks")
+    @patch("gateway.TelegramOutboundAdapter")
+    @patch("gateway._relay_to_goose_web")
+    @patch("gateway.send_telegram_message", return_value=(True, ""))
+    @patch("gateway._send_typing_action")
+    @patch("gateway.load_setup", return_value=None)
+    @patch("gateway._memory_touch")
+    @patch.object(gateway._session_manager, "get", return_value="sess1")
+    def test_no_media_no_send(self, _sm, _mem, _setup, _typing, mock_send,
+                               mock_relay, mock_adapter_cls, mock_route):
+        """No media blocks means no TelegramOutboundAdapter or _route_media_blocks call."""
+        mock_relay.return_value = ("hello", "", [])
+        bot = self._make_bot()
+        bot._do_message_relay(chat_id="123", text="hi", bot_token="tok:test")
+        mock_adapter_cls.assert_not_called()
+        mock_route.assert_not_called()
+
+    @patch("gateway._route_media_blocks")
+    @patch("gateway.TelegramOutboundAdapter")
+    @patch("gateway._relay_to_goose_web")
+    @patch("gateway.send_telegram_message", return_value=(True, ""))
+    @patch("gateway._send_typing_action")
+    @patch("gateway.load_setup", return_value=None)
+    @patch("gateway._memory_touch")
+    @patch.object(gateway._session_manager, "get", return_value="sess1")
+    def test_cancelled_skips_media(self, _sm, _mem, _setup, _typing, mock_send,
+                                    mock_relay, mock_adapter_cls, mock_route):
+        """When the relay is cancelled, media should NOT be routed."""
+        media = [{"type": "image", "data": "aGVsbG8=", "mimeType": "image/png"}]
+        mock_relay.return_value = ("hello", "", media)
+        bot = self._make_bot()
+
+        # We need to set the cancelled event before media routing runs.
+        # Patch set_active_relay to capture the sock_ref and set cancelled.
+        original_set = bot.state.set_active_relay
+        def capture_and_cancel(cid, sock_ref):
+            original_set(cid, sock_ref)
+            sock_ref[1].set()  # set cancelled event
+        with patch.object(bot.state, "set_active_relay", side_effect=capture_and_cancel):
+            bot._do_message_relay(chat_id="123", text="hi", bot_token="tok:test")
+        mock_adapter_cls.assert_not_called()
+        mock_route.assert_not_called()
+
+    @patch("gateway._route_media_blocks", side_effect=Exception("network error"))
+    @patch("gateway.TelegramOutboundAdapter")
+    @patch("gateway._relay_to_goose_web")
+    @patch("gateway.send_telegram_message", return_value=(True, ""))
+    @patch("gateway._send_typing_action")
+    @patch("gateway.load_setup", return_value=None)
+    @patch("gateway._memory_touch")
+    @patch.object(gateway._session_manager, "get", return_value="sess1")
+    def test_media_error_logged_not_crash(self, _sm, _mem, _setup, _typing, mock_send,
+                                           mock_relay, mock_adapter_cls, mock_route):
+        """Media routing errors should be caught and logged, not crash the relay."""
+        media = [{"type": "image", "data": "aGVsbG8=", "mimeType": "image/png"}]
+        mock_relay.return_value = ("hello", "", media)
+        bot = self._make_bot()
+        # Should NOT raise
+        bot._do_message_relay(chat_id="123", text="hi", bot_token="tok:test")
+        # Text was still delivered
+        mock_send.assert_called()
+
+    @patch("gateway._route_media_blocks")
+    @patch("gateway.TelegramOutboundAdapter")
+    @patch("gateway._relay_to_goose_web")
+    @patch("gateway.send_telegram_message", return_value=(True, ""))
+    @patch("gateway._send_typing_action")
+    @patch("gateway.load_setup", return_value=None)
+    @patch("gateway._memory_touch")
+    @patch.object(gateway._session_manager, "get", return_value="sess1")
+    def test_multiple_images_sent(self, _sm, _mem, _setup, _typing, mock_send,
+                                   mock_relay, mock_adapter_cls, mock_route):
+        """Multiple media blocks should all be passed to _route_media_blocks."""
+        media = [
+            {"type": "image", "data": "aGVsbG8=", "mimeType": "image/png"},
+            {"type": "image", "data": "d29ybGQ=", "mimeType": "image/jpeg"},
+        ]
+        mock_relay.return_value = ("hello", "", media)
+        bot = self._make_bot()
+        bot._do_message_relay(chat_id="123", text="hi", bot_token="tok:test")
+        mock_route.assert_called_once_with(media, mock_adapter_cls.return_value)
+
+
+# ── ChannelRelay media routing tests (14-02) ─────────────────────────────────
+
+class TestChannelRelayMedia(unittest.TestCase):
+    """Tests for ChannelRelay.__call__ routing media blocks through adapter."""
+
+    def setUp(self):
+        self.relay = gateway.ChannelRelay("test_media_ch")
+
+    @patch("gateway._route_media_blocks")
+    @patch("gateway._relay_to_goose_web")
+    @patch("gateway.load_setup", return_value=None)
+    @patch("gateway._session_manager")
+    def test_media_blocks_routed_through_adapter(self, mock_sm, mock_setup,
+                                                   mock_relay, mock_route):
+        """ChannelRelay should capture media and route through channel adapter."""
+        mock_sm.get.return_value = "sess_123"
+        media = [{"type": "image", "data": "aGVsbG8=", "mimeType": "image/png"}]
+        mock_relay.return_value = ("response", "", media)
+
+        # Set up a mock adapter in _loaded_channels
+        mock_adapter = MagicMock(spec=gateway.OutboundAdapter)
+        with patch.dict(gateway._loaded_channels,
+                        {"test_media_ch": {"adapter": mock_adapter}}):
+            self.relay("user1", "hello", lambda t: None)
+
+        mock_route.assert_called_once_with(media, mock_adapter)
+
+    @patch("gateway._route_media_blocks")
+    @patch("gateway._relay_to_goose_web")
+    @patch("gateway.load_setup", return_value=None)
+    @patch("gateway._session_manager")
+    def test_legacy_adapter_gets_text_fallback(self, mock_sm, mock_setup,
+                                                mock_relay, mock_route):
+        """LegacyOutboundAdapter (no send_image override) should get graceful degradation."""
+        mock_sm.get.return_value = "sess_123"
+        media = [{"type": "image", "data": "aGVsbG8=", "mimeType": "image/png"}]
+        mock_relay.return_value = ("response", "", media)
+
+        # Use real LegacyOutboundAdapter (send_image falls back to send_text)
+        sent = []
+        legacy_adapter = gateway.LegacyOutboundAdapter(lambda t: sent.append(t))
+        with patch.dict(gateway._loaded_channels,
+                        {"test_media_ch": {"adapter": legacy_adapter}}):
+            # mock _route_media_blocks is still patched, so we need to
+            # let the real _route_media_blocks run for this test
+            mock_route.side_effect = lambda blocks, adapter: gateway._route_media_blocks(blocks, adapter)
+            self.relay("user1", "hello", lambda t: None)
+
+        # LegacyOutboundAdapter.send_image falls back to send_text
+        # so sent list should have something (graceful degradation, not crash)
+        self.assertTrue(len(sent) > 0)
+
+
+# ── notify_all media tests (14-02) ──────────────────────────────────────────
+
+class TestNotifyMedia(unittest.TestCase):
+    """Tests for notify_all accepting and forwarding optional media parameter."""
+
+    def setUp(self):
+        # Save and clear notification handlers
+        self._saved_handlers = list(gateway._notification_handlers)
+        gateway._notification_handlers.clear()
+
+    def tearDown(self):
+        gateway._notification_handlers.clear()
+        gateway._notification_handlers.extend(self._saved_handlers)
+
+    def test_notify_with_media(self):
+        """notify_all should pass media kwarg to handlers that accept it."""
+        received = {}
+
+        def handler(text, media=None):
+            received["text"] = text
+            received["media"] = media
+            return {"sent": True}
+
+        gateway._notification_handlers.append({"name": "test", "handler": handler})
+        media = [{"type": "image", "data": "abc", "mimeType": "image/png"}]
+        gateway.notify_all("hello", media=media)
+        self.assertEqual(received.get("text"), "hello")
+        self.assertEqual(received.get("media"), media)
+
+    def test_notify_old_handler_backward_compat(self):
+        """Old handlers that only accept (text) should still work when media is passed."""
+        received = {}
+
+        def old_handler(text):
+            received["text"] = text
+            return {"sent": True}
+
+        gateway._notification_handlers.append({"name": "old", "handler": old_handler})
+        media = [{"type": "image", "data": "abc", "mimeType": "image/png"}]
+        # Should NOT raise TypeError
+        gateway.notify_all("hello", media=media)
+        self.assertEqual(received.get("text"), "hello")
+
+    def test_notify_no_media(self):
+        """notify_all with no media should work exactly as before."""
+        received = {}
+
+        def handler(text):
+            received["text"] = text
+            return {"sent": True}
+
+        gateway._notification_handlers.append({"name": "plain", "handler": handler})
+        result = gateway.notify_all("hello")
+        self.assertEqual(received.get("text"), "hello")
+        self.assertTrue(result.get("sent"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -23,8 +23,8 @@
 - [x] **BOT-02**: Each telegram bot runs its own poll loop with independent session store and pair codes
 - [x] **BOT-03**: Each bot has per-user session locks and active relay tracking (not shared across bots)
 - [x] **BOT-04**: Each bot routes to its own LLM provider/model via extended channel_routes keyed by bot name
-- [ ] **BOT-05**: User can add a new bot via API without container restart (hot-add)
-- [ ] **BOT-06**: User can remove a bot via API without container restart (hot-remove)
+- [x] **BOT-05**: User can add a new bot via API without container restart (hot-add)
+- [x] **BOT-06**: User can remove a bot via API without container restart (hot-remove)
 - [x] **BOT-07**: Existing single-bot `telegram_bot_token` config remains backward-compatible as default bot
 
 ### Infrastructure
@@ -77,8 +77,8 @@
 | BOT-03 | Phase 9 | Complete |
 | BOT-04 | Phase 9 | Complete |
 | BOT-07 | Phase 9 | Complete |
-| BOT-05 | Phase 10 | Pending |
-| BOT-06 | Phase 10 | Pending |
+| BOT-05 | Phase 10 | Complete |
+| BOT-06 | Phase 10 | Complete |
 
 **Coverage:**
 - v2.0 requirements: 20 total

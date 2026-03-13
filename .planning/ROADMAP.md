@@ -106,7 +106,7 @@ Plans:
 **Plans:** 1 plan
 
 Plans:
-- [ ] 10-01-PLAN.md -- TDD: Hot-add and hot-remove bot API endpoints with setup.json persistence (BOT-05, BOT-06)
+- [x] 10-01-PLAN.md -- TDD: Hot-add and hot-remove bot API endpoints with setup.json persistence (BOT-05, BOT-06)
 
 ## Progress
 
@@ -125,4 +125,4 @@ Phase 9 depends on Phase 6 (not Phase 7/8), so Phase 9 could start after Phase 6
 | 7. Channel Plugin Parity | v2.0 | 3/3 | Complete | 2026-03-13 |
 | 8. Notification Channel Targeting | v2.0 | 1/1 | Complete | 2026-03-13 |
 | 9. Multi-Bot Core | v2.0 | 3/3 | Complete | 2026-03-13 |
-| 10. Multi-Bot Lifecycle | v2.0 | 0/1 | Not started | - |
+| 10. Multi-Bot Lifecycle | v2.0 | 1/1 | Complete | 2026-03-13 |

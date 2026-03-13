@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-03-13)
 
 **Core value:** A user with zero DevOps knowledge can deploy and configure GooseClaw correctly on the first try
-**Current focus:** Phase 9 - Multi-Bot Core
+**Current focus:** Phase 10 - Multi-Bot Lifecycle (COMPLETE)
 
 ## Current Position
 
-Phase: 9 of 10 (Multi-Bot Core)
-Plan: 3 of 3 in current phase
+Phase: 10 of 10 (Multi-Bot Lifecycle)
+Plan: 1 of 1 in current phase
 Status: Complete
-Last activity: 2026-03-13 -- Completed 09-03 Wire BotManager into apply_config, startup, shutdown, and API endpoints
+Last activity: 2026-03-13 -- Completed 10-01 Hot-add and hot-remove bot API endpoints
 
-Progress: [=========] 90% (9/10 phases complete)
+Progress: [==========] 100% (10/10 phases complete)
 
 ## Performance Metrics
 
@@ -42,6 +42,7 @@ Progress: [=========] 90% (9/10 phases complete)
 | Phase 09 P01 | 4min | 2 tasks | 2 files |
 | Phase 09 P02 | 6min | 2 tasks | 2 files |
 | Phase 09 P03 | 5min | 2 tasks | 2 files |
+| Phase 10 P01 | 4min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -75,6 +76,9 @@ Recent decisions affecting current work:
 - [Phase 09]: start_telegram_gateway becomes thin wrapper around _bot_manager.add_bot("default", token)
 - [Phase 09]: handle_telegram_status returns "bots" array alongside backward-compat top-level fields
 - [Phase 09]: handle_telegram_pair accepts ?bot=name query param, defaults to "default"
+- [Phase 10]: POST /api/bots hot-adds bot with validation, start, and setup.json persistence
+- [Phase 10]: DELETE /api/bots/<name> hot-removes bot with stop, session clear, notification unregister, and setup.json persistence
+- [Phase 10]: BotManager.remove_bot() enhanced with full cleanup cascade (stop + sessions + notifications)
 
 ### Pending Todos
 
@@ -98,5 +102,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-03-13
-Stopped at: Completed 09-03-PLAN.md (Wire BotManager into apply_config, startup, shutdown, and API endpoints)
+Stopped at: Completed 10-01-PLAN.md (Hot-add and hot-remove bot API endpoints with setup.json persistence)
 Resume file: None

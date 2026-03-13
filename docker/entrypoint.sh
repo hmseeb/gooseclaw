@@ -387,7 +387,7 @@ if [ -f "$TEMPLATE_VERSION_FILE" ]; then
         echo "[upgrade] template updated: $DATA_VER -> $TEMPLATE_VER"
         # update system files (system.md, turn-rules.md, schemas/)
         # but NEVER overwrite user files (soul.md, user.md, memory.md)
-        for f in system.md turn-rules.md; do
+        for f in system.md turn-rules.md onboarding.md; do
             if [ -f "$APP_DIR/identity/$f" ]; then
                 cp "$APP_DIR/identity/$f" "$IDENTITY_DIR/$f"
                 echo "[upgrade] updated $f"

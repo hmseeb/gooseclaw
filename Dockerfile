@@ -25,14 +25,14 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
 ARG GOOSE_VERSION=1.27.2
 RUN curl -fsSL -o /tmp/goose.deb \
       "https://github.com/block/goose/releases/download/v${GOOSE_VERSION}/goose_${GOOSE_VERSION}_amd64.deb" && \
-    apt-get update && apt-get install -y --no-install-recommends zstd && \
+    apt-get update && apt-get install -y --no-install-recommends zstd binutils && \
     cd /tmp && ar x goose.deb data.tar.zst && \
     zstd -d data.tar.zst -o data.tar && \
     tar xf data.tar ./usr/lib/goose/resources/bin/goosed && \
     mv ./usr/lib/goose/resources/bin/goosed /usr/local/bin/goosed && \
     chmod +x /usr/local/bin/goosed && \
     rm -rf /tmp/goose.deb /tmp/data.tar* /tmp/usr && \
-    apt-get purge -y zstd && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
+    apt-get purge -y zstd binutils && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 # also install goose CLI for non-server commands (configure, etc.)
 RUN curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh \
     | CONFIGURE=false GOOSE_BIN_DIR=/usr/local/bin bash

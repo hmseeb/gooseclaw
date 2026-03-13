@@ -40,11 +40,12 @@
   3. Telegram globals (_telegram_sessions, _telegram_active_relays, _telegram_chat_locks) no longer exist as module-level dicts -- they live as per-instance state
   4. /clear clears only the requesting channel's sessions, not all sessions across all channels (or this limitation is documented with a scoping decision)
   5. All existing Telegram behavior passes existing tests -- zero functional regression
-**Plans**: TBD
+**Plans:** 3 plans
 
 Plans:
-- [ ] 06-01: TBD
-- [ ] 06-02: TBD
+- [ ] 06-01-PLAN.md -- TDD: SessionManager and ChannelState classes (INFRA-01, INFRA-03)
+- [ ] 06-02-PLAN.md -- TDD: CommandRouter class (INFRA-02)
+- [ ] 06-03-PLAN.md -- Wire classes into gateway, remove globals, fix /clear scoping (INFRA-03, INFRA-04)
 
 ### Phase 7: Channel Plugin Parity
 **Goal**: Channel plugins have identical capabilities to Telegram for commands, per-user concurrency safety, cancellation, and activity indicators
@@ -117,7 +118,7 @@ Phase 9 depends on Phase 6 (not Phase 7/8), so Phase 9 could start after Phase 6
 | 3. Gateway Resilience and Live Feedback | v1.0 | 2/2 | Complete | 2026-03-10 |
 | 4. Advanced Multi-Model Settings | v1.0 | 1/1 | Complete | 2026-03-11 |
 | 5. Production Hardening | v1.0 | 6/6 | Complete | 2026-03-10 |
-| 6. Shared Infrastructure Extraction | v2.0 | 0/? | Not started | - |
+| 6. Shared Infrastructure Extraction | v2.0 | 0/3 | Planned | - |
 | 7. Channel Plugin Parity | v2.0 | 0/? | Not started | - |
 | 8. Notification Channel Targeting | v2.0 | 0/? | Not started | - |
 | 9. Multi-Bot Core | v2.0 | 0/? | Not started | - |

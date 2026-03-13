@@ -2757,7 +2757,7 @@ def _fire_cron_job(job):
     if error:
         print(f"[cron] job {job_id} failed: {error}")
         # notify about the failure
-        notify_all(f"[cron:{job_id}] failed: {error}")
+        notify_all(f"[cron:{job_id}] failed: {error}", channel=job.get("notify_channel"))
         return
 
     # if the response contains useful output, deliver it
@@ -2767,7 +2767,7 @@ def _fire_cron_job(job):
         response_text = _strip_goose_preamble(response_text)
         if response_text:
             formatted = f"[{job_id}]\n\n{response_text}"
-            notify_all(formatted)
+            notify_all(formatted, channel=job.get("notify_channel"))
 
     print(f"[cron] job {job_id} completed")
 
@@ -5754,7 +5754,10 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             if not text:
                 self.send_json(400, {"sent": False, "error": "text field is required"})
                 return
-            result = notify_all(text)
+            channel = data.get("channel")
+            if channel:
+                channel = _sanitize_string(channel, max_length=100)
+            result = notify_all(text, channel=channel)
             status_code = 200 if result["sent"] else 502
             self.send_json(status_code, result)
         except json.JSONDecodeError:

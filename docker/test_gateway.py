@@ -2119,5 +2119,85 @@ class TestValidateSetupDynamic(unittest.TestCase):
         self.assertIn("slack", valid)
 
 
+# ── notify channel targeting ────────────────────────────────────────────────
+
+class TestNotifyChannelTargeting(unittest.TestCase):
+    """Tests for handle_notify() channel parameter passthrough (CHAN-07)."""
+
+    def _make_handler(self, body_dict):
+        """Create a mock handler with the given JSON body."""
+        handler = MagicMock()
+        handler.client_address = ("127.0.0.1", 12345)
+        handler._read_body.return_value = json.dumps(body_dict).encode()
+        handler._check_rate_limit.return_value = True
+        return handler
+
+    @patch("gateway._is_first_boot", return_value=False)
+    @patch("gateway.notify_all")
+    def test_notify_with_channel_passes_to_notify_all(self, mock_notify, _boot):
+        """POST /api/notify with channel="telegram" passes channel to notify_all."""
+        mock_notify.return_value = {"sent": True}
+        handler = self._make_handler({"text": "hello", "channel": "telegram"})
+        gateway.GatewayHandler.handle_notify(handler)
+        mock_notify.assert_called_once_with("hello", channel="telegram")
+
+    @patch("gateway._is_first_boot", return_value=False)
+    @patch("gateway.notify_all")
+    def test_notify_without_channel_broadcasts(self, mock_notify, _boot):
+        """POST /api/notify without channel field passes channel=None."""
+        mock_notify.return_value = {"sent": True}
+        handler = self._make_handler({"text": "hello"})
+        gateway.GatewayHandler.handle_notify(handler)
+        mock_notify.assert_called_once_with("hello", channel=None)
+
+    @patch("gateway._is_first_boot", return_value=False)
+    @patch("gateway.notify_all")
+    def test_notify_channel_sanitized(self, mock_notify, _boot):
+        """Channel value is sanitized (stripped, length-limited)."""
+        mock_notify.return_value = {"sent": True}
+        handler = self._make_handler({"text": "hello", "channel": "  telegram  "})
+        gateway.GatewayHandler.handle_notify(handler)
+        # _sanitize_string strips whitespace
+        args, kwargs = mock_notify.call_args
+        self.assertEqual(kwargs["channel"], "telegram")
+
+
+class TestCronNotifyChannel(unittest.TestCase):
+    """Tests for _fire_cron_job() notify_channel passthrough (CHAN-08)."""
+
+    @patch("gateway.notify_all")
+    @patch("gateway._do_ws_relay")
+    @patch("gateway._load_recipe", return_value="do the thing")
+    def test_cron_job_passes_notify_channel(self, _recipe, mock_relay, mock_notify):
+        """Cron job with notify_channel passes it to notify_all on success."""
+        mock_relay.return_value = ("output text", None)
+        gateway._fire_cron_job({"id": "test-cron", "source": "/test", "notify_channel": "telegram"})
+        mock_notify.assert_called_once()
+        _, kwargs = mock_notify.call_args
+        self.assertEqual(kwargs.get("channel"), "telegram")
+
+    @patch("gateway.notify_all")
+    @patch("gateway._do_ws_relay")
+    @patch("gateway._load_recipe", return_value="do the thing")
+    def test_cron_job_error_passes_notify_channel(self, _recipe, mock_relay, mock_notify):
+        """Cron job with notify_channel passes it to notify_all on error."""
+        mock_relay.return_value = (None, "connection failed")
+        gateway._fire_cron_job({"id": "test-cron", "source": "/test", "notify_channel": "telegram"})
+        mock_notify.assert_called_once()
+        _, kwargs = mock_notify.call_args
+        self.assertEqual(kwargs.get("channel"), "telegram")
+
+    @patch("gateway.notify_all")
+    @patch("gateway._do_ws_relay")
+    @patch("gateway._load_recipe", return_value="do the thing")
+    def test_cron_job_no_notify_channel_broadcasts(self, _recipe, mock_relay, mock_notify):
+        """Cron job without notify_channel passes channel=None (broadcast)."""
+        mock_relay.return_value = ("output text", None)
+        gateway._fire_cron_job({"id": "test-cron", "source": "/test"})
+        mock_notify.assert_called_once()
+        _, kwargs = mock_notify.call_args
+        self.assertIsNone(kwargs.get("channel"))
+
+
 if __name__ == "__main__":
     unittest.main()

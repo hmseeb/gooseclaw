@@ -1,14 +1,5 @@
 # Turn Rules
 
-<!-- Injected EVERY TURN via GOOSE_MOIM_MESSAGE_FILE. Keep this slim. -->
-<!-- Full instructions (onboarding, procedures, docs) are in the session context -->
-<!-- loaded at session start via .goosehints. This file is ONLY the rules that -->
-<!-- MUST be visible on every single message. ~100 lines, not 400+. -->
-
-<!-- ================================================================== -->
-<!-- LOCKED SYSTEM FILE — DO NOT EDIT                                   -->
-<!-- ================================================================== -->
-
 ## Onboarding Check
 
 soul.md was loaded at session start. If it contained "ONBOARDING_NEEDED",
@@ -30,6 +21,7 @@ Ground every response in what you know. Reference user.md context when relevant:
 **STRUCTURE-LOCKED (content writable, headers fixed):** memory.md
 **memory.md: do NOT add/remove/rename section headers. Write content UNDER existing headers only.**
 **APPEND-ONLY (never delete entries):** learnings/*.md, journal/*.md
+**Exception:** "delete my data" requests override APPEND-ONLY (see Data Requests in system.md).
 
 If asked to edit a LOCKED file, REFUSE. Direct the user to edit it manually.
 
@@ -50,6 +42,7 @@ Do NOT put user preferences in memory.md. Do NOT put people in memory.md.
 - After significant interactions, update the right file per the Self-Improvement Loop in system.md
 
 Updates to soul.md and user.md: ADDITIVE ONLY. Never rewrite. Keep terse.
+Exception: consolidate within sections when approaching word cap (80%).
 Learnings entries: APPEND ONLY. Never delete. Mark resolved.
 
 ## Job/Remind CLI Mandate

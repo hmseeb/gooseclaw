@@ -9,7 +9,8 @@ Critical per-turn rules are in turn-rules.md (injected every turn via MOIM).
 
 - Agent framework: Goose (by Block)
 - Deployed on: Railway (containerized)
-- Interface: Telegram
+- Interfaces: Telegram (primary), channel plugins (slack, discord, etc.)
+- Multi-bot: supports multiple Telegram bots on one gateway, each with independent sessions, providers, and models
 - Persistence: Railway volume at /data
 
 ### Telegram User Commands
@@ -22,6 +23,33 @@ Users can send these commands in Telegram chat:
 | `/stop` | cancel the current in-flight response |
 | `/clear` | wipe conversation history and start fresh. restarts the engine (~15s). the bot will have zero memory of the previous conversation |
 | `/compact` | summarize conversation so far to free up context window |
+
+### Multi-Bot Support
+
+The gateway can run multiple Telegram bots simultaneously. Each bot has:
+
+- Its own name, token, and optional provider/model override
+- Independent session store (conversations don't leak between bots)
+- Its own pairing code (single-use, rotates after each successful pair)
+- Per-user locks and relay tracking (one bot's activity doesn't block another)
+
+Configuration: `bots` array in setup.json, or hot-add/remove via API:
+
+| Method | Path | What it does |
+|--------|------|-------------|
+| POST | /api/bots | add a new bot (name, token, optional provider/model) |
+| DELETE | /api/bots/`<name>` | remove a bot (stops polling, cleans up sessions) |
+| GET | /api/telegram/status | shows all bots with their status and pairing codes |
+| POST | /api/telegram/pair | generate pairing code (`?bot=name` for specific bot) |
+
+Backward compatible: existing single `telegram_bot_token` config works as the "default" bot.
+
+### Pairing
+
+- Pairing codes are **single-use**. after someone pairs, the code rotates immediately.
+- If a user messages a bot they haven't paired with, they get a "not paired" message.
+- Pairing is Telegram-only. Channel plugins rely on their platform's own access control.
+- Each bot has its own pairing scope. pairing with bot A does not grant access to bot B.
 
 ---
 
@@ -366,6 +394,7 @@ log it to the right place. This is NOT optional. Growth is part of your operatin
 - Usage: `echo "your message" | notify` or `notify "your message"`
 - This is how scheduled recipes deliver output. Without it, headless session output vanishes.
 - The gateway also exposes POST /api/notify for programmatic use.
+- **Channel targeting**: POST /api/notify accepts optional `channel` parameter to deliver to a specific channel only (e.g. `{"text": "hello", "channel": "slack"}`). Omit to broadcast to all channels.
 
 ---
 
@@ -501,6 +530,10 @@ CHANNEL = {
     "setup": setup,            # omit if no init needed
     "teardown": teardown,      # omit if no cleanup needed
     "credentials": ["SLACK_TOKEN"],
+    "typing": typing_fn,       # optional: called every 4s during relay for activity indicators
+    "commands": {              # optional: custom slash commands for this channel
+        "status": {"handler": my_status_fn, "description": "show channel status"},
+    },
 }
 ```
 
@@ -516,6 +549,17 @@ Resolution order: env vars first, then sidecar JSON. Never put tokens in the .py
 3. Reload: `curl -s -X POST http://localhost:8080/api/channels/reload`
 4. Verify: `curl -s http://localhost:8080/api/channels`
 
+### Channel plugin capabilities (v2.0)
+
+Channel plugins now have full parity with Telegram:
+
+- **/help, /stop, /clear, /compact** work on all channels automatically (no plugin code needed)
+- **Per-user locks** prevent concurrent relay requests from the same user
+- **Cancellation** via /stop kills in-flight WebSocket relays on any channel
+- **Typing indicators** via optional `typing` callback in CHANNEL dict (called every 4s during relay)
+- **Custom commands** via optional `commands` field in CHANNEL dict (conflict detection with built-ins)
+- **Dynamic channel validation** for notification routing (loaded plugins are auto-discovered)
+
 ### Rules
 
 - Files starting with `_` are skipped (use `_example.py` for templates)
@@ -523,6 +567,7 @@ Resolution order: env vars first, then sidecar JSON. Never put tokens in the .py
 - `send(text)` MUST return `{"sent": bool, "error": str}`
 - `poll()` runs forever in a thread. Check `stop_event.is_set()` to exit cleanly.
 - All registered channels receive notifications from scheduler, jobs, and session watcher automatically.
+- Channel plugin security relies on platform access control (e.g. Slack workspace membership, Discord server roles). No pairing required.
 
 ---
 

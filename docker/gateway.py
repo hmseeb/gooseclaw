@@ -6033,6 +6033,42 @@ def start_telegram_gateway(bot_token):
         print(f"[telegram] error: {e}")
 
 
+def _configure_goosed_provider():
+    """Call POST /config/set_provider on goosed to set the LLM provider.
+
+    goosed has its own config system that ignores GOOSE_PROVIDER env vars.
+    Must be called via API after goosed is ready.
+    """
+    setup = load_setup()
+    if not setup or not _INTERNAL_GOOSE_TOKEN:
+        return
+    provider = setup.get("provider_type", "")
+    model = setup.get("model", "")
+    if not provider:
+        return
+    # claude-code uses "default" model
+    if provider == "claude-code":
+        model = "default"
+    if not model:
+        model = default_models.get(provider, "")
+    try:
+        payload = json.dumps({"provider": provider, "model": model}).encode("utf-8")
+        conn = _goosed_conn(timeout=10)
+        conn.request("POST", "/config/set_provider", body=payload, headers={
+            "Content-Type": "application/json",
+            "X-Secret-Key": _INTERNAL_GOOSE_TOKEN,
+        })
+        resp = conn.getresponse()
+        body = resp.read().decode("utf-8", errors="replace")
+        conn.close()
+        if resp.status in (200, 204):
+            print(f"[gateway] configured goosed provider: {provider}/{model}")
+        else:
+            print(f"[gateway] WARN: /config/set_provider returned {resp.status}: {body[:200]}")
+    except Exception as e:
+        print(f"[gateway] WARN: failed to configure goosed provider: {e}")
+
+
 def start_goose_web():
     global goose_process, _INTERNAL_GOOSE_TOKEN
     _check_stale_pid("goosed")
@@ -6096,6 +6132,8 @@ def start_goose_web():
                 if resp.status == 200:
                     _set_startup_state("ready", "goosed is running")
                     print("[gateway] goosed is ready")
+                    # configure provider via API (goosed ignores env vars for provider)
+                    _configure_goosed_provider()
                     return True
                 conn.close()
             except Exception:

@@ -93,6 +93,49 @@ class RateLimiter:
                 del self._requests[ip]
 
 
+# ── command routing ──────────────────────────────────────────────────────────
+
+class CommandRouter:
+    """Routes slash commands to handler functions.
+    Register handlers with descriptions, dispatch by command name."""
+
+    def __init__(self):
+        self._handlers = {}   # command_name (no slash) -> handler_fn
+        self._help_text = {}  # command_name -> description
+
+    def register(self, command, handler_fn, description=""):
+        """Register a command handler. command should NOT include '/'."""
+        self._handlers[command.lower()] = handler_fn
+        if description:
+            self._help_text[command.lower()] = description
+
+    def is_command(self, text):
+        """Check if text is a registered slash command."""
+        if not text or not text.startswith("/"):
+            return False
+        cmd = text.lower().split()[0][1:]  # strip the /
+        return cmd in self._handlers
+
+    def dispatch(self, text, context):
+        """Dispatch command to handler. Returns True if handled.
+        context is a dict with channel-specific info (channel, user_id, send_fn, etc.)."""
+        if not text or not text.startswith("/"):
+            return False
+        cmd = text.lower().split()[0][1:]
+        handler = self._handlers.get(cmd)
+        if handler:
+            handler(context)
+            return True
+        return False
+
+    def get_help_text(self):
+        """Generate formatted help text from registered commands."""
+        lines = []
+        for cmd, desc in sorted(self._help_text.items()):
+            lines.append(f"/{cmd} -- {desc}")
+        return "\n".join(lines)
+
+
 # module-level rate limiter instances
 api_limiter = RateLimiter(max_requests=60, window_seconds=60)    # 1 req/sec sustained
 auth_limiter = RateLimiter(max_requests=5, window_seconds=60)    # auth-sensitive endpoints

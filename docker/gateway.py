@@ -257,6 +257,77 @@ class ChannelState:
         return sock_ref
 
 
+# ── bot instance / manager ──────────────────────────────────────────────────
+
+class BotInstance:
+    """Encapsulates one Telegram bot's runtime state."""
+
+    def __init__(self, name, token, channel_key=None):
+        self.name = name
+        self.token = token
+        self.channel_key = channel_key or f"telegram:{name}"
+        self.state = ChannelState()
+        self.pair_code = None
+        self.pair_lock = threading.Lock()
+        self.running = False
+        self._thread = None
+
+    def generate_pair_code(self):
+        code = "".join(secrets.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789") for _ in range(6))
+        with self.pair_lock:
+            self.pair_code = code
+        print(f"[telegram:{self.name}] pairing code: {code}")
+        return code
+
+    def get_user_lock(self, user_id):
+        return self.state.get_user_lock(user_id)
+
+
+class BotManager:
+    """Manages multiple BotInstance lifecycle."""
+
+    def __init__(self):
+        self._bots = {}
+        self._lock = threading.Lock()
+
+    def add_bot(self, name, token, channel_key=None):
+        with self._lock:
+            if name in self._bots:
+                return self._bots[name]
+            for existing in self._bots.values():
+                if existing.token == token:
+                    raise ValueError(f"token already in use by bot '{existing.name}'")
+            bot = BotInstance(name, token, channel_key)
+            self._bots[name] = bot
+        return bot
+
+    def remove_bot(self, name):
+        with self._lock:
+            bot = self._bots.pop(name, None)
+        if bot:
+            bot.running = False
+
+    def stop_all(self):
+        with self._lock:
+            bots = list(self._bots.values())
+            self._bots.clear()
+        for bot in bots:
+            bot.running = False
+
+    def get_bot(self, name):
+        with self._lock:
+            return self._bots.get(name)
+
+    def get_all(self):
+        with self._lock:
+            return dict(self._bots)
+
+    @property
+    def any_running(self):
+        with self._lock:
+            return any(b.running for b in self._bots.values())
+
+
 # ── security headers ─────────────────────────────────────────────────────────
 
 SECURITY_HEADERS = {
@@ -333,11 +404,22 @@ _channels_lock = threading.Lock()
 
 
 def _get_valid_channels():
-    """Build valid channel names dynamically from fixed set + loaded plugins."""
+    """Build valid channel names dynamically from fixed set + loaded plugins + bot keys."""
     fixed = {"web", "telegram", "cron", "memory"}
     with _channels_lock:
         plugin_names = set(_loaded_channels.keys())
-    return fixed | plugin_names
+    result = fixed | plugin_names
+    # add bot-scoped channel keys from setup.json
+    try:
+        setup = load_setup()
+        if setup:
+            for bot_cfg in _resolve_bot_configs(setup):
+                name = bot_cfg.get("name", "")
+                if name and name != "default":
+                    result.add(f"telegram:{name}")
+    except Exception:
+        pass
+    return result
 
 
 # ── session watcher state (auto-forward scheduled output to telegram) ───────
@@ -922,6 +1004,17 @@ def _telegram_notify_handler(text):
 
 # ── setup config management ─────────────────────────────────────────────────
 
+def _resolve_bot_configs(config):
+    """Resolve bot configurations from setup.json. Backward-compatible."""
+    bots = config.get("bots")
+    if isinstance(bots, list) and bots:
+        return bots
+    token = config.get("telegram_bot_token", "") or os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    if token:
+        return [{"name": "default", "token": token}]
+    return []
+
+
 def validate_setup_config(config):
     """Validate setup config schema. Returns (valid, errors) tuple."""
     errors = []
@@ -1035,6 +1128,35 @@ def validate_setup_config(config):
                     errors.append(f"unknown channel in channel_verbosity: {ch!r}")
                 if level not in valid_levels:
                     errors.append(f"channel_verbosity[{ch!r}] must be quiet, balanced, or verbose")
+
+    # bots array validation
+    bots = config.get("bots")
+    if bots is not None:
+        if not isinstance(bots, list):
+            errors.append("bots must be an array")
+        else:
+            seen_names = set()
+            seen_tokens = set()
+            for i, b in enumerate(bots):
+                if not isinstance(b, dict):
+                    errors.append(f"bots[{i}] must be an object")
+                    continue
+                bname = b.get("name", "")
+                btoken = b.get("token", "")
+                if not bname:
+                    errors.append(f"bots[{i}] missing name")
+                elif bname in seen_names:
+                    errors.append(f"duplicate bot name: {bname!r}")
+                else:
+                    seen_names.add(bname)
+                if not btoken:
+                    errors.append(f"bots[{i}] missing token")
+                elif btoken in seen_tokens:
+                    errors.append(f"duplicate bot token in bots[{i}]")
+                else:
+                    seen_tokens.add(btoken)
+                if btoken and ":" not in btoken:
+                    errors.append(f"bots[{i}] token must be in format digits:alphanumeric")
 
     return len(errors) == 0, errors
 

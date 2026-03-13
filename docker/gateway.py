@@ -1749,9 +1749,14 @@ def _sync_active_model_to_config(config):
 
 
 def load_setup():
-    if os.path.exists(SETUP_FILE):
-        with open(SETUP_FILE) as f:
-            return json.load(f)
+    """Load setup.json, falling back to .bak if the main file is corrupted."""
+    for path in (SETUP_FILE, SETUP_FILE + ".bak"):
+        if os.path.exists(path):
+            try:
+                with open(path) as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, ValueError):
+                continue  # try next candidate
     return None
 
 

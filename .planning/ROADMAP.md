@@ -4,6 +4,7 @@
 
 - [x] **v1.0 Setup Wizard** - Phases 1-5 (shipped 2026-03-11)
 - [x] **v2.0 Multi-Channel & Multi-Bot** - Phases 6-10 (shipped 2026-03-13)
+- [ ] **v3.0 Rich Media & Channel Flexibility** - Phases 11-15
 
 ## Phases
 
@@ -108,11 +109,86 @@ Plans:
 Plans:
 - [x] 10-01-PLAN.md -- TDD: Hot-add and hot-remove bot API endpoints with setup.json persistence (BOT-05, BOT-06)
 
+### v3.0 Rich Media & Channel Flexibility
+
+**Milestone Goal:** Make channels truly flexible for rich media. Images, voice, files flow seamlessly in both directions across any channel. The agent is channel-agnostic. Adding a new channel with full media support requires only implementing adapter methods.
+
+- [ ] **Phase 11: Channel Contract v2** - Define InboundMessage envelope, OutboundAdapter interface, ChannelCapabilities. Refactor existing send(text) to send_text() with backward compatibility.
+- [ ] **Phase 12: Inbound Media Pipeline** - Download + normalize incoming media from Telegram (getFile API). MediaContent class. Base64 encoding for images. Replace MEDIA_REPLY with actual processing.
+- [ ] **Phase 13: Relay Protocol Upgrade** - Switch from custom WS text-only to goosed REST /reply with multimodal content blocks. Parse typed content blocks in responses.
+- [ ] **Phase 14: Outbound Rich Media** - Implement send_image, send_voice, send_file on Telegram adapter. Graceful degradation. Media-aware notify_all.
+- [ ] **Phase 15: Reference Channel Plugin** - Build Slack or Discord plugin with full rich media using the v2 contract. Validates the abstraction.
+
+## Phase Details (v3.0)
+
+### Phase 11: Channel Contract v2
+**Goal**: The channel plugin interface supports rich media (images, voice, files) with declarative capabilities and graceful degradation, while remaining backward-compatible with text-only plugins
+**Depends on**: Phase 10 (v2.0 complete)
+**Requirements**: MEDIA-01, MEDIA-02, MEDIA-03, MEDIA-04, MEDIA-05
+**Success Criteria** (what must be TRUE):
+  1. InboundMessage dataclass normalizes text + media + metadata from any platform into one format
+  2. OutboundAdapter protocol defines send_text (required), send_image, send_voice, send_file (optional)
+  3. ChannelCapabilities dict declares what each channel supports (images, voice, files, buttons, max sizes)
+  4. If a channel doesn't implement send_image, sending an image gracefully falls back to text (URL or description)
+  5. Existing channel plugins with only send(text) continue to work with zero changes
+**Plans:** TBD during phase planning
+
+### Phase 12: Inbound Media Pipeline
+**Goal**: Media messages from users (photos, voice, documents, videos) are downloaded, normalized into MediaContent, and prepared for relay to goose
+**Depends on**: Phase 11
+**Requirements**: MEDIA-06, MEDIA-07, MEDIA-09
+**Success Criteria** (what must be TRUE):
+  1. Telegram adapter calls getFile API and downloads media bytes for all 8 media types
+  2. MediaContent(kind, mime_type, data, filename) is populated correctly for each media type
+  3. Images are base64-encoded and packaged as goose-compatible content blocks
+  4. Media with captions preserves both the text and media content
+  5. Download failures are handled gracefully (user gets error message, not silence)
+**Plans:** TBD during phase planning
+
+### Phase 13: Relay Protocol Upgrade
+**Goal**: The gateway relay supports multimodal content (images, audio) in both directions instead of text-only strings
+**Depends on**: Phase 12
+**Requirements**: MEDIA-10, MEDIA-11, MEDIA-12
+**Success Criteria** (what must be TRUE):
+  1. Gateway sends multimodal content blocks to goosed /reply endpoint (text + image in content array)
+  2. Gateway parses typed content blocks in goose responses and separates text from media
+  3. Text-only messages relay identically to current behavior (zero regression)
+  4. Goose receives and processes user-sent images (vision model sees the image)
+  5. Tool responses containing images/audio are captured and routed to outbound adapter
+**Plans:** TBD during phase planning
+
+### Phase 14: Outbound Rich Media
+**Goal**: The agent can send images, voice notes, and files back to users through any channel that supports them
+**Depends on**: Phase 13
+**Requirements**: MEDIA-13, MEDIA-14, MEDIA-15
+**Success Criteria** (what must be TRUE):
+  1. Telegram adapter sends images via sendPhoto, voice via sendVoice, files via sendDocument
+  2. Agent-generated media (from goose tools or TTS) routes through the correct send method
+  3. notify_all supports optional media attachment alongside text
+  4. Channels without media support get graceful text fallback (not errors)
+**Plans:** TBD during phase planning
+
+### Phase 15: Reference Channel Plugin
+**Goal**: A non-Telegram channel plugin (Slack or Discord) ships with full rich media support, validating the v2 contract
+**Depends on**: Phase 14
+**Requirements**: MEDIA-15, MEDIA-16
+**Success Criteria** (what must be TRUE):
+  1. Plugin implements OutboundAdapter with send_text, send_image, send_voice, send_file
+  2. Plugin declares ChannelCapabilities accurately for the platform
+  3. Media flows end-to-end (user sends image on platform → goose sees it → goose responds with image → user sees it)
+  4. Adding this plugin required zero changes to gateway core code
+  5. Plugin serves as a template for other channels
+**Plans:** TBD during phase planning
+
 ## Progress
 
-**Execution Order:**
+**Execution Order (v2.0):**
 Phases execute in numeric order: 6 -> 7 -> 8 -> 9 -> 10
 Phase 9 depends on Phase 6 (not Phase 7/8), so Phase 9 could start after Phase 6 if needed.
+
+**Execution Order (v3.0):**
+Phases execute: 11 -> 12 -> 13 -> 14 -> 15
+Phase 15 (reference plugin) depends on Phase 14 (outbound media).
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
@@ -126,3 +202,8 @@ Phase 9 depends on Phase 6 (not Phase 7/8), so Phase 9 could start after Phase 6
 | 8. Notification Channel Targeting | v2.0 | 1/1 | Complete | 2026-03-13 |
 | 9. Multi-Bot Core | v2.0 | 3/3 | Complete | 2026-03-13 |
 | 10. Multi-Bot Lifecycle | v2.0 | 1/1 | Complete | 2026-03-13 |
+| 11. Channel Contract v2 | v3.0 | 0/? | Pending | - |
+| 12. Inbound Media Pipeline | v3.0 | 0/? | Pending | - |
+| 13. Relay Protocol Upgrade | v3.0 | 0/? | Pending | - |
+| 14. Outbound Rich Media | v3.0 | 0/? | Pending | - |
+| 15. Reference Channel Plugin | v3.0 | 0/? | Pending | - |

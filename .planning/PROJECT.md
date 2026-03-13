@@ -8,15 +8,21 @@ A self-hosted personal AI agent platform built on Block's Goose. Users deploy on
 
 A user with zero DevOps knowledge can deploy GooseClaw and configure it correctly on the first try, every time. If they can paste an API key, they can run their own AI agent.
 
-## Current Milestone: v2.0 Multi-Channel & Multi-Bot
+## Current Milestone: v3.0 Rich Media & Channel Flexibility
 
-**Goal:** Make channel plugins first-class citizens with full parity to telegram, and support multiple bots with independent provider/model configs on a single gateway.
+**Goal:** Make channels truly flexible for rich media. Images, voice, files flow seamlessly in both directions across any channel. The agent is channel-agnostic.
 
 **Target features:**
-- Channel parity: shared command routing, per-user session locks, cancellation support for all plugins
-- Multi-bot: multiple telegram bots on one gateway, each with own provider/model
-- Per-channel provider routing: different channels can use different LLMs
-- API parity: /api/notify and cron scheduler support channel targeting
+- Channel contract v2: InboundMessage envelope, OutboundAdapter, ChannelCapabilities
+- Inbound media: download + normalize photos, voice, documents, videos from any platform
+- Relay upgrade: multimodal content blocks to goosed (images, audio) instead of text-only
+- Outbound media: send images, voice, files back through any channel
+- Voice pipeline: STT inbound (Whisper), TTS outbound, full roundtrip
+- Reference plugin: Slack or Discord with full media support
+
+**Previous milestones:**
+- v1.0 Setup Wizard (shipped 2026-03-11)
+- v2.0 Multi-Channel & Multi-Bot (shipped 2026-03-13)
 
 ## Requirements
 
@@ -43,6 +49,7 @@ A user with zero DevOps knowledge can deploy GooseClaw and configure it correctl
 - Custom extension management in wizard — separate concern, goose web handles this
 - OAuth flows (OpenRouter OAuth, GitHub Copilot device flow) — too complex for single HTML file
 - Multiple goose web processes — single process, sessions provide isolation
+- Platform-specific rich UI (cards, carousels, adaptive cards) — beyond v3.0, send_buttons is the escape hatch
 
 ## Context
 

@@ -36,24 +36,58 @@
 
 ## v3.0 Requirements
 
-### Deferred
+### Rich Media & Channel Flexibility
+
+**Goal:** Make channels truly flexible. Any media type (images, voice, files) flows seamlessly in both directions across any channel. The agent never knows which platform it's on.
+
+#### Channel Contract v2
+
+- **MEDIA-01**: InboundMessage envelope normalizes all incoming messages (text, media, metadata) into a channel-agnostic format before reaching the relay
+- **MEDIA-02**: OutboundAdapter interface defines send_text (required), send_image, send_voice, send_file, send_buttons (all optional) per channel
+- **MEDIA-03**: ChannelCapabilities declaration per channel (supports_images, supports_voice, supports_files, max_file_size, etc.)
+- **MEDIA-04**: Graceful degradation: if a channel doesn't support a media type, fall back to text (image URL, transcript, file link)
+- **MEDIA-05**: Existing channel plugins with text-only send() continue to work unchanged (backward compatible)
+
+#### Inbound Media Pipeline
+
+- **MEDIA-06**: Telegram adapter downloads media (photo, voice, document, video, sticker, audio) via getFile API and buffers as bytes
+- **MEDIA-07**: MediaContent class normalizes media with kind (image/audio/video/document), mime_type, data (bytes), and optional filename
+- **MEDIA-08**: Voice messages are downloaded and normalized as MediaContent(kind="audio") like any other media, no built-in STT (users configure their own)
+- **MEDIA-09**: Images are base64-encoded and sent to goose as multimodal content blocks
+
+#### Relay Protocol Upgrade
+
+- **MEDIA-10**: Gateway relay sends multimodal content blocks to goose (images as base64 in content array) instead of text-only strings
+- **MEDIA-11**: Gateway parses typed content blocks in goose responses (text, image, audio) and routes to outbound adapter
+- **MEDIA-12**: Relay upgrade is backward-compatible: text-only messages still work identically
+
+#### Outbound Rich Media
+
+- **MEDIA-13**: Telegram adapter implements send_image (sendPhoto), send_voice (sendVoice), send_file (sendDocument)
+- **MEDIA-14**: notify_all supports media attachments alongside text
+
+#### Reference Plugin
+
+- **MEDIA-15**: At least one non-Telegram channel plugin (Slack or Discord) ships with full rich media support using the new contract
+- **MEDIA-16**: Adding a new channel with media support requires only implementing the OutboundAdapter methods, no gateway changes
+
+### Deferred (v4.0+)
 
 - **CROSS-01**: Cross-channel session continuity (same goose session across telegram + discord)
 - **CROSS-02**: Unified user identity layer mapping platform IDs to GooseClaw user
 - **PERF-01**: Webhook mode for telegram bots (polling fine for 1-5 bots)
 - **PERS-01**: Per-bot personality/system prompt (each bot gets its own soul.md)
-- **COMM-01**: Reference channel plugins for Discord, Slack, WhatsApp
 
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
 | Cross-channel message bridging | GooseClaw is an AI gateway, not a chat bridge. Use Matterbridge for that. |
-| Platform-specific rich UI abstraction | Unified "rich message" format is a rabbit hole. Plugins handle their own formatting in send(). |
 | OAuth/SSO for channels | Too complex per-platform. Stick with API tokens and pairing codes. |
 | Per-message provider switching | Goose sessions are tied to a provider. Switching mid-session breaks context. |
 | Auto-downloading plugins from registry | Massive attack surface. Manual .py file drops only. |
 | Multiple goose web processes | Single process, sessions provide isolation. |
+| Platform-specific rich UI (cards, carousels) | Beyond v3.0 scope. send_buttons is the escape hatch for now. |
 
 ## Traceability
 
@@ -80,11 +114,37 @@
 | BOT-05 | Phase 10 | Complete |
 | BOT-06 | Phase 10 | Complete |
 
-**Coverage:**
+**Coverage (v2.0):**
 - v2.0 requirements: 20 total
 - Mapped to phases: 20
 - Unmapped: 0
 
+## v3.0 Traceability
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| MEDIA-01 | Phase 11 | Pending |
+| MEDIA-02 | Phase 11 | Pending |
+| MEDIA-03 | Phase 11 | Pending |
+| MEDIA-04 | Phase 11 | Pending |
+| MEDIA-05 | Phase 11 | Pending |
+| MEDIA-06 | Phase 12 | Pending |
+| MEDIA-07 | Phase 12 | Pending |
+| MEDIA-08 | Phase 12 | Pending |
+| MEDIA-09 | Phase 12 | Pending |
+| MEDIA-10 | Phase 13 | Pending |
+| MEDIA-11 | Phase 13 | Pending |
+| MEDIA-12 | Phase 13 | Pending |
+| MEDIA-13 | Phase 14 | Pending |
+| MEDIA-14 | Phase 14 | Pending |
+| MEDIA-15 | Phase 15 | Pending |
+| MEDIA-16 | Phase 15 | Pending |
+
+**Coverage (v3.0):**
+- v3.0 requirements: 16 total
+- Mapped to phases: 16
+- Unmapped: 0
+
 ---
 *Requirements defined: 2026-03-13*
-*Last updated: 2026-03-13 after roadmap creation*
+*Last updated: 2026-03-13 after v3.0 milestone scoping*

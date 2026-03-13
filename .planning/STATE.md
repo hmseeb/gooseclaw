@@ -5,16 +5,17 @@
 See: .planning/PROJECT.md (updated 2026-03-13)
 
 **Core value:** A user with zero DevOps knowledge can deploy and configure GooseClaw correctly on the first try
-**Current focus:** v2.0 Milestone COMPLETE
+**Current focus:** v3.0 Rich Media & Channel Flexibility
 
 ## Current Position
 
-Phase: 10 of 10 (all complete)
-Plan: All plans complete
-Status: v2.0 Multi-Channel & Multi-Bot milestone shipped
-Last activity: 2026-03-13 -- All 5 phases (6-10) executed and verified autonomously
+Phase: 11 of 15 (next up)
+Plan: None yet (phase planning needed)
+Status: v3.0 milestone scoped, requirements defined, roadmap updated
+Last activity: 2026-03-13 -- v3.0 scoped with 5 phases, 16 requirements
 
-Progress: [==========] 100% (10/10 phases complete, v2.0 shipped)
+Progress v2.0: [==========] 100% (10/10 phases complete, shipped)
+Progress v3.0: [..........] 0% (0/5 phases complete)
 
 ## Performance Metrics
 
@@ -99,9 +100,12 @@ Recent decisions affecting current work:
 | 1 | Setup wizard settings dashboard | 2026-03-10 | 720048c | quick/1-.../ |
 | 2 | Add expires_at to job engine | 2026-03-13 | ff87edd | quick/2-.../ |
 | 3 | Make pairing codes single-use + rotate | 2026-03-13 | 4c09ee4 | quick/3-.../ |
+| 4 | Memory writer dedup, section routing, learnings format | 2026-03-13 | a4e298a | (parallel agent) |
+| 5 | Media message reply (canned text for non-text input) | 2026-03-13 | a4e298a | (parallel agent) |
+| 6 | Extract onboarding flow to separate file | 2026-03-13 | 26b4ef2 | (parallel agent) |
 
 ## Session Continuity
 
 Last session: 2026-03-13
-Stopped at: Completed quick-3. Pairing codes now single-use with auto-rotation. 267 tests passing.
+Stopped at: v3.0 milestone scoped. 312 tests passing. System prompt overhauled. 3 code fixes shipped (memory writer, media reply, onboarding extraction).
 Resume file: None

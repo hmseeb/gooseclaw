@@ -159,7 +159,7 @@ Plans:
 
 Plans:
 - [x] 13-01-PLAN.md -- TDD: REST relay helpers (SSE parser, content blocks, _do_rest_relay) (MEDIA-10, MEDIA-11, MEDIA-12)
-- [ ] 13-02-PLAN.md -- Wire REST relay into _relay_to_goose_web, update all callers (MEDIA-10, MEDIA-11, MEDIA-12)
+- [x] 13-02-PLAN.md -- Wire REST relay into _relay_to_goose_web, update all callers, remove WS code (MEDIA-10, MEDIA-11, MEDIA-12)
 
 ### Phase 14: Outbound Rich Media
 **Goal**: The agent can send images, voice notes, and files back to users through any channel that supports them
@@ -170,7 +170,7 @@ Plans:
   2. Agent-generated media (from goose tools or TTS) routes through the correct send method
   3. notify_all supports optional media attachment alongside text
   4. Channels without media support get graceful text fallback (not errors)
-**Plans:** TBD during phase planning
+**Plans:** 1/2 plans executed
 
 ### Phase 15: Reference Channel Plugin
 **Goal**: A non-Telegram channel plugin (Slack or Discord) ships with full rich media support, validating the v2 contract
@@ -209,5 +209,5 @@ Phase 15 (reference plugin) depends on Phase 14 (outbound media).
 | 11. Channel Contract v2 | 2/2 | Complete   | 2026-03-13 | - |
 | 12. Inbound Media Pipeline | v3.0 | 2/2 | Complete | 2026-03-13 |
 | 13. Relay Protocol Upgrade | 2/2 | Complete   | 2026-03-13 | - |
-| 14. Outbound Rich Media | v3.0 | 0/? | Pending | - |
+| 14. Outbound Rich Media | 1/2 | In Progress|  | - |
 | 15. Reference Channel Plugin | v3.0 | 0/? | Pending | - |

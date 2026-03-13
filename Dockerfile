@@ -1,17 +1,3 @@
-# ── Stage 1: Build goosed from source ──────────────────────────────────────────
-FROM rust:1.82-bookworm AS goosed-builder
-
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-      git pkg-config libssl-dev cmake protobuf-compiler && \
-    rm -rf /var/lib/apt/lists/*
-
-RUN git clone --depth 1 --branch stable https://github.com/block/goose.git /build/goose
-WORKDIR /build/goose
-RUN cargo build --release -p goose-server && \
-    strip target/release/goosed
-
-# ── Stage 2: Runtime ──────────────────────────────────────────────────────────
 FROM ubuntu:22.04
 
 LABEL maintainer="gooseclaw" \
@@ -35,8 +21,18 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     apt-get install -y --no-install-recommends nodejs && \
     rm -rf /var/lib/apt/lists/*
 
-# install goosed (built from source in stage 1)
-COPY --from=goosed-builder /build/goose/target/release/goosed /usr/local/bin/goosed
+# install goosed (extracted from desktop app .deb — no pre-built binary published separately)
+ARG GOOSE_VERSION=1.27.2
+RUN curl -fsSL -o /tmp/goose.deb \
+      "https://github.com/block/goose/releases/download/v${GOOSE_VERSION}/goose_${GOOSE_VERSION}_amd64.deb" && \
+    apt-get update && apt-get install -y --no-install-recommends zstd && \
+    cd /tmp && ar x goose.deb data.tar.zst && \
+    zstd -d data.tar.zst -o data.tar && \
+    tar xf data.tar ./usr/lib/goose/resources/bin/goosed && \
+    mv ./usr/lib/goose/resources/bin/goosed /usr/local/bin/goosed && \
+    chmod +x /usr/local/bin/goosed && \
+    rm -rf /tmp/goose.deb /tmp/data.tar* /tmp/usr && \
+    apt-get purge -y zstd && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 # also install goose CLI for non-server commands (configure, etc.)
 RUN curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh \
     | CONFIGURE=false GOOSE_BIN_DIR=/usr/local/bin bash

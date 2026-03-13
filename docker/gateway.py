@@ -39,6 +39,7 @@ import base64
 import collections
 import glob
 import hashlib
+import mimetypes
 import http.client
 import http.server
 import importlib.util
@@ -1170,6 +1171,68 @@ _MEDIA_KEYS = frozenset({
 def _has_media(msg):
     """Return True if the Telegram message contains any media attachment."""
     return any(key in msg for key in _MEDIA_KEYS)
+
+
+_TELEGRAM_KIND_MAP = {
+    "photo": "image", "sticker": "image", "animation": "image",
+    "voice": "audio", "audio": "audio",
+    "video": "video", "video_note": "video",
+    "document": "document",
+}
+
+_TELEGRAM_MIME_FALLBACK = {
+    "photo": "image/jpeg", "sticker": "image/webp", "animation": "video/mp4",
+    "voice": "audio/ogg", "audio": "audio/mpeg",
+    "video": "video/mp4", "video_note": "video/mp4",
+    "document": "application/octet-stream",
+}
+
+
+def _extract_file_info(msg, media_key):
+    """Extract file_id, mime_type hint, and filename from Telegram message."""
+    obj = msg.get(media_key)
+    if not obj:
+        return None, None, None
+    if media_key == "photo":
+        if not obj:
+            return None, None, None
+        return obj[-1].get("file_id"), None, None
+    return obj.get("file_id"), obj.get("mime_type"), obj.get("file_name")
+
+
+def _download_telegram_file(bot_token, file_id, timeout=15):
+    """Download file from Telegram via getFile API. Returns (bytes, file_path) or (None, error)."""
+    url = f"https://api.telegram.org/bot{bot_token}/getFile?file_id={urllib.parse.quote(str(file_id))}"
+    try:
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read())
+        if not data.get("ok"):
+            return None, f"getFile failed: {data}"
+        file_path = data["result"].get("file_path", "")
+        if not file_path:
+            return None, "getFile returned no file_path"
+    except Exception as e:
+        return None, f"getFile error: {e}"
+    download_url = f"https://api.telegram.org/file/bot{bot_token}/{file_path}"
+    try:
+        req = urllib.request.Request(download_url)
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            file_bytes = resp.read()
+        return file_bytes, file_path
+    except Exception as e:
+        return None, f"download error: {e}"
+
+
+def _make_media_content(media_key, file_bytes, file_path, mime_hint=None, filename=None):
+    """Create MediaContent from downloaded Telegram file bytes."""
+    kind = _TELEGRAM_KIND_MAP.get(media_key, "document")
+    mime_type = mime_hint
+    if not mime_type and file_path:
+        mime_type, _ = mimetypes.guess_type(file_path)
+    if not mime_type:
+        mime_type = _TELEGRAM_MIME_FALLBACK.get(media_key, "application/octet-stream")
+    return MediaContent(kind=kind, mime_type=mime_type, data=file_bytes, filename=filename)
 
 
 def send_telegram_message(bot_token, chat_id, text):
@@ -3374,6 +3437,27 @@ class InboundMessage:
     @property
     def has_text(self):
         return bool(self.text.strip())
+
+
+class MediaContent:
+    """Normalized media attachment with actual data."""
+    def __init__(self, kind, mime_type, data, filename=None):
+        self.kind = kind
+        self.mime_type = mime_type
+        self.data = data
+        self.filename = filename
+
+    @property
+    def size(self):
+        return len(self.data) if self.data else 0
+
+    def to_base64(self):
+        return base64.b64encode(self.data).decode("ascii") if self.data else ""
+
+    def to_content_block(self):
+        if self.kind == "image":
+            return {"type": "image", "data": self.to_base64(), "mimeType": self.mime_type}
+        return None
 
 
 class ChannelCapabilities:

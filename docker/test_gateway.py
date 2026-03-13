@@ -19,6 +19,7 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.error
 from unittest.mock import MagicMock, mock_open, patch
 
 # import gateway from same directory
@@ -4433,6 +4434,233 @@ class TestChannelsAPICapabilities(unittest.TestCase):
         self.assertEqual(len(channels), 1)
         self.assertIn("capabilities", channels[0],
                        "Channel info must include capabilities")
+
+
+# ── MediaContent ───────────────────────────────────────────────────────────
+
+
+class TestMediaContent(unittest.TestCase):
+    """Tests for MediaContent class (MEDIA-07)."""
+
+    def test_init(self):
+        mc = gateway.MediaContent(kind="image", mime_type="image/jpeg", data=b"bytes", filename="photo.jpg")
+        self.assertEqual(mc.kind, "image")
+        self.assertEqual(mc.mime_type, "image/jpeg")
+        self.assertEqual(mc.data, b"bytes")
+        self.assertEqual(mc.filename, "photo.jpg")
+
+    def test_size(self):
+        mc = gateway.MediaContent(kind="image", mime_type="image/jpeg", data=b"hello")
+        self.assertEqual(mc.size, 5)
+
+    def test_size_empty(self):
+        mc = gateway.MediaContent(kind="image", mime_type="image/jpeg", data=b"")
+        self.assertEqual(mc.size, 0)
+
+    def test_to_base64(self):
+        import base64
+        mc = gateway.MediaContent(kind="image", mime_type="image/jpeg", data=b"hello")
+        self.assertEqual(mc.to_base64(), base64.b64encode(b"hello").decode("ascii"))
+
+    def test_to_base64_empty(self):
+        mc = gateway.MediaContent(kind="image", mime_type="image/jpeg", data=b"")
+        self.assertEqual(mc.to_base64(), "")
+
+    def test_to_content_block_image(self):
+        mc = gateway.MediaContent(kind="image", mime_type="image/jpeg", data=b"\xff\xd8")
+        block = mc.to_content_block()
+        self.assertEqual(block["type"], "image")
+        self.assertEqual(block["mimeType"], "image/jpeg")
+        import base64
+        self.assertEqual(block["data"], base64.b64encode(b"\xff\xd8").decode("ascii"))
+
+    def test_to_content_block_non_image(self):
+        mc = gateway.MediaContent(kind="audio", mime_type="audio/ogg", data=b"data")
+        self.assertIsNone(mc.to_content_block())
+
+    def test_voice_is_audio_kind(self):
+        mc = gateway.MediaContent(kind="audio", mime_type="audio/ogg", data=b"data")
+        self.assertEqual(mc.kind, "audio")
+
+
+# ── _extract_file_info ─────────────────────────────────────────────────────
+
+
+class TestExtractFileInfo(unittest.TestCase):
+    """Tests for _extract_file_info (MEDIA-06)."""
+
+    def test_photo_picks_largest(self):
+        msg = {"photo": [
+            {"file_id": "small", "width": 90, "height": 90},
+            {"file_id": "medium", "width": 320, "height": 320},
+            {"file_id": "large", "width": 800, "height": 800},
+        ]}
+        fid, mime, fname = gateway._extract_file_info(msg, "photo")
+        self.assertEqual(fid, "large")
+        self.assertIsNone(mime)
+        self.assertIsNone(fname)
+
+    def test_voice(self):
+        msg = {"voice": {"file_id": "v1", "mime_type": "audio/ogg"}}
+        fid, mime, fname = gateway._extract_file_info(msg, "voice")
+        self.assertEqual(fid, "v1")
+        self.assertEqual(mime, "audio/ogg")
+        self.assertIsNone(fname)
+
+    def test_document(self):
+        msg = {"document": {"file_id": "d1", "mime_type": "application/pdf", "file_name": "report.pdf"}}
+        fid, mime, fname = gateway._extract_file_info(msg, "document")
+        self.assertEqual(fid, "d1")
+        self.assertEqual(mime, "application/pdf")
+        self.assertEqual(fname, "report.pdf")
+
+    def test_video(self):
+        msg = {"video": {"file_id": "vid1", "mime_type": "video/mp4"}}
+        fid, mime, fname = gateway._extract_file_info(msg, "video")
+        self.assertEqual(fid, "vid1")
+        self.assertEqual(mime, "video/mp4")
+        self.assertIsNone(fname)
+
+    def test_audio(self):
+        msg = {"audio": {"file_id": "a1", "mime_type": "audio/mpeg"}}
+        fid, mime, fname = gateway._extract_file_info(msg, "audio")
+        self.assertEqual(fid, "a1")
+        self.assertEqual(mime, "audio/mpeg")
+        self.assertIsNone(fname)
+
+    def test_sticker(self):
+        msg = {"sticker": {"file_id": "s1"}}
+        fid, mime, fname = gateway._extract_file_info(msg, "sticker")
+        self.assertEqual(fid, "s1")
+        self.assertIsNone(mime)
+        self.assertIsNone(fname)
+
+    def test_empty_photo_array(self):
+        msg = {"photo": []}
+        fid, mime, fname = gateway._extract_file_info(msg, "photo")
+        self.assertIsNone(fid)
+        self.assertIsNone(mime)
+        self.assertIsNone(fname)
+
+    def test_missing_key(self):
+        msg = {"text": "hello"}
+        fid, mime, fname = gateway._extract_file_info(msg, "photo")
+        self.assertIsNone(fid)
+
+
+# ── _make_media_content ────────────────────────────────────────────────────
+
+
+class TestMakeMediaContent(unittest.TestCase):
+    """Tests for _make_media_content (MEDIA-07, MEDIA-09)."""
+
+    def test_photo_kind(self):
+        mc = gateway._make_media_content("photo", b"data", "photos/file_0.jpg")
+        self.assertEqual(mc.kind, "image")
+        self.assertEqual(mc.mime_type, "image/jpeg")
+
+    def test_voice_kind(self):
+        mc = gateway._make_media_content("voice", b"data", "voice/file.oga")
+        self.assertEqual(mc.kind, "audio")
+
+    def test_document_kind(self):
+        mc = gateway._make_media_content("document", b"data", "documents/file.pdf", mime_hint="application/pdf")
+        self.assertEqual(mc.kind, "document")
+        self.assertEqual(mc.mime_type, "application/pdf")
+
+    def test_mime_hint_takes_priority(self):
+        mc = gateway._make_media_content("document", b"data", "file.txt", mime_hint="text/plain")
+        self.assertEqual(mc.mime_type, "text/plain")
+
+    def test_fallback_mime(self):
+        mc = gateway._make_media_content("sticker", b"data", None)
+        self.assertEqual(mc.mime_type, "image/webp")
+
+    def test_filename_preserved(self):
+        mc = gateway._make_media_content("document", b"data", "x", filename="report.pdf")
+        self.assertEqual(mc.filename, "report.pdf")
+
+
+# ── _download_telegram_file ────────────────────────────────────────────────
+
+
+class TestDownloadTelegramFile(unittest.TestCase):
+    """Tests for _download_telegram_file (MEDIA-06)."""
+
+    def test_successful_download(self):
+        """Mock urllib to return getFile response then file bytes."""
+        getfile_response = json.dumps({
+            "ok": True,
+            "result": {"file_id": "abc", "file_path": "photos/file_0.jpg"},
+        }).encode()
+        file_bytes = b"\xff\xd8fake_jpeg_bytes"
+
+        call_count = [0]
+        def fake_urlopen(req, timeout=None):
+            call_count[0] += 1
+            resp = MagicMock()
+            resp.__enter__ = lambda s: s
+            resp.__exit__ = MagicMock(return_value=False)
+            if call_count[0] == 1:
+                resp.read.return_value = getfile_response
+            else:
+                resp.read.return_value = file_bytes
+            return resp
+
+        with patch("gateway.urllib.request.urlopen", side_effect=fake_urlopen):
+            data, path = gateway._download_telegram_file("tok123", "abc")
+
+        self.assertEqual(data, file_bytes)
+        self.assertEqual(path, "photos/file_0.jpg")
+
+    def test_getfile_not_ok(self):
+        """getFile returning ok=false should return (None, error)."""
+        getfile_response = json.dumps({"ok": False, "description": "bad"}).encode()
+
+        def fake_urlopen(req, timeout=None):
+            resp = MagicMock()
+            resp.__enter__ = lambda s: s
+            resp.__exit__ = MagicMock(return_value=False)
+            resp.read.return_value = getfile_response
+            return resp
+
+        with patch("gateway.urllib.request.urlopen", side_effect=fake_urlopen):
+            data, err = gateway._download_telegram_file("tok123", "abc")
+
+        self.assertIsNone(data)
+        self.assertIn("getFile failed", err)
+
+    def test_getfile_network_error(self):
+        """Network error on getFile should return (None, error)."""
+        with patch("gateway.urllib.request.urlopen", side_effect=urllib.error.URLError("timeout")):
+            data, err = gateway._download_telegram_file("tok123", "abc")
+
+        self.assertIsNone(data)
+        self.assertIn("error", err.lower())
+
+    def test_download_network_error(self):
+        """getFile succeeds but download fails should return (None, error)."""
+        getfile_response = json.dumps({
+            "ok": True,
+            "result": {"file_id": "abc", "file_path": "photos/file_0.jpg"},
+        }).encode()
+
+        call_count = [0]
+        def fake_urlopen(req, timeout=None):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                resp = MagicMock()
+                resp.__enter__ = lambda s: s
+                resp.__exit__ = MagicMock(return_value=False)
+                resp.read.return_value = getfile_response
+                return resp
+            raise urllib.error.URLError("download failed")
+
+        with patch("gateway.urllib.request.urlopen", side_effect=fake_urlopen):
+            data, err = gateway._download_telegram_file("tok123", "abc")
+
+        self.assertIsNone(data)
+        self.assertIn("error", err.lower())
 
 
 if __name__ == "__main__":

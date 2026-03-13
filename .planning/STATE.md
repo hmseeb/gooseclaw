@@ -122,6 +122,7 @@ Recent decisions affecting current work:
 - Test threading scenarios before extraction (relay+clear, relay+stop)
 - Auto-detect timezone from location in setup wizard (ui)
 - Queue consecutive messages instead of bouncing with "Still thinking" (general)
+- Hide internal file references and tool usage from user-facing LLM output (general)
 
 ### Blockers/Concerns
 

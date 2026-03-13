@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-03-10)
 Phase: 4 of 5 (Advanced Multi-Model Settings)
 Plan: 1 of 1 in current phase
 Status: Phase 4 Complete
-Last activity: 2026-03-11 -- Phase 4 complete (1/1 plan). Advanced multi-model settings shipped.
+Last activity: 2026-03-13 - Completed quick task 2: Add expires_at field to job engine for auto-expiring jobs
 
 Progress: [#########-] 90%
 

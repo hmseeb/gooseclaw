@@ -1760,6 +1760,51 @@ def load_setup():
     return None
 
 
+# Keys that must never be exposed via API responses.
+SENSITIVE_KEYS = [
+    "api_key",
+    "password_hash",
+    "web_auth_token_hash",
+    "claude_setup_token",
+    "azure_key",
+    "telegram_bot_token",
+    "litellm_host",
+]
+
+_REDACTED = "***REDACTED***"
+
+
+def get_safe_setup():
+    """Return setup config with sensitive fields replaced by a redaction marker.
+
+    Returns None when no setup file exists. The original dict from load_setup
+    is never mutated -- a shallow copy is made before redaction.
+    """
+    setup = load_setup()
+    if setup is None:
+        return None
+
+    safe = dict(setup)
+
+    for key in SENSITIVE_KEYS:
+        if key in safe:
+            safe[key] = _REDACTED
+
+    # redact saved_keys (per-provider credential store)
+    if "saved_keys" in safe and isinstance(safe["saved_keys"], dict):
+        masked = {}
+        for provider_id, val in safe["saved_keys"].items():
+            if isinstance(val, str) and val:
+                masked[provider_id] = _REDACTED
+            elif isinstance(val, dict) and val:
+                masked[provider_id] = {k: _REDACTED for k, v in val.items()}
+            else:
+                masked[provider_id] = val
+        safe["saved_keys"] = masked
+
+    return safe
+
+
 def save_setup(config):
     """Atomically write config to setup.json (write tmp, then rename)."""
     import shutil
@@ -1835,6 +1880,43 @@ def _make_session_cookie(token):
     return hashlib.sha256(f"gooseclaw-session:{token}".encode()).hexdigest()
 
 
+# ── session expiry ───────────────────────────────────────────────────────────
+
+SESSION_MAX_AGE = 86400  # 24 hours in seconds
+
+# server-side session store: {session_token: creation_timestamp}
+_auth_sessions = {}
+_auth_sessions_lock = threading.Lock()
+
+
+def _create_auth_session():
+    """Create a new auth session token and store it with current timestamp."""
+    token = secrets.token_urlsafe(32)
+    with _auth_sessions_lock:
+        _auth_sessions[token] = time.time()
+    return token
+
+
+def _validate_auth_session(token):
+    """Check if a session token exists and hasn't expired. Returns True if valid."""
+    with _auth_sessions_lock:
+        created = _auth_sessions.get(token)
+    if created is None:
+        return False
+    if time.time() - created > SESSION_MAX_AGE:
+        # expired, clean it up
+        with _auth_sessions_lock:
+            _auth_sessions.pop(token, None)
+        return False
+    return True
+
+
+def _invalidate_all_auth_sessions():
+    """Clear all active auth sessions (e.g. on password change)."""
+    with _auth_sessions_lock:
+        _auth_sessions.clear()
+
+
 def check_auth(handler):
     """Check HTTP Basic Auth or session cookie. Returns True if authorized."""
     stored, is_hashed = get_auth_token()
@@ -1848,9 +1930,7 @@ def check_auth(handler):
             part = part.strip()
             if part.startswith("gooseclaw_session="):
                 cookie_val = part.split("=", 1)[1]
-                # verify cookie matches current token
-                expected = _make_session_cookie(stored)
-                if secrets.compare_digest(cookie_val, expected):
+                if _validate_auth_session(cookie_val):
                     return True
 
     auth_header = handler.headers.get("Authorization", "")
@@ -6418,59 +6498,40 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(401)
             self.end_headers()
             return
-        setup = load_setup()
-        if setup:
-            migrate_config_models(setup)
-            safe = {**setup}
+        safe = get_safe_setup()
+        if safe:
+            migrate_config_models(safe)
 
-            # ── Top-level secret masking ─────────────────────────────────────
-            # Replace secret values with a fixed placeholder ("********").
-            # This reveals NOTHING about the key (no partial leakage).
-            # Also add boolean companion fields (_set) so the frontend can
-            # display "key already set" placeholders without knowing the value.
-            # telegram_bot_token is removed entirely — frontend only needs bool.
-            SECRET_FIELDS = (
+            # ── Frontend companion fields ────────────────────────────────────
+            # Add boolean _set hints so the UI can show "key already set"
+            # placeholders without seeing the actual value.
+            _UI_SECRET_FIELDS = (
                 "api_key",
                 "claude_setup_token",
                 "custom_key",
                 "web_auth_token",
                 "web_auth_token_hash",
             )
-            for key in SECRET_FIELDS:
+            for key in _UI_SECRET_FIELDS:
                 val = safe.get(key, "")
                 safe[f"{key}_set"] = bool(val)
-                if val:
-                    safe[key] = "********"
-                else:
+                if not val:
                     safe.pop(key, None)
 
             # telegram_bot_token: only expose whether it is set, never the value
             tbt = safe.pop("telegram_bot_token", "")
             safe["telegram_bot_token_set"] = bool(tbt)
 
-            # ── saved_keys masking ───────────────────────────────────────────
-            # Return "********" as the masked value so typeof val === 'string'
-            # still holds in setup.html's updateDashboardCredField().
-            # Also add a saved_keys_set dict with booleans for smarter UI hints.
+            # ── saved_keys_set indicators ────────────────────────────────────
             if "saved_keys" in safe and isinstance(safe["saved_keys"], dict):
-                masked_keys = {}
                 set_indicators = {}
                 for provider_id, val in safe["saved_keys"].items():
                     if isinstance(val, str) and val:
-                        masked_keys[provider_id] = "********"
                         set_indicators[provider_id] = True
                     elif isinstance(val, dict) and val:
-                        # complex value (e.g. azure key+endpoint dict) — mask
-                        # each string sub-field
-                        masked_sub = {}
-                        for sub_key, sub_val in val.items():
-                            masked_sub[sub_key] = "********" if sub_val else sub_val
-                        masked_keys[provider_id] = masked_sub
                         set_indicators[provider_id] = True
                     else:
-                        masked_keys[provider_id] = val
                         set_indicators[provider_id] = False
-                safe["saved_keys"] = masked_keys
                 safe["saved_keys_set"] = set_indicators
 
             self.send_json(200, {"configured": True, "config": safe})
@@ -7390,14 +7451,14 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             if not ok:
                 self.send_json(401, {"error": "Invalid password"})
                 return
-            # success: set session cookie
-            cookie_val = _make_session_cookie(stored)
+            # success: create session and set cookie
+            cookie_val = _create_auth_session()
             secure_flag = "; Secure" if os.environ.get("RAILWAY_ENVIRONMENT") else ""
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header(
                 "Set-Cookie",
-                f"gooseclaw_session={cookie_val}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000{secure_flag}",
+                f"gooseclaw_session={cookie_val}; Path=/; HttpOnly; SameSite=Strict; Max-Age={SESSION_MAX_AGE}{secure_flag}",
             )
             resp_body = json.dumps({"success": True}).encode()
             self.send_header("Content-Length", str(len(resp_body)))
@@ -7439,6 +7500,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             setup["web_auth_token_hash"] = new_hash
             setup.pop("web_auth_token", None)  # remove legacy plaintext
             save_setup(setup)
+            # invalidate all existing sessions on password change
+            _invalidate_all_auth_sessions()
             self.send_json(200, {
                 "success": True,
                 "temporary_password": new_token,
@@ -7613,11 +7676,11 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         if getattr(self, "_set_session_cookie", False):
             stored, _ = get_auth_token()
             if stored:
-                cookie_val = _make_session_cookie(stored)
+                cookie_val = _create_auth_session()
                 secure_flag = "; Secure" if os.environ.get("RAILWAY_ENVIRONMENT") else ""
                 self.send_header(
                     "Set-Cookie",
-                    f"gooseclaw_session={cookie_val}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000{secure_flag}",
+                    f"gooseclaw_session={cookie_val}; Path=/; HttpOnly; SameSite=Strict; Max-Age={SESSION_MAX_AGE}{secure_flag}",
                 )
             self._set_session_cookie = False
 

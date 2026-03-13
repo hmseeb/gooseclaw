@@ -2915,9 +2915,10 @@ class ChannelRelay:
     """Relay function wrapper for channel plugins. Manages per-channel sessions,
     command interception, and active relay tracking for /stop cancellation."""
 
-    def __init__(self, channel_name):
+    def __init__(self, channel_name, typing_cb=None):
         self._name = channel_name
         self._state = ChannelState()
+        self._typing_cb = typing_cb
         # Load any persisted sessions for this channel
         _session_manager.load(channel_name)
 
@@ -2947,42 +2948,44 @@ class ChannelRelay:
                 send_fn(f"Unknown command: {text.split()[0]}\nSend /help for available commands.")
             return ""
 
-        # Session management
-        session_id = _session_manager.get(self._name, user_key)
-        if not session_id:
-            session_id = f"{self._name}_{user_key}_{time.strftime('%Y%m%d_%H%M%S')}"
-            _session_manager.set(self._name, user_key, session_id)
-
-        # Active relay tracking (CHAN-03)
-        cancelled = threading.Event()
-        sock_ref = [None, cancelled]
-        self._state.set_active_relay(user_key, sock_ref)
+        # Per-user lock (CHAN-02)
+        user_lock = self._state.get_user_lock(user_key)
+        lock_timeout = 2 if send_fn else 120  # can't notify user without send_fn
+        if not user_lock.acquire(timeout=lock_timeout):
+            if send_fn:
+                send_fn("Still thinking... send /stop to cancel.")
+            return ""
 
         try:
-            # determine streaming params
-            setup = load_setup()
-            verbosity = get_verbosity_for_channel(setup, self._name) if setup else "balanced"
-            use_streaming = send_fn and verbosity != "quiet"
+            # Typing indicator loop (CHAN-06)
+            typing_stop = threading.Event()
+            if self._typing_cb:
+                def _typing_loop():
+                    while not typing_stop.is_set():
+                        try:
+                            self._typing_cb(user_id)
+                        except Exception:
+                            pass  # buggy callback must not crash relay
+                        typing_stop.wait(4)
+                threading.Thread(target=_typing_loop, daemon=True).start()
 
-            if use_streaming:
-                response_text, error = _relay_to_goose_web(
-                    text, session_id, chat_id=user_key, channel=self._name,
-                    flush_cb=send_fn, verbosity=verbosity,
-                    sock_ref=sock_ref, flush_interval=2.0,
-                )
-            else:
-                response_text, error = _relay_to_goose_web(
-                    text, session_id, chat_id=user_key, channel=self._name,
-                    sock_ref=sock_ref,
-                )
-
-            if cancelled.is_set():
-                return ""
-
-            if error:
-                # retry with new session
+            # Session management
+            session_id = _session_manager.get(self._name, user_key)
+            if not session_id:
                 session_id = f"{self._name}_{user_key}_{time.strftime('%Y%m%d_%H%M%S')}"
                 _session_manager.set(self._name, user_key, session_id)
+
+            # Active relay tracking (CHAN-03)
+            cancelled = threading.Event()
+            sock_ref = [None, cancelled]
+            self._state.set_active_relay(user_key, sock_ref)
+
+            try:
+                # determine streaming params
+                setup = load_setup()
+                verbosity = get_verbosity_for_channel(setup, self._name) if setup else "balanced"
+                use_streaming = send_fn and verbosity != "quiet"
+
                 if use_streaming:
                     response_text, error = _relay_to_goose_web(
                         text, session_id, chat_id=user_key, channel=self._name,
@@ -2995,13 +2998,35 @@ class ChannelRelay:
                         sock_ref=sock_ref,
                     )
 
-            if cancelled.is_set():
-                return ""
-            if error:
-                return f"Error: {error}"
-            return response_text
+                if cancelled.is_set():
+                    return ""
+
+                if error:
+                    # retry with new session
+                    session_id = f"{self._name}_{user_key}_{time.strftime('%Y%m%d_%H%M%S')}"
+                    _session_manager.set(self._name, user_key, session_id)
+                    if use_streaming:
+                        response_text, error = _relay_to_goose_web(
+                            text, session_id, chat_id=user_key, channel=self._name,
+                            flush_cb=send_fn, verbosity=verbosity,
+                            sock_ref=sock_ref, flush_interval=2.0,
+                        )
+                    else:
+                        response_text, error = _relay_to_goose_web(
+                            text, session_id, chat_id=user_key, channel=self._name,
+                            sock_ref=sock_ref,
+                        )
+
+                if cancelled.is_set():
+                    return ""
+                if error:
+                    return f"Error: {error}"
+                return response_text
+            finally:
+                self._state.pop_active_relay(user_key)
         finally:
-            self._state.pop_active_relay(user_key)
+            typing_stop.set()  # stop typing loop
+            user_lock.release()
 
     def reset_session(self, user_id):
         """Reset a user's session (for /clear command)."""
@@ -3084,7 +3109,11 @@ def _load_channel(filepath):
         poll_thread = None
 
         if callable(poll_fn):
-            relay_fn = ChannelRelay(name)
+            typing_cb = channel.get("typing")
+            if typing_cb and not callable(typing_cb):
+                print(f"[channels] warn: {name} typing is not callable, ignoring")
+                typing_cb = None
+            relay_fn = ChannelRelay(name, typing_cb=typing_cb)
 
             def _poll_wrapper(_fn, _relay, _stop, _creds):
                 try:

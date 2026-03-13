@@ -155,7 +155,11 @@ Plans:
   3. Text-only messages relay identically to current behavior (zero regression)
   4. Goose receives and processes user-sent images (vision model sees the image)
   5. Tool responses containing images/audio are captured and routed to outbound adapter
-**Plans:** TBD during phase planning
+**Plans:** 2 plans
+
+Plans:
+- [x] 13-01-PLAN.md -- TDD: REST relay helpers (SSE parser, content blocks, _do_rest_relay) (MEDIA-10, MEDIA-11, MEDIA-12)
+- [ ] 13-02-PLAN.md -- Wire REST relay into _relay_to_goose_web, update all callers (MEDIA-10, MEDIA-11, MEDIA-12)
 
 ### Phase 14: Outbound Rich Media
 **Goal**: The agent can send images, voice notes, and files back to users through any channel that supports them
@@ -204,6 +208,6 @@ Phase 15 (reference plugin) depends on Phase 14 (outbound media).
 | 10. Multi-Bot Lifecycle | v2.0 | 1/1 | Complete | 2026-03-13 |
 | 11. Channel Contract v2 | 2/2 | Complete   | 2026-03-13 | - |
 | 12. Inbound Media Pipeline | v3.0 | 2/2 | Complete | 2026-03-13 |
-| 13. Relay Protocol Upgrade | v3.0 | 0/? | Pending | - |
+| 13. Relay Protocol Upgrade | v3.0 | 1/2 | In Progress | - |
 | 14. Outbound Rich Media | v3.0 | 0/? | Pending | - |
 | 15. Reference Channel Plugin | v3.0 | 0/? | Pending | - |

@@ -9,10 +9,10 @@ See: .planning/PROJECT.md (updated 2026-03-13)
 
 ## Current Position
 
-Phase: 12 of 15 (complete)
-Plan: 2 of 2 (done)
-Status: Phase 12 complete, inbound media pipeline shipped
-Last activity: 2026-03-13 -- Phase 12 executed: MediaContent + download helpers + poll/relay wiring, 380 tests passing
+Phase: 13 of 15 (in progress)
+Plan: 1 of 2 (done)
+Status: Phase 13 Plan 01 complete, REST relay helpers shipped
+Last activity: 2026-03-13 -- Phase 13 Plan 01 executed: SSE parser + content blocks + REST relay functions, 408 tests passing
 
 Progress v2.0: [==========] 100% (10/10 phases complete, shipped)
 Progress v3.0: [====......] 40% (2/5 phases complete)
@@ -48,6 +48,7 @@ Progress v3.0: [====......] 40% (2/5 phases complete)
 | Phase 11 P02 | 2min | 2 tasks | 2 files |
 | Phase 12 P01 | 3min | 2 tasks | 2 files |
 | Phase 12 P02 | 3min | 2 tasks | 2 files |
+| Phase 13 P01 | 3min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -97,6 +98,9 @@ Recent decisions affecting current work:
 - [Phase 12]: MEDIA_REPLY no longer sent to paired users, media flows through relay
 - [Phase 12]: MIME resolution: Telegram hint > mimetypes.guess_type(file_path) > fallback map
 - [Phase 12]: Legacy _telegram_poll_loop updated with same media download pattern
+- [Phase 13]: REST relay returns 3-tuple (text, error, media_blocks) to carry image blocks for Phase 14
+- [Phase 13]: _extract_response_content handles nested toolResponse images for tool screenshot capture
+- [Phase 13]: Streaming relay reuses _StreamBuffer pattern from WS relay with identical flush semantics
 
 ### Pending Todos
 
@@ -124,5 +128,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-03-13
-Stopped at: Completed Phase 12 (Inbound Media Pipeline). 380 tests passing. MediaContent, download helpers, poll/relay wiring all shipped. MEDIA_REPLY removed for paired users.
+Stopped at: Completed 13-01-PLAN.md (REST relay helpers). 408 tests passing. SSE parser, content block builder, response extractor, _do_rest_relay, _do_rest_relay_streaming all shipped.
 Resume file: None

@@ -125,9 +125,10 @@ None yet.
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 1 | Setup wizard settings dashboard with config editing, env var priority fix, and provider key persistence | 2026-03-10 | 720048c | [1-setup-wizard-settings-dashboard-with-con](./quick/1-setup-wizard-settings-dashboard-with-con/) |
+| 2 | Add expires_at field to job engine for auto-expiring jobs | 2026-03-13 | ff87edd | [2-add-expires-at-field-to-job-engine-for-a](./quick/2-add-expires-at-field-to-job-engine-for-a/) |
 
 ## Session Continuity
 
-Last session: 2026-03-11
-Stopped at: Completed 04-01-PLAN.md -- advanced multi-model settings (lead provider/model/turn count). Phase 4 complete.
+Last session: 2026-03-13
+Stopped at: Completed quick-2-PLAN.md -- expires_at field in job engine for auto-expiring jobs.
 Resume file: None

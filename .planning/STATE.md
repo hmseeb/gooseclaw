@@ -10,9 +10,9 @@ See: .planning/PROJECT.md (updated 2026-03-13)
 ## Current Position
 
 Phase: 7 of 10 (Channel Plugin Parity)
-Plan: 1 of 3 in current phase
+Plan: 2 of 3 in current phase
 Status: In Progress
-Last activity: 2026-03-13 -- Completed 07-01 Generalize command handlers + ChannelRelay command interception
+Last activity: 2026-03-13 -- Completed 07-02 Per-user concurrency locks + typing indicator callbacks
 
 Progress: [======----] 60% (6/10 phases complete)
 
@@ -36,6 +36,7 @@ Progress: [======----] 60% (6/10 phases complete)
 | Phase 06 P02 | 2min | 2 tasks | 2 files |
 | Phase 06 P03 | 7min | 2 tasks | 2 files |
 | Phase 07 P01 | 3min | 2 tasks | 2 files |
+| Phase 07 P02 | 3min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -56,6 +57,8 @@ Recent decisions affecting current work:
 - [Phase 07]: Command handlers use ctx.get("channel_state", _telegram_state) for backward-compatible generalization
 - [Phase 07]: ChannelRelay has command interception and active relay tracking via its own ChannelState instance
 - [Phase 07]: _handle_cmd_compact uses _session_manager.get(channel) instead of telegram-specific _get_session_id
+- [Phase 07]: ChannelRelay acquires per-user lock (timeout 2s/120s) before relay, sends busy message on contention
+- [Phase 07]: Typing indicator loop fires callback every 4s during relay, stops in finally block
 
 ### Pending Todos
 
@@ -79,5 +82,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-03-13
-Stopped at: Completed 07-01-PLAN.md (Generalize command handlers + ChannelRelay command interception)
+Stopped at: Completed 07-02-PLAN.md (Per-user concurrency locks + typing indicator callbacks)
 Resume file: None

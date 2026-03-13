@@ -5309,5 +5309,188 @@ class TestRestRelayStreaming(unittest.TestCase):
         self.assertIn("context limit exceeded", err)
 
 
+# ── relay protocol upgrade (Phase 13 Plan 02) ─────────────────────────────
+
+
+class TestRelayProtocolUpgrade(unittest.TestCase):
+    """Tests for wiring REST relay into _relay_to_goose_web and removing WS."""
+
+    @patch("gateway._do_rest_relay")
+    def test_relay_returns_3_tuple(self, mock_rest):
+        """_relay_to_goose_web should return 3 values: text, error, media."""
+        mock_rest.return_value = ("hi", "", [])
+        gateway._INTERNAL_GOOSE_TOKEN = "tok"
+        try:
+            result = gateway._relay_to_goose_web("test", "sid")
+            self.assertEqual(len(result), 3, f"Expected 3-tuple, got {len(result)}-tuple: {result}")
+            text, err, media = result
+            self.assertEqual(text, "hi")
+            self.assertEqual(err, "")
+            self.assertIsInstance(media, list)
+        finally:
+            gateway._INTERNAL_GOOSE_TOKEN = None
+
+    @patch("gateway._do_rest_relay")
+    def test_relay_passes_content_blocks(self, mock_rest):
+        """_relay_to_goose_web should forward content_blocks to _do_rest_relay."""
+        mock_rest.return_value = ("ok", "", [])
+        gateway._INTERNAL_GOOSE_TOKEN = "tok"
+        blocks = [{"type": "text", "text": "test"}]
+        try:
+            gateway._relay_to_goose_web("test", "sid", content_blocks=blocks)
+            # verify _do_rest_relay received content_blocks
+            call_kwargs = mock_rest.call_args
+            # the lambda should pass content_blocks through
+            self.assertIn("content_blocks", str(call_kwargs) + str(mock_rest.call_args_list),
+                          "content_blocks not forwarded to rest relay")
+        finally:
+            gateway._INTERNAL_GOOSE_TOKEN = None
+
+    @patch("gateway._do_ws_relay", side_effect=AssertionError("WS relay should not be called"))
+    @patch("gateway._do_rest_relay")
+    def test_relay_uses_rest_not_ws(self, mock_rest, mock_ws):
+        """_relay_to_goose_web should call _do_rest_relay, NOT _do_ws_relay."""
+        mock_rest.return_value = ("hi", "", [])
+        gateway._INTERNAL_GOOSE_TOKEN = "tok"
+        try:
+            gateway._relay_to_goose_web("test", "sid")
+            mock_rest.assert_called()
+            mock_ws.assert_not_called()
+        finally:
+            gateway._INTERNAL_GOOSE_TOKEN = None
+
+    @patch("gateway._do_rest_relay_streaming")
+    def test_relay_streaming_uses_rest(self, mock_rest_stream):
+        """Streaming relay should use _do_rest_relay_streaming."""
+        mock_rest_stream.return_value = ("hi", "", [])
+        gateway._INTERNAL_GOOSE_TOKEN = "tok"
+        try:
+            result = gateway._relay_to_goose_web(
+                "test", "sid", flush_cb=lambda t: None, verbosity="balanced",
+            )
+            mock_rest_stream.assert_called()
+            self.assertEqual(len(result), 3)
+        finally:
+            gateway._INTERNAL_GOOSE_TOKEN = None
+
+    @patch("gateway._session_manager")
+    @patch("gateway._create_goose_session")
+    @patch("gateway._do_rest_relay")
+    def test_relay_retry_on_error_returns_3_tuple(self, mock_rest, mock_create, mock_sm):
+        """On error+retry, _relay_to_goose_web should still return 3-tuple."""
+        mock_rest.side_effect = [("", "session expired", []), ("retried", "", [])]
+        mock_create.return_value = "new-sid"
+        gateway._INTERNAL_GOOSE_TOKEN = "tok"
+        try:
+            result = gateway._relay_to_goose_web("test", "sid", chat_id="123", channel="telegram")
+            self.assertEqual(len(result), 3, f"Expected 3-tuple on retry, got {len(result)}")
+            text, err, media = result
+            self.assertEqual(text, "retried")
+        finally:
+            gateway._INTERNAL_GOOSE_TOKEN = None
+
+    @patch("gateway._relay_to_goose_web")
+    def test_bot_relay_builds_content_blocks_from_media(self, mock_relay):
+        """BotInstance._do_message_relay should build content_blocks when InboundMessage has media."""
+        mock_relay.return_value = ("response", "", [])
+
+        bot = gateway.BotInstance.__new__(gateway.BotInstance)
+        bot.name = "test"
+        bot.token = "tok"
+        bot.channel_key = "telegram:test"
+        bot.state = gateway.ChannelState()
+
+        inbound = gateway.InboundMessage(
+            user_id="123", text="look at this", channel="telegram:test",
+        )
+        mc = gateway.MediaContent(
+            kind="photo", mime_type="image/jpeg",
+            data=b"\xff\xd8\xff\xe0" + b"\x00" * 100, filename="test.jpg",
+        )
+        inbound.media = [mc]
+
+        with patch.object(bot.state, "get_user_lock") as mock_lock, \
+             patch("gateway._get_session_id", return_value="sid"), \
+             patch("gateway.load_setup", return_value=None), \
+             patch("gateway._send_typing_action"):
+            lock_ctx = MagicMock()
+            lock_ctx.__enter__ = MagicMock(return_value=None)
+            lock_ctx.__exit__ = MagicMock(return_value=False)
+            mock_lock.return_value = lock_ctx
+
+            # call _do_message_relay directly
+            bot._do_message_relay("tok", "123", "look at this", inbound_msg=inbound)
+
+            # verify content_blocks was passed to _relay_to_goose_web
+            self.assertTrue(mock_relay.called, "relay not called")
+            _, kwargs = mock_relay.call_args
+            self.assertIn("content_blocks", kwargs,
+                          f"content_blocks not passed. kwargs: {kwargs}")
+            self.assertIsNotNone(kwargs["content_blocks"],
+                                 "content_blocks should not be None for media message")
+
+    @patch("gateway._relay_to_goose_web")
+    def test_bot_relay_text_only_no_content_blocks(self, mock_relay):
+        """Text-only InboundMessage should NOT build content_blocks (None)."""
+        mock_relay.return_value = ("response", "", [])
+
+        bot = gateway.BotInstance.__new__(gateway.BotInstance)
+        bot.name = "test"
+        bot.token = "tok"
+        bot.channel_key = "telegram:test"
+        bot.state = gateway.ChannelState()
+
+        inbound = gateway.InboundMessage(
+            user_id="123", text="just text", channel="telegram:test",
+        )
+
+        with patch.object(bot.state, "get_user_lock") as mock_lock, \
+             patch("gateway._get_session_id", return_value="sid"), \
+             patch("gateway.load_setup", return_value=None), \
+             patch("gateway._send_typing_action"):
+            lock_ctx = MagicMock()
+            lock_ctx.__enter__ = MagicMock(return_value=None)
+            lock_ctx.__exit__ = MagicMock(return_value=False)
+            mock_lock.return_value = lock_ctx
+
+            bot._do_message_relay("tok", "123", "just text", inbound_msg=inbound)
+
+            self.assertTrue(mock_relay.called, "relay not called")
+            _, kwargs = mock_relay.call_args
+            cb = kwargs.get("content_blocks")
+            self.assertIsNone(cb, f"content_blocks should be None for text-only, got {cb}")
+
+    def test_all_callers_unpack_3_tuple(self):
+        """Meta-test: no call site in gateway.py uses 2-value unpack from _relay_to_goose_web."""
+        import re
+        src_path = os.path.join(os.path.dirname(__file__), "gateway.py")
+        with open(src_path) as f:
+            source = f.read()
+
+        # match patterns like "x, y = _relay_to_goose_web(" where there's no *_
+        # this catches exactly 2-value unpack without star expression
+        pattern = r'(\w+),\s*(\w+)\s*=\s*_relay_to_goose_web\('
+        matches = re.findall(pattern, source)
+
+        # filter out any that use *_ patterns (3-tuple safe)
+        bad_sites = []
+        for line_num, line in enumerate(source.split("\n"), 1):
+            if "_relay_to_goose_web(" in line:
+                # check previous non-blank line for assignment
+                pass  # use regex on full source instead
+
+        # find lines with 2-value unpack
+        bad_lines = []
+        for line_num, line in enumerate(source.split("\n"), 1):
+            stripped = line.strip()
+            if re.match(r'\w+,\s*\w+\s*=\s*_relay_to_goose_web\(', stripped):
+                bad_lines.append((line_num, stripped))
+
+        self.assertEqual(len(bad_lines), 0,
+                         f"Found {len(bad_lines)} call sites with 2-value unpack "
+                         f"(should use 3-tuple or *_):\n" +
+                         "\n".join(f"  line {n}: {l}" for n, l in bad_lines))
+
+
 if __name__ == "__main__":
     unittest.main()

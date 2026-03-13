@@ -2787,6 +2787,13 @@ def apply_config(config):
         f.write(content)
     os.replace(tmp_path, config_path)
 
+    # propagate GOOSE_* config to env vars so goosed subprocess inherits them
+    # (goosed reads env vars with highest priority, config.yaml as fallback)
+    for line in lines:
+        if ":" in line and line.startswith("GOOSE_"):
+            key, val = line.split(":", 1)
+            os.environ[key.strip()] = val.strip()
+
     # start all configured bots via BotManager
     bot_configs = _resolve_bot_configs(config)
     for bot_cfg in bot_configs:
@@ -6049,6 +6056,7 @@ def start_goose_web():
         env["GOOSE_HOST"] = "127.0.0.1"
         env["GOOSE_PORT"] = str(GOOSE_WEB_PORT)
         env["GOOSE_SERVER__SECRET_KEY"] = _INTERNAL_GOOSE_TOKEN
+        env["GOOSE_DISABLE_KEYRING"] = "1"
 
         print(f"[gateway] starting goosed agent on 127.0.0.1:{GOOSE_WEB_PORT}")
         print(f"[gateway] cmd: goosed agent (TLS=false, port={GOOSE_WEB_PORT})")

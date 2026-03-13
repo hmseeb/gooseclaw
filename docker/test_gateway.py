@@ -943,7 +943,7 @@ class TestFireCronJobStripping(unittest.TestCase):
     """Verify cron job output gets goose preamble stripped."""
 
     @patch("gateway.notify_all")
-    @patch("gateway._do_ws_relay")
+    @patch("gateway._do_rest_relay")
     @patch("gateway._load_recipe", return_value="do the thing")
     def test_cron_output_strips_goose_banner(self, _recipe, mock_relay, mock_notify):
         raw = (
@@ -954,7 +954,7 @@ class TestFireCronJobStripping(unittest.TestCase):
             "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
             "Actual report content"
         )
-        mock_relay.return_value = (raw, None)
+        mock_relay.return_value = (raw, None, [])
         gateway._fire_cron_job({"id": "test-cron", "source": "/test"})
         # check that notify_all was called without the banner
         call_args = mock_notify.call_args[0][0]
@@ -963,12 +963,12 @@ class TestFireCronJobStripping(unittest.TestCase):
         assert "Actual report content" in call_args
 
     @patch("gateway.notify_all")
-    @patch("gateway._do_ws_relay")
+    @patch("gateway._do_rest_relay")
     @patch("gateway._load_recipe", return_value="do the thing")
     def test_cron_output_not_truncated_at_4000(self, _recipe, mock_relay, mock_notify):
         """Cron output should allow long content (chunking handled by TG sender)."""
         long_report = "x" * 10000
-        mock_relay.return_value = (long_report, None)
+        mock_relay.return_value = (long_report, None, [])
         gateway._fire_cron_job({"id": "test-cron", "source": "/test"})
         call_args = mock_notify.call_args[0][0]
         # should contain the full content, not truncated at 4000
@@ -2454,33 +2454,33 @@ class TestCronNotifyChannel(unittest.TestCase):
     """Tests for _fire_cron_job() notify_channel passthrough (CHAN-08)."""
 
     @patch("gateway.notify_all")
-    @patch("gateway._do_ws_relay")
+    @patch("gateway._do_rest_relay")
     @patch("gateway._load_recipe", return_value="do the thing")
     def test_cron_job_passes_notify_channel(self, _recipe, mock_relay, mock_notify):
         """Cron job with notify_channel passes it to notify_all on success."""
-        mock_relay.return_value = ("output text", None)
+        mock_relay.return_value = ("output text", None, [])
         gateway._fire_cron_job({"id": "test-cron", "source": "/test", "notify_channel": "telegram"})
         mock_notify.assert_called_once()
         _, kwargs = mock_notify.call_args
         self.assertEqual(kwargs.get("channel"), "telegram")
 
     @patch("gateway.notify_all")
-    @patch("gateway._do_ws_relay")
+    @patch("gateway._do_rest_relay")
     @patch("gateway._load_recipe", return_value="do the thing")
     def test_cron_job_error_passes_notify_channel(self, _recipe, mock_relay, mock_notify):
         """Cron job with notify_channel passes it to notify_all on error."""
-        mock_relay.return_value = (None, "connection failed")
+        mock_relay.return_value = (None, "connection failed", [])
         gateway._fire_cron_job({"id": "test-cron", "source": "/test", "notify_channel": "telegram"})
         mock_notify.assert_called_once()
         _, kwargs = mock_notify.call_args
         self.assertEqual(kwargs.get("channel"), "telegram")
 
     @patch("gateway.notify_all")
-    @patch("gateway._do_ws_relay")
+    @patch("gateway._do_rest_relay")
     @patch("gateway._load_recipe", return_value="do the thing")
     def test_cron_job_no_notify_channel_broadcasts(self, _recipe, mock_relay, mock_notify):
         """Cron job without notify_channel passes channel=None (broadcast)."""
-        mock_relay.return_value = ("output text", None)
+        mock_relay.return_value = ("output text", None, [])
         gateway._fire_cron_job({"id": "test-cron", "source": "/test"})
         mock_notify.assert_called_once()
         _, kwargs = mock_notify.call_args
@@ -5346,16 +5346,21 @@ class TestRelayProtocolUpgrade(unittest.TestCase):
         finally:
             gateway._INTERNAL_GOOSE_TOKEN = None
 
-    @patch("gateway._do_ws_relay", side_effect=AssertionError("WS relay should not be called"))
     @patch("gateway._do_rest_relay")
-    def test_relay_uses_rest_not_ws(self, mock_rest, mock_ws):
-        """_relay_to_goose_web should call _do_rest_relay, NOT _do_ws_relay."""
+    def test_relay_uses_rest_not_ws(self, mock_rest):
+        """_relay_to_goose_web should call _do_rest_relay. WS relay is fully removed."""
         mock_rest.return_value = ("hi", "", [])
         gateway._INTERNAL_GOOSE_TOKEN = "tok"
         try:
             gateway._relay_to_goose_web("test", "sid")
             mock_rest.assert_called()
-            mock_ws.assert_not_called()
+            # verify WS functions no longer exist
+            self.assertFalse(hasattr(gateway, "_do_ws_relay"),
+                             "_do_ws_relay should be removed")
+            self.assertFalse(hasattr(gateway, "_do_ws_relay_streaming"),
+                             "_do_ws_relay_streaming should be removed")
+            self.assertFalse(hasattr(gateway, "_ws_connect"),
+                             "_ws_connect should be removed")
         finally:
             gateway._INTERNAL_GOOSE_TOKEN = None
 
@@ -5390,9 +5395,12 @@ class TestRelayProtocolUpgrade(unittest.TestCase):
             gateway._INTERNAL_GOOSE_TOKEN = None
 
     @patch("gateway._relay_to_goose_web")
-    def test_bot_relay_builds_content_blocks_from_media(self, mock_relay):
+    @patch("gateway._download_telegram_file")
+    def test_bot_relay_builds_content_blocks_from_media(self, mock_dl, mock_relay):
         """BotInstance._do_message_relay should build content_blocks when InboundMessage has media."""
         mock_relay.return_value = ("response", "", [])
+        # mock download to return real bytes
+        mock_dl.return_value = (b"\xff\xd8\xff\xe0" + b"\x00" * 100, "/tmp/test.jpg")
 
         bot = gateway.BotInstance.__new__(gateway.BotInstance)
         bot.name = "test"
@@ -5403,11 +5411,8 @@ class TestRelayProtocolUpgrade(unittest.TestCase):
         inbound = gateway.InboundMessage(
             user_id="123", text="look at this", channel="telegram:test",
         )
-        mc = gateway.MediaContent(
-            kind="photo", mime_type="image/jpeg",
-            data=b"\xff\xd8\xff\xe0" + b"\x00" * 100, filename="test.jpg",
-        )
-        inbound.media = [mc]
+        # use file_id reference dicts (as poll loop produces)
+        inbound.media = [{"file_id": "abc123", "media_key": "photo", "mime_hint": "image/jpeg", "filename": "test.jpg"}]
 
         with patch.object(bot.state, "get_user_lock") as mock_lock, \
              patch("gateway._get_session_id", return_value="sid"), \
@@ -5418,8 +5423,8 @@ class TestRelayProtocolUpgrade(unittest.TestCase):
             lock_ctx.__exit__ = MagicMock(return_value=False)
             mock_lock.return_value = lock_ctx
 
-            # call _do_message_relay directly
-            bot._do_message_relay("tok", "123", "look at this", inbound_msg=inbound)
+            # call _do_message_relay directly (positional: chat_id, text, bot_token)
+            bot._do_message_relay("123", "look at this", "tok", inbound_msg=inbound)
 
             # verify content_blocks was passed to _relay_to_goose_web
             self.assertTrue(mock_relay.called, "relay not called")
@@ -5453,7 +5458,7 @@ class TestRelayProtocolUpgrade(unittest.TestCase):
             lock_ctx.__exit__ = MagicMock(return_value=False)
             mock_lock.return_value = lock_ctx
 
-            bot._do_message_relay("tok", "123", "just text", inbound_msg=inbound)
+            bot._do_message_relay("123", "just text", "tok", inbound_msg=inbound)
 
             self.assertTrue(mock_relay.called, "relay not called")
             _, kwargs = mock_relay.call_args

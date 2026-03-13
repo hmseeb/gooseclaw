@@ -394,6 +394,11 @@ class BotInstance:
             _tg_setup = load_setup()
             _tg_verbosity = get_verbosity_for_channel(_tg_setup, self.channel_key) if _tg_setup else "balanced"
 
+            # build content blocks from media attachments
+            content_blocks = None
+            if inbound_msg and inbound_msg.has_media:
+                content_blocks = _build_content_blocks(text, inbound_msg)
+
             # typing indicator loop
             typing_stop = threading.Event()
 
@@ -407,9 +412,9 @@ class BotInstance:
 
             try:
                 if _tg_verbosity == "quiet":
-                    response_text, error = _relay_to_goose_web(
+                    response_text, error, media = _relay_to_goose_web(
                         text, session_id, chat_id=chat_id, channel=self.channel_key,
-                        sock_ref=_sock_ref,
+                        sock_ref=_sock_ref, content_blocks=content_blocks,
                     )
                     if _cancelled.is_set():
                         pass
@@ -442,10 +447,11 @@ class BotInstance:
                         else:
                             _edit_telegram_message(bot_token, chat_id, _st["msg_id"], txt)
 
-                    response_text, error = _relay_to_goose_web(
+                    response_text, error, media = _relay_to_goose_web(
                         text, session_id, chat_id=chat_id, channel=self.channel_key,
                         flush_cb=_tg_flush_edit, verbosity=_tg_verbosity,
                         sock_ref=_sock_ref, flush_interval=2.0,
+                        content_blocks=content_blocks,
                     )
                     if _cancelled.is_set():
                         pass
@@ -607,7 +613,7 @@ class BotInstance:
                                     def _kick_greeting(msg=kick_msg, s=sid, c=chat_id, bt=self.token, ck=self.channel_key):
                                         try:
                                             with self.state.get_user_lock(c):
-                                                txt, err = _relay_to_goose_web(
+                                                txt, err, *_ = _relay_to_goose_web(
                                                     msg, s, chat_id=str(c), channel=ck,
                                                 )
                                                 if err:
@@ -3334,8 +3340,8 @@ def _fire_cron_job(job):
         f"{instructions}"
     )
 
-    # relay to goose web (no timeout — task runs until goose completes)
-    response_text, error = _do_ws_relay(prompt, session_id)
+    # relay to goose web (no timeout -- task runs until goose completes)
+    response_text, error, _media = _do_rest_relay(prompt, session_id)
 
     if error:
         print(f"[cron] job {job_id} failed: {error}")
@@ -3685,16 +3691,22 @@ class ChannelRelay:
                 verbosity = get_verbosity_for_channel(setup, self._name) if setup else "balanced"
                 use_streaming = send_fn and verbosity != "quiet"
 
+                # build content blocks from InboundMessage media
+                _cb = None
+                if isinstance(user_id_or_msg, InboundMessage) and user_id_or_msg.has_media:
+                    _cb = _build_content_blocks(text, user_id_or_msg)
+
                 if use_streaming:
-                    response_text, error = _relay_to_goose_web(
+                    response_text, error, *_ = _relay_to_goose_web(
                         text, session_id, chat_id=user_key, channel=self._name,
                         flush_cb=send_fn, verbosity=verbosity,
                         sock_ref=sock_ref, flush_interval=2.0,
+                        content_blocks=_cb,
                     )
                 else:
-                    response_text, error = _relay_to_goose_web(
+                    response_text, error, *_ = _relay_to_goose_web(
                         text, session_id, chat_id=user_key, channel=self._name,
-                        sock_ref=sock_ref,
+                        sock_ref=sock_ref, content_blocks=_cb,
                     )
 
                 if cancelled.is_set():
@@ -3705,15 +3717,16 @@ class ChannelRelay:
                     session_id = f"{self._name}_{user_key}_{time.strftime('%Y%m%d_%H%M%S')}"
                     _session_manager.set(self._name, user_key, session_id)
                     if use_streaming:
-                        response_text, error = _relay_to_goose_web(
+                        response_text, error, *_ = _relay_to_goose_web(
                             text, session_id, chat_id=user_key, channel=self._name,
                             flush_cb=send_fn, verbosity=verbosity,
                             sock_ref=sock_ref, flush_interval=2.0,
+                            content_blocks=_cb,
                         )
                     else:
-                        response_text, error = _relay_to_goose_web(
+                        response_text, error, *_ = _relay_to_goose_web(
                             text, session_id, chat_id=user_key, channel=self._name,
-                            sock_ref=sock_ref,
+                            sock_ref=sock_ref, content_blocks=_cb,
                         )
 
                 if cancelled.is_set():
@@ -4242,15 +4255,10 @@ def _handle_cmd_stop(ctx):
             if len(sock_ref) > 1 and hasattr(sock_ref[1], 'set'):
                 sock_ref[1].set()
             sid = _session_manager.get(channel, chat_id)
-            if sid:
-                try:
-                    _ws_send_text(sock_ref[0], json.dumps({
-                        "type": "cancel",
-                        "session_id": sid,
-                    }))
-                except Exception:
-                    pass
-            sock_ref[0].close()
+            try:
+                sock_ref[0].close()
+            except Exception:
+                pass
         except Exception:
             pass
         ctx["send_fn"]("Stopped.")
@@ -4292,7 +4300,7 @@ def _handle_cmd_compact(ctx):
     if not session_id:
         ctx["send_fn"]("No active session. Send a message first.")
         return
-    response_text, error = _relay_to_goose_web(
+    response_text, error, *_ = _relay_to_goose_web(
         "Please summarize our conversation so far into key points, "
         "then we can continue from this summary. Be concise.",
         session_id, chat_id=chat_id, channel=channel
@@ -4462,7 +4470,7 @@ def _memory_writer_loop():
                         continue
 
                     prompt = MEMORY_EXTRACT_PROMPT + convo_text
-                    response, error = _do_ws_relay(prompt, extract_sid)
+                    response, error, _media = _do_rest_relay(prompt, extract_sid)
                     if error:
                         print(f"[memory-writer] extraction error: {error}")
                         continue
@@ -4660,135 +4668,6 @@ def start_memory_writer():
     threading.Thread(target=_memory_writer_loop, daemon=True).start()
 
 
-# ── minimal WebSocket client (stdlib only, no external deps) ────────────────
-
-def _ws_connect(host, port, path, auth_token=None):
-    """Open a WebSocket connection. Returns the raw socket or raises."""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(15)  # short timeout for initial connect only
-    sock.connect((host, port))
-
-    # generate a random 16-byte key for the handshake
-    ws_key = base64.b64encode(os.urandom(16)).decode()
-
-    # build auth headers — try both Bearer and Basic (goose web accepts both)
-    auth_headers = ""
-    if auth_token:
-        auth_headers = f"Authorization: Bearer {auth_token}\r\n"
-
-    request = (
-        f"GET {path} HTTP/1.1\r\n"
-        f"Host: {host}:{port}\r\n"
-        f"Upgrade: websocket\r\n"
-        f"Connection: Upgrade\r\n"
-        f"Sec-WebSocket-Key: {ws_key}\r\n"
-        f"Sec-WebSocket-Version: 13\r\n"
-        f"{auth_headers}"
-        f"\r\n"
-    )
-    sock.sendall(request.encode())
-
-    # read the HTTP response (until \r\n\r\n)
-    response = b""
-    while b"\r\n\r\n" not in response:
-        chunk = sock.recv(4096)
-        if not chunk:
-            sock.close()
-            raise ConnectionError("WebSocket handshake failed: connection closed")
-        response += chunk
-
-    status_line = response.split(b"\r\n")[0].decode()
-    if "101" not in status_line:
-        sock.close()
-        raise ConnectionError(f"WebSocket handshake failed: {status_line}")
-
-    # handshake done. set a generous relay timeout so the bot doesn't hang
-    # forever if goose stops responding. 5 minutes should cover long tool calls.
-    sock.settimeout(300)
-    return sock
-
-
-def _ws_send_text(sock, text):
-    """Send a text frame over WebSocket."""
-    payload = text.encode("utf-8")
-    mask_key = os.urandom(4)
-
-    # build frame header
-    header = bytearray()
-    header.append(0x81)  # FIN=1, opcode=1 (text)
-
-    length = len(payload)
-    if length < 126:
-        header.append(0x80 | length)  # MASK=1
-    elif length < 65536:
-        header.append(0x80 | 126)
-        header.extend(struct.pack(">H", length))
-    else:
-        header.append(0x80 | 127)
-        header.extend(struct.pack(">Q", length))
-
-    header.extend(mask_key)
-
-    # mask the payload
-    masked = bytearray(len(payload))
-    for i in range(len(payload)):
-        masked[i] = payload[i] ^ mask_key[i % 4]
-
-    sock.sendall(bytes(header) + bytes(masked))
-
-
-def _ws_recv_frame(sock):
-    """Read one WebSocket frame. Returns (opcode, payload_bytes) or raises."""
-    def _recv_exact(n):
-        buf = b""
-        while len(buf) < n:
-            chunk = sock.recv(n - len(buf))
-            if not chunk:
-                raise ConnectionError("WebSocket connection closed")
-            buf += chunk
-        return buf
-
-    header = _recv_exact(2)
-    opcode = header[0] & 0x0F
-    masked = bool(header[1] & 0x80)
-    length = header[1] & 0x7F
-
-    if length == 126:
-        length = struct.unpack(">H", _recv_exact(2))[0]
-    elif length == 127:
-        length = struct.unpack(">Q", _recv_exact(8))[0]
-
-    if masked:
-        mask_key = _recv_exact(4)
-        payload = bytearray(_recv_exact(length))
-        for i in range(length):
-            payload[i] ^= mask_key[i % 4]
-        return opcode, bytes(payload)
-
-    return opcode, _recv_exact(length)
-
-
-def _ws_recv_text(sock):
-    """Read text frames, handling pings/close. Returns text string or None on close."""
-    while True:
-        opcode, payload = _ws_recv_frame(sock)
-        if opcode == 0x1:  # text frame
-            return payload.decode("utf-8", errors="replace")
-        elif opcode == 0x9:  # ping
-            # send pong
-            pong = bytearray([0x8A, 0x80 | len(payload)])
-            mask_key = os.urandom(4)
-            pong.extend(mask_key)
-            masked = bytearray(len(payload))
-            for i in range(len(payload)):
-                masked[i] = payload[i] ^ mask_key[i % 4]
-            pong.extend(masked)
-            sock.sendall(bytes(pong))
-        elif opcode == 0x8:  # close
-            return None
-        # ignore other frames (continuation, binary, pong)
-
-
 # ── telegram bot API helpers ────────────────────────────────────────────────
 
 def _send_typing_action(bot_token, chat_id):
@@ -4846,17 +4725,19 @@ def _update_goose_session_provider(session_id, model_config):
 
 
 def _relay_to_goose_web(user_text, session_id, chat_id=None, channel=None,
-                        flush_cb=None, verbosity=None, sock_ref=None, flush_interval=4.0):
-    """Send a user message to goose web via WebSocket and return the assistant's text.
+                        flush_cb=None, verbosity=None, sock_ref=None, flush_interval=4.0,
+                        content_blocks=None):
+    """Send a user message to goose web via REST /reply and return the assistant's text.
 
-    Returns (response_text, error_string). On success error_string is empty.
+    Returns (response_text, error_string, media_blocks). On success error_string is empty.
     If chat_id is provided and the session is stale, creates a new session and retries.
     If channel is provided, applies per-channel model routing before relaying.
     If flush_cb is provided and verbosity != "quiet", uses streaming relay.
-    If sock_ref is a list, sock_ref[0] is set to the active socket for cancellation.
+    If sock_ref is a list, sock_ref[0] is set to the active connection for cancellation.
+    If content_blocks is provided, sends multimodal content blocks instead of plain text.
     """
     if not _INTERNAL_GOOSE_TOKEN:
-        return "", "Goose is not ready yet (no internal token). Please try again in a moment."
+        return "", "Goose is not ready yet (no internal token). Please try again in a moment.", []
 
     # apply per-channel model routing
     if channel and session_id:
@@ -4869,11 +4750,11 @@ def _relay_to_goose_web(user_text, session_id, chat_id=None, channel=None,
     # choose relay function based on streaming params
     use_streaming = flush_cb and verbosity and verbosity != "quiet"
     if use_streaming:
-        relay_fn = lambda txt, sid: _do_ws_relay_streaming(txt, sid, flush_cb, verbosity, sock_ref=sock_ref, flush_interval=flush_interval)
+        relay_fn = lambda txt, sid: _do_rest_relay_streaming(txt, sid, flush_cb, verbosity, content_blocks=content_blocks, sock_ref=sock_ref, flush_interval=flush_interval)
     else:
-        relay_fn = lambda txt, sid: _do_ws_relay(txt, sid, sock_ref=sock_ref)
+        relay_fn = lambda txt, sid: _do_rest_relay(txt, sid, content_blocks=content_blocks, sock_ref=sock_ref)
 
-    text, err = relay_fn(user_text, session_id)
+    text, err, media = relay_fn(user_text, session_id)
 
     # if error or empty response, try creating a new session and retrying
     # but NOT if the relay was cancelled (e.g. /stop or /clear killed it)
@@ -4889,7 +4770,7 @@ def _relay_to_goose_web(user_text, session_id, chat_id=None, channel=None,
             print(f"[{ch}] retrying with new session {new_sid}")
             return relay_fn(user_text, new_sid)
 
-    return text, err
+    return text, err, media
 
 
 def _diagnose_empty_response():
@@ -4930,123 +4811,7 @@ def _diagnose_empty_response():
     return "No response from goose. Check provider configuration."
 
 
-def _do_ws_relay(user_text, session_id, sock_ref=None):
-    """Connect to goose web via WebSocket, send a message, collect the response.
-
-    Returns (response_text, error_string). No timeout on the relay itself.
-    Connection uses a 15s timeout for the initial handshake only.
-    If sock_ref is a list, sock_ref[0] is set to the socket for external cancellation.
-    """
-    ws_path = f"/ws?token={urllib.parse.quote(str(_INTERNAL_GOOSE_TOKEN))}"
-    t0 = time.time()
-    print(f"[relay] start session={session_id} text={user_text[:50]!r}")
-
-    sock = None
-    try:
-        sock = _ws_connect("127.0.0.1", GOOSE_WEB_PORT, ws_path, auth_token=_INTERNAL_GOOSE_TOKEN)
-        if sock_ref is not None:
-            sock_ref[0] = sock
-        t_connect = time.time()
-        print(f"[relay] ws connected in {t_connect - t0:.1f}s")
-
-        # send the user message
-        msg = json.dumps({
-            "type": "message",
-            "content": user_text,
-            "session_id": session_id,
-            "timestamp": int(time.time() * 1000),
-        })
-        _ws_send_text(sock, msg)
-
-        # collect response chunks until "complete"
-        collected = []
-        first_chunk_time = None
-        while True:
-            frame_text = _ws_recv_text(sock)
-            if frame_text is None:
-                # connection closed
-                print(f"[relay] ws closed by server after {time.time() - t0:.1f}s")
-                break
-
-            try:
-                event = json.loads(frame_text)
-            except (json.JSONDecodeError, ValueError):
-                continue
-
-            etype = event.get("type", "")
-            # log every event for debugging (truncate large content)
-            _event_summary = {k: (v[:200] if isinstance(v, str) and len(v) > 200 else v) for k, v in event.items()}
-            print(f"[relay] event: {json.dumps(_event_summary)}")
-
-            if etype == "response":
-                content = event.get("content", "")
-                if content:
-                    if first_chunk_time is None:
-                        first_chunk_time = time.time()
-                        print(f"[relay] first chunk in {first_chunk_time - t0:.1f}s (TTFB)")
-                    collected.append(content)
-            elif etype == "tool_request":
-                # auto-approve tool usage (claude-code provider needs this)
-                tool_id = event.get("tool_id", "")
-                print(f"[relay] auto-approving tool_request id={tool_id} after {time.time() - t0:.1f}s")
-                confirm = json.dumps({
-                    "type": "tool_confirmation",
-                    "session_id": session_id,
-                    "tool_id": tool_id,
-                    "needs_confirmation": False,
-                })
-                _ws_send_text(sock, confirm)
-            elif etype == "error":
-                err_msg = event.get("message", "Unknown error")
-                print(f"[relay] error event after {time.time() - t0:.1f}s: {err_msg}")
-                sock.close()
-                return "", f"Goose error: {err_msg}"
-            elif etype == "complete":
-                print(f"[relay] complete after {time.time() - t0:.1f}s, collected {len(collected)} chunks")
-                break
-            else:
-                # log non-response events for debugging
-                print(f"[relay] event type={etype} after {time.time() - t0:.1f}s")
-
-        sock.close()
-        elapsed = time.time() - t0
-        full_text = "".join(collected).strip()
-        print(f"[relay] done in {elapsed:.1f}s ({len(full_text)} chars) session={session_id}")
-        if not full_text:
-            return "", _diagnose_empty_response()
-        return full_text, ""
-
-    except socket.timeout:
-        elapsed = time.time() - t0
-        print(f"[relay] TIMEOUT after {elapsed:.1f}s session={session_id}")
-        if sock:
-            try:
-                sock.close()
-            except Exception:
-                pass
-        partial = "".join(collected).strip() if collected else ""
-        if partial:
-            return partial, ""
-        return "", "Goose took too long to respond (timeout). Try again."
-    except ConnectionError as e:
-        print(f"[relay] connection error after {time.time() - t0:.1f}s: {e}")
-        if sock:
-            try:
-                sock.close()
-            except Exception:
-                pass
-        return "", f"WebSocket error: {e}"
-    except Exception as e:
-        print(f"[relay] error after {time.time() - t0:.1f}s: {e}")
-        if sock:
-            try:
-                sock.close()
-            except Exception:
-                pass
-        return "", f"Error communicating with goose: {e}"
-
-
-# ── streaming relay ─────────────────────────────────────────────────────────
+# ── streaming helpers ────────────────────────────────────────────────────────
 
 def _truncate(text, max_len=500):
     """Truncate text with ellipsis if it exceeds max_len."""
@@ -5429,160 +5194,6 @@ def _do_rest_relay_streaming(user_text, session_id, flush_cb, verbosity="balance
         return "", f"Error communicating with goose: {e}", media_blocks
 
 
-def _do_ws_relay_streaming(user_text, session_id, flush_cb, verbosity="balanced", sock_ref=None, flush_interval=4.0):
-    """Connect to goose web via WebSocket, stream response chunks via flush_cb.
-
-    Like _do_ws_relay but delivers text incrementally through flush_cb and
-    emits tool/thinking events based on verbosity level.
-    If sock_ref is a list, sock_ref[0] is set to the socket for external cancellation.
-
-    Returns (full_text, error_string) for compatibility with _do_ws_relay.
-    """
-    ws_path = f"/ws?token={urllib.parse.quote(str(_INTERNAL_GOOSE_TOKEN))}"
-    t0 = time.time()
-    print(f"[relay-stream] start session={session_id} verbosity={verbosity} text={user_text[:50]!r}")
-
-    buf = _StreamBuffer(flush_cb, interval=flush_interval)
-    collected = []
-    sock = None
-
-    try:
-        sock = _ws_connect("127.0.0.1", GOOSE_WEB_PORT, ws_path, auth_token=_INTERNAL_GOOSE_TOKEN)
-        if sock_ref is not None:
-            sock_ref[0] = sock
-        print(f"[relay-stream] ws connected in {time.time() - t0:.1f}s")
-
-        msg = json.dumps({
-            "type": "message",
-            "content": user_text,
-            "session_id": session_id,
-            "timestamp": int(time.time() * 1000),
-        })
-        _ws_send_text(sock, msg)
-
-        while True:
-            frame_text = _ws_recv_text(sock)
-            if frame_text is None:
-                print(f"[relay-stream] ws closed by server after {time.time() - t0:.1f}s")
-                break
-
-            try:
-                event = json.loads(frame_text)
-            except (json.JSONDecodeError, ValueError):
-                print(f"[relay-stream] unparseable frame: {frame_text[:200]}")
-                continue
-
-            etype = event.get("type", "")
-            # log every event for debugging (truncate large content)
-            _event_summary = {k: (v[:200] if isinstance(v, str) and len(v) > 200 else v) for k, v in event.items()}
-            print(f"[relay-stream] event: {json.dumps(_event_summary)}")
-
-            if etype == "response":
-                content = event.get("content", "")
-                if content:
-                    collected.append(content)
-                    buf.append(content)
-
-            elif etype == "tool_request":
-                # auto-approve tool usage (claude-code provider needs this)
-                tool_id = event.get("tool_id", "")
-                print(f"[relay-stream] auto-approving tool_request id={tool_id}")
-                confirm = json.dumps({
-                    "type": "tool_confirmation",
-                    "session_id": session_id,
-                    "tool_id": tool_id,
-                    "needs_confirmation": False,
-                })
-                _ws_send_text(sock, confirm)
-                # flush any pending text before tool status
-                buf.flush()
-                tool_name = event.get("tool", event.get("name", "tool"))
-                if verbosity == "verbose":
-                    args = event.get("arguments", event.get("args", ""))
-                    if isinstance(args, dict):
-                        # show first few key=value pairs
-                        parts = [f'{k}="{v}"' for k, v in list(args.items())[:3]]
-                        args_str = ", ".join(parts)
-                    else:
-                        args_str = _truncate(str(args), 100) if args else ""
-                    status = f"[Using {tool_name}({args_str})]" if args_str else f"[Using {tool_name}]"
-                else:
-                    status = f"[Using {tool_name}...]"
-                try:
-                    flush_cb(status)
-                except Exception as e:
-                    print(f"[stream] tool status error: {e}")
-
-            elif etype in ("tool_response", "tool_confirmation"):
-                if verbosity == "verbose":
-                    result = event.get("result", event.get("content", ""))
-                    if result:
-                        truncated = _truncate(str(result), 400)
-                        try:
-                            flush_cb(f"Result: {truncated}")
-                        except Exception as e:
-                            print(f"[stream] tool result error: {e}")
-
-            elif etype == "thinking":
-                if verbosity == "verbose":
-                    content = event.get("content", "")
-                    if content:
-                        buf.flush()
-                        truncated = _truncate(content, 500)
-                        try:
-                            flush_cb(f"_{truncated}_")
-                        except Exception as e:
-                            print(f"[stream] thinking error: {e}")
-
-            elif etype == "error":
-                buf.flush()
-                err_msg = event.get("message", "Unknown error")
-                print(f"[relay-stream] error event after {time.time() - t0:.1f}s: {err_msg}")
-                sock.close()
-                return "".join(collected).strip(), f"Goose error: {err_msg}"
-
-            elif etype == "complete":
-                break
-
-        buf.flush_final()
-        sock.close()
-        full_text = "".join(collected).strip()
-        elapsed = time.time() - t0
-        print(f"[relay-stream] done in {elapsed:.1f}s ({len(full_text)} chars) session={session_id}")
-        if not full_text:
-            return "", _diagnose_empty_response()
-        return full_text, ""
-
-    except socket.timeout:
-        elapsed = time.time() - t0
-        print(f"[relay-stream] TIMEOUT after {elapsed:.1f}s session={session_id}")
-        if sock:
-            try:
-                sock.close()
-            except Exception:
-                pass
-        partial = "".join(collected).strip() if collected else ""
-        if partial:
-            return partial, ""
-        return "", "Goose took too long to respond (timeout). Try again."
-    except ConnectionError as e:
-        print(f"[relay-stream] connection error after {time.time() - t0:.1f}s: {e}")
-        if sock:
-            try:
-                sock.close()
-            except Exception:
-                pass
-        return "", f"WebSocket error: {e}"
-    except Exception as e:
-        print(f"[relay-stream] error after {time.time() - t0:.1f}s: {e}")
-        if sock:
-            try:
-                sock.close()
-            except Exception:
-                pass
-        return "", f"Error communicating with goose: {e}"
-
-
 # ── pairing helpers (self-contained, no Rust subprocess) ────────────────────
 
 def _add_pairing_to_config(chat_id, platform="telegram"):
@@ -5719,8 +5330,13 @@ def _telegram_poll_loop(bot_token):
                                         print(f"[telegram] media download failed for {ref.get('media_key')}: {file_path}")
                                 _send_typing_action(_bt, _chat_id)
                                 session_id = _get_session_id(_chat_id)
-                                response_text, error = _relay_to_goose_web(
+                                # build content blocks from downloaded media
+                                _inbound = InboundMessage(user_id=_chat_id, text=_text, channel="telegram")
+                                _inbound.media = downloaded
+                                _leg_cb = _build_content_blocks(_text, _inbound) if _inbound.has_media else None
+                                response_text, error, *_ = _relay_to_goose_web(
                                     _text, session_id, chat_id=_chat_id, channel="telegram",
+                                    content_blocks=_leg_cb,
                                 )
                                 if error:
                                     send_telegram_message(_bt, _chat_id, f"Error: {error}")
@@ -5799,6 +5415,13 @@ def _telegram_poll_loop(bot_token):
                             _tg_setup = load_setup()
                             _tg_verbosity = get_verbosity_for_channel(_tg_setup, "telegram") if _tg_setup else "balanced"
 
+                            # build content blocks from downloaded media
+                            _leg_content_blocks = None
+                            if _media_refs and downloaded:
+                                _leg_inbound = InboundMessage(user_id=_chat_id, text=_text, channel="telegram")
+                                _leg_inbound.media = downloaded
+                                _leg_content_blocks = _build_content_blocks(_text, _leg_inbound)
+
                             # typing indicator loop
                             typing_stop = threading.Event()
 
@@ -5812,9 +5435,9 @@ def _telegram_poll_loop(bot_token):
 
                             try:
                                 if _tg_verbosity == "quiet":
-                                    response_text, error = _relay_to_goose_web(
+                                    response_text, error, *_ = _relay_to_goose_web(
                                         _text, session_id, chat_id=_chat_id, channel="telegram",
-                                        sock_ref=_sock_ref,
+                                        sock_ref=_sock_ref, content_blocks=_leg_content_blocks,
                                     )
                                     if _cancelled.is_set():
                                         pass  # /stop was called, don't send anything
@@ -5847,10 +5470,11 @@ def _telegram_poll_loop(bot_token):
                                         else:
                                             _edit_telegram_message(_bt, _chat_id, _st["msg_id"], txt)
 
-                                    response_text, error = _relay_to_goose_web(
+                                    response_text, error, *_ = _relay_to_goose_web(
                                         _text, session_id, chat_id=_chat_id, channel="telegram",
                                         flush_cb=_tg_flush_edit, verbosity=_tg_verbosity,
                                         sock_ref=_sock_ref, flush_interval=2.0,
+                                        content_blocks=_leg_content_blocks,
                                     )
                                     if _cancelled.is_set():
                                         pass  # /stop was called, don't send final edit
@@ -5913,7 +5537,7 @@ def _telegram_poll_loop(bot_token):
                                 def _kick_greeting(msg=kick_msg, s=sid, c=chat_id):
                                     try:
                                         with _get_chat_lock(c):
-                                            txt, err = _relay_to_goose_web(
+                                            txt, err, *_ = _relay_to_goose_web(
                                                 msg, s, chat_id=str(c), channel="telegram",
                                             )
                                             if err:
@@ -6146,7 +5770,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                 if not sid:
                     self.send_json(500, {"error": "could not create session"})
                     return
-                text, err = _do_ws_relay("say hi in 5 words", sid)
+                text, err, _media = _do_rest_relay("say hi in 5 words", sid)
                 self.send_json(200, {"session_id": sid, "response": text, "error": err})
             except Exception as e:
                 self.send_json(500, {"error": str(e)})

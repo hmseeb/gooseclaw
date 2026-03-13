@@ -51,27 +51,21 @@ fi
 
 # preserve gateway state (pairings, configs, pending codes) across restarts
 # — goose writes these to config.yaml at runtime, and we'd lose them on regen
-GATEWAY_STATE=""
+GATEWAY_STATE_FILE=$(mktemp /tmp/gateway_state.XXXXXX.json)
 if [ -f "$CONFIG_DIR/config.yaml" ]; then
-    GATEWAY_STATE=$(python3 -c "
-lines = open('$CONFIG_DIR/config.yaml').readlines()
-in_gw = False
-buf = []
-gw_keys = ('gateway_pairings:', 'gateway_configs:', 'gateway_pending_codes:')
-for line in lines:
-    if any(line.startswith(k) for k in gw_keys):
-        in_gw = True
-        buf.append(line)
-    elif in_gw:
-        if line and not line[0].isspace() and not line.strip().startswith('-'):
-            in_gw = False
-            if any(line.startswith(k) for k in gw_keys):
-                in_gw = True
-                buf.append(line)
-        else:
-            buf.append(line)
-print(''.join(buf), end='')
-" 2>/dev/null || true)
+    python3 -c "
+import yaml, json, sys
+try:
+    with open('$CONFIG_DIR/config.yaml') as f:
+        data = yaml.safe_load(f) or {}
+    gw_keys = ('gateway_pairings', 'gateway_configs', 'gateway_pending_codes')
+    state = {k: data[k] for k in gw_keys if k in data}
+    if state:
+        with open('$GATEWAY_STATE_FILE', 'w') as out:
+            json.dump(state, out)
+except Exception:
+    pass
+" 2>/dev/null || true
 fi
 
 # generate base config.yaml (provider may be added by env vars or setup wizard)
@@ -371,10 +365,25 @@ extensions:
 EXTENSIONS
 
 # restore preserved gateway state (pairings, sessions, pending codes)
-if [ -n "$GATEWAY_STATE" ]; then
-    echo "$GATEWAY_STATE" >> "$CONFIG_DIR/config.yaml"
+if [ -s "$GATEWAY_STATE_FILE" ]; then
+    python3 -c "
+import yaml, json, sys
+try:
+    with open('$GATEWAY_STATE_FILE') as f:
+        state = json.load(f)
+    if not state:
+        sys.exit(0)
+    with open('$CONFIG_DIR/config.yaml') as f:
+        config = yaml.safe_load(f) or {}
+    config.update(state)
+    with open('$CONFIG_DIR/config.yaml', 'w') as f:
+        yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+except Exception as e:
+    print(f'[init] WARN: could not restore gateway state: {e}', file=sys.stderr)
+" 2>/dev/null || true
     echo "[init] gateway pairings preserved across restart"
 fi
+rm -f "$GATEWAY_STATE_FILE"
 
 # ─── template version tracking ────────────────────────────────────────────
 

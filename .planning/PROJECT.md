@@ -1,51 +1,48 @@
-# GooseClaw Setup Wizard v2
+# GooseClaw
 
 ## What This Is
 
-A bulletproof onboarding experience for GooseClaw, the open-source personal AI agent deployment template. Users deploy GooseClaw on Railway, hit a setup wizard, pick their LLM provider, paste an API key, and have a working AI agent in under 2 minutes. The wizard handles all config.yaml generation, env var management, and goose web lifecycle so users never touch a terminal.
+A self-hosted personal AI agent platform built on Block's Goose. Users deploy on Railway, configure via setup wizard, and interact through Telegram or any channel plugin. Gateway manages goose web lifecycle, job scheduling, notification bus, and channel plugin system. Supports 23+ LLM providers.
 
 ## Core Value
 
 A user with zero DevOps knowledge can deploy GooseClaw and configure it correctly on the first try, every time. If they can paste an API key, they can run their own AI agent.
 
+## Current Milestone: v2.0 Multi-Channel & Multi-Bot
+
+**Goal:** Make channel plugins first-class citizens with full parity to telegram, and support multiple bots with independent provider/model configs on a single gateway.
+
+**Target features:**
+- Channel parity: shared command routing, per-user session locks, cancellation support for all plugins
+- Multi-bot: multiple telegram bots on one gateway, each with own provider/model
+- Per-channel provider routing: different channels can use different LLMs
+- API parity: /api/notify and cron scheduler support channel targeting
+
 ## Requirements
 
 ### Validated
 
-- ✓ Web-based setup wizard served by gateway.py — existing
-- ✓ Provider selection for 7 providers (anthropic, openai, google, groq, openrouter, claude-code, custom) — existing
-- ✓ API key validation via test endpoint — existing
-- ✓ Config persistence to setup.json on Railway volume — existing
-- ✓ Telegram gateway integration — existing
-- ✓ Basic auth for setup page after first config — existing
-- ✓ Reverse proxy from gateway to goose web — existing
+- ✓ Web-based setup wizard with 23+ providers — v1.0 phases 1-2
+- ✓ API key validation, credential mapping, env var rehydration — v1.0 phase 2
+- ✓ Gateway resilience: auto-restart, health monitor, stderr capture — v1.0 phase 3
+- ✓ Advanced lead/worker multi-model config — v1.0 phase 4
+- ✓ Production hardening: security headers, rate limiting, auth recovery — v1.0 phase 5
+- ✓ Telegram gateway with session management, commands, streaming — v1.0
+- ✓ Channel plugin system with hot-reload — v1.0
+- ✓ Job engine with cron, timers, provider override, auto-expiry — v1.0
+- ✓ Notification bus with per-job channel targeting — v1.0
+- ✓ Per-channel verbosity settings — v1.0
 
 ### Active
 
-- [ ] Expand provider support from 7 to 15+ (add mistral, xai, deepseek, ollama, azure-openai, together, cerebras, perplexity)
-- [ ] Categorized provider selection (Cloud API / Subscription / Local / Custom)
-- [ ] Per-provider "how to get API key" links and descriptions
-- [ ] Smart model selection with defaults and suggestions per provider
-- [ ] Mandatory credential validation before save (non-empty + format check)
-- [ ] Pre-fill form with existing values when reconfiguring
-- [ ] Real-time startup status after save (not "refresh in a few seconds" forever)
-- [ ] Auto-restart goose web on crash with exponential backoff
-- [ ] Health check thread monitoring goose web process
-- [ ] Proper error reporting to web UI (show actual goose web errors)
-- [ ] Fix env var rehydration for ALL providers on container restart
-- [ ] Telegram setup improvements (BotFather instructions, token format validation, pairing code in UI)
-- [ ] Advanced settings toggle for lead/worker multi-model config
-- [ ] Auth token recovery path (reset mechanism)
-- [ ] Confirmation summary step showing what was configured
-- [ ] Proper goose web stderr capture for debugging
+(Defined in REQUIREMENTS.md for v2.0)
 
 ### Out of Scope
 
-- Multiple saved provider profiles with switching — adds complexity, goose only uses one at a time anyway
-- Full multi-model UI (planner + subagent separate providers) — too complex for v2, advanced toggle covers lead/worker
 - Mobile-responsive wizard — desktop-first, Railway dashboard is desktop anyway
 - Custom extension management in wizard — separate concern, goose web handles this
 - OAuth flows (OpenRouter OAuth, GitHub Copilot device flow) — too complex for single HTML file
+- Multiple goose web processes — single process, sessions provide isolation
 
 ## Context
 

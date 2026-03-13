@@ -2716,6 +2716,8 @@ class TestBotWiring(unittest.TestCase):
             for bot in bm._bots.values():
                 bot.running = False
             bm._bots.clear()
+        # clean up env vars set by apply_config
+        os.environ.pop("TELEGRAM_BOT_TOKEN", None)
 
     def test_bot_manager_module_level_exists(self):
         """gateway._bot_manager is a BotManager instance."""
@@ -2723,16 +2725,16 @@ class TestBotWiring(unittest.TestCase):
 
     @patch("gateway.urllib.request.urlopen")
     @patch("gateway._resolve_bot_configs")
-    @patch("gateway.load_setup", return_value={})
-    @patch("gateway.os.path.exists", return_value=False)
-    def test_apply_config_starts_bots_via_manager(self, _mock_exists, _mock_setup, mock_resolve, mock_urlopen):
+    def test_apply_config_starts_bots_via_manager(self, mock_resolve, mock_urlopen):
         """apply_config uses BotManager to start bots from resolved configs."""
         mock_resolve.return_value = [{"name": "default", "token": "123:ABC"}]
         mock_urlopen.return_value.__enter__ = lambda s: MagicMock(read=lambda: b'{"ok":true,"result":[]}')
         mock_urlopen.return_value.__exit__ = MagicMock(return_value=False)
 
-        # Mock BotInstance.start to avoid real network/threads
-        with patch.object(gateway.BotInstance, "start"):
+        with patch.object(gateway.BotInstance, "start"), \
+             patch("builtins.open", mock_open(read_data="")), \
+             patch("gateway.os.path.exists", return_value=False), \
+             patch("gateway.os.replace"):
             gateway.apply_config({"provider_type": "openai", "api_key": "sk-test"})
 
         bot = gateway._bot_manager.get_bot("default")
@@ -2740,9 +2742,7 @@ class TestBotWiring(unittest.TestCase):
 
     @patch("gateway.urllib.request.urlopen")
     @patch("gateway._resolve_bot_configs")
-    @patch("gateway.load_setup", return_value={})
-    @patch("gateway.os.path.exists", return_value=False)
-    def test_apply_config_multi_bot(self, _mock_exists, _mock_setup, mock_resolve, mock_urlopen):
+    def test_apply_config_multi_bot(self, mock_resolve, mock_urlopen):
         """apply_config with multiple bot configs creates all bots."""
         mock_resolve.return_value = [
             {"name": "default", "token": "111:AAA"},
@@ -2751,7 +2751,10 @@ class TestBotWiring(unittest.TestCase):
         mock_urlopen.return_value.__enter__ = lambda s: MagicMock(read=lambda: b'{"ok":true,"result":[]}')
         mock_urlopen.return_value.__exit__ = MagicMock(return_value=False)
 
-        with patch.object(gateway.BotInstance, "start"):
+        with patch.object(gateway.BotInstance, "start"), \
+             patch("builtins.open", mock_open(read_data="")), \
+             patch("gateway.os.path.exists", return_value=False), \
+             patch("gateway.os.replace"):
             gateway.apply_config({"provider_type": "openai", "api_key": "sk-test"})
 
         self.assertIsNotNone(gateway._bot_manager.get_bot("default"))
@@ -2759,15 +2762,16 @@ class TestBotWiring(unittest.TestCase):
 
     @patch("gateway.urllib.request.urlopen")
     @patch("gateway._resolve_bot_configs")
-    @patch("gateway.load_setup", return_value={})
-    @patch("gateway.os.path.exists", return_value=False)
-    def test_apply_config_default_bot_channel_key_telegram(self, _mock_exists, _mock_setup, mock_resolve, mock_urlopen):
+    def test_apply_config_default_bot_channel_key_telegram(self, mock_resolve, mock_urlopen):
         """Default bot gets channel_key='telegram', not 'telegram:default'."""
         mock_resolve.return_value = [{"name": "default", "token": "123:ABC"}]
         mock_urlopen.return_value.__enter__ = lambda s: MagicMock(read=lambda: b'{"ok":true,"result":[]}')
         mock_urlopen.return_value.__exit__ = MagicMock(return_value=False)
 
-        with patch.object(gateway.BotInstance, "start"):
+        with patch.object(gateway.BotInstance, "start"), \
+             patch("builtins.open", mock_open(read_data="")), \
+             patch("gateway.os.path.exists", return_value=False), \
+             patch("gateway.os.replace"):
             gateway.apply_config({"provider_type": "openai", "api_key": "sk-test"})
 
         bot = gateway._bot_manager.get_bot("default")

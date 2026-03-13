@@ -667,6 +667,7 @@ _telegram_running = False  # True while the Python polling thread is active
 _session_manager = SessionManager(persist_dir=DATA_DIR)
 _telegram_state = ChannelState()
 _command_router = CommandRouter()
+_bot_manager = BotManager()
 
 # ── per-channel model routing state ────────────────────────────────────────
 # Tracks which model was last set on each goose session so we avoid
@@ -2291,16 +2292,23 @@ def apply_config(config):
         f.write(content)
     os.replace(tmp_path, config_path)
 
-    # telegram — set env var AND start gateway if not already running
-    tg_token = config.get("telegram_bot_token", "")
-    if tg_token:
-        os.environ["TELEGRAM_BOT_TOKEN"] = tg_token
-        start_telegram_gateway(tg_token)
+    # start all configured bots via BotManager
+    bot_configs = _resolve_bot_configs(config)
+    for bot_cfg in bot_configs:
+        name = bot_cfg["name"]
+        token = bot_cfg["token"]
+        channel_key = "telegram" if name == "default" else f"telegram:{name}"
+        os.environ.setdefault("TELEGRAM_BOT_TOKEN", token)  # first token wins for backward compat
+        try:
+            bot = _bot_manager.add_bot(name, token, channel_key=channel_key)
+            bot.start()
+        except ValueError as e:
+            print(f"[bot-mgr] error starting bot {name}: {e}")
 
 
 def _is_goose_gateway_running():
-    """Check if the Python telegram polling thread is running."""
-    return _telegram_running, []
+    """Check if any Telegram bot polling thread is running."""
+    return _bot_manager.any_running, []
 
 
 # ── telegram session persistence ────────────────────────────────────────────
@@ -5190,43 +5198,16 @@ def _telegram_poll_loop(bot_token):
 
 
 def start_telegram_gateway(bot_token):
-    """Start the Python telegram polling thread if not already running."""
-    global _telegram_running
-
-    if _telegram_running:
+    """Start the default telegram bot. Backward-compatible entry point."""
+    existing = _bot_manager.get_bot("default")
+    if existing and existing.running:
         print("[telegram] polling already running")
         return
-
-    _load_telegram_sessions()
-
-    # register telegram with the notification bus
-    register_notification_handler("telegram", _telegram_notify_handler)
-
-    # generate an initial pairing code
-    _generate_and_store_pair_code()
-
-    # register slash commands for autocomplete in telegram
     try:
-        commands = [
-            {"command": "stop", "description": "Cancel the current response"},
-            {"command": "clear", "description": "Wipe conversation and start fresh"},
-            {"command": "compact", "description": "Summarize history to save tokens"},
-            {"command": "help", "description": "Show available commands"},
-        ]
-        payload = json.dumps({"commands": commands}).encode()
-        req = urllib.request.Request(
-            f"https://api.telegram.org/bot{bot_token}/setMyCommands",
-            data=payload,
-            headers={"Content-Type": "application/json"},
-        )
-        urllib.request.urlopen(req, timeout=10)
-        print("[telegram] registered slash commands for autocomplete")
-    except Exception as e:
-        print(f"[telegram] warn: could not register commands: {e}")
-
-    thread = threading.Thread(target=_telegram_poll_loop, args=(bot_token,), daemon=True)
-    thread.start()
-    print("[telegram] polling thread started")
+        bot = _bot_manager.add_bot("default", bot_token, channel_key="telegram")
+        bot.start()
+    except ValueError as e:
+        print(f"[telegram] error: {e}")
 
 
 def start_goose_web():
@@ -6222,19 +6203,30 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         if _is_first_boot():
             self.send_json(403, {"error": "agent not configured yet"})
             return
+        bots = _bot_manager.get_all()
+        # backward compat: use default bot or first bot
+        default = _bot_manager.get_bot("default") or (list(bots.values())[0] if bots else None)
+        bot_list = []
+        for name, bot in bots.items():
+            paired = get_paired_chat_ids(platform=bot.channel_key)
+            bot_list.append({
+                "name": name,
+                "running": bot.running,
+                "channel_key": bot.channel_key,
+                "paired_users": len(paired),
+                "paired_chat_ids": paired,
+                "pairing_code": bot.pair_code,
+            })
+        # backward-compat top-level fields (admin.html reads these)
         token = get_bot_token()
-        running = _telegram_running
-
-        chat_ids = get_paired_chat_ids()
-        with telegram_pair_lock:
-            code = telegram_pair_code
-
+        default_paired = get_paired_chat_ids() if default else []
         self.send_json(200, {
-            "running": running,
+            "running": _bot_manager.any_running,
             "bot_configured": bool(token),
-            "paired_users": len(chat_ids),
-            "paired_chat_ids": chat_ids,
-            "pairing_code": code,
+            "paired_users": len(default_paired),
+            "paired_chat_ids": default_paired,
+            "pairing_code": default.pair_code if default else None,
+            "bots": bot_list,
         })
 
     def handle_telegram_pair(self):
@@ -6248,23 +6240,23 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             return
 
-        if not _telegram_running:
-            # try to start telegram first
-            token = get_bot_token()
-            if token:
-                start_telegram_gateway(token)
-                # give the thread a moment to start
-                time.sleep(2)
-            else:
-                self.send_json(400, {"error": "no telegram bot token configured", "code": None})
+        # determine which bot to pair
+        params = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        bot_name = params.get("bot", ["default"])[0]
+        bot = _bot_manager.get_bot(bot_name)
+        if not bot:
+            # try starting default if no bots running
+            if bot_name == "default":
+                token = get_bot_token()
+                if token:
+                    start_telegram_gateway(token)
+                    time.sleep(2)
+                    bot = _bot_manager.get_bot("default")
+            if not bot:
+                self.send_json(400, {"error": f"bot '{bot_name}' not found", "code": None})
                 return
-
-        # generate new code
-        code = _generate_and_store_pair_code()
-        if code:
-            self.send_json(200, {"code": code, "message": "send this code to your telegram bot"})
-        else:
-            self.send_json(500, {"error": "could not generate pairing code. check logs.", "code": None})
+        code = bot.generate_pair_code()
+        self.send_json(200, {"code": code, "bot": bot_name, "message": f"send this code to {bot_name} bot"})
 
     # ── job endpoints ──
 
@@ -6819,10 +6811,9 @@ def main():
         # load channel plugins from /data/channels/
         _load_all_channels()
 
-        # start telegram if token is available but apply_config didn't handle it
-        # (env-var-only deployments without setup.json)
+        # env-var-only deployments: start default bot if not already started by apply_config
         tg_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-        if tg_token:
+        if tg_token and not _bot_manager.get_bot("default"):
             start_telegram_gateway(tg_token)
     else:
         print("[gateway] no provider configured. serving setup wizard.")
@@ -6840,7 +6831,7 @@ def main():
     threading.Thread(target=_rate_limiter_cleanup, daemon=True).start()
 
     def shutdown(_sig, _frame):
-        global _telegram_running, _job_engine_running, _cron_scheduler_running
+        global _job_engine_running, _cron_scheduler_running
         print("[gateway] shutting down...")
         # stop accepting new connections first
         threading.Thread(target=server.shutdown, daemon=True).start()
@@ -6852,12 +6843,12 @@ def main():
         # terminate goose web and clean up PID
         stop_goose_web()
         _remove_pid("goose_web")
-        # stop telegram polling thread, session watcher, job engine, cron scheduler
-        _telegram_running = False
+        # stop all telegram bots via BotManager
+        _bot_manager.stop_all()
+        # stop session watcher, job engine, cron scheduler
         _session_watcher_running = False
         _job_engine_running = False
         _cron_scheduler_running = False
-        _remove_pid("telegram")
         print("[gateway] shutdown complete")
 
     signal.signal(signal.SIGTERM, shutdown)

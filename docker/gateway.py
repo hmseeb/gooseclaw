@@ -231,6 +231,7 @@ class ChannelState:
         self._user_locks = {}          # user_id -> Lock
         self._user_locks_lock = threading.Lock()
         self._prewarm_events = {}      # user_id -> Event
+        self._greeting_events = {}     # user_id -> Event (set when kick_greeting done)
 
     def get_user_lock(self, user_id):
         uid = str(user_id)
@@ -362,6 +363,10 @@ class BotInstance:
         inbound_msg: optional InboundMessage envelope (v2 contract, Phase 12+ uses media).
         """
         _memory_touch(chat_id)
+        # Change 5: wait for pending greeting before acquiring lock
+        _pending_greet = self.state._greeting_events.get(str(chat_id))
+        if _pending_greet:
+            _pending_greet.wait(timeout=30)
         _chat_lock = self.state.get_user_lock(chat_id)
         if not _chat_lock.acquire(timeout=2):
             send_telegram_message(bot_token, chat_id, "Still thinking... send /stop to cancel.")
@@ -612,14 +617,43 @@ class BotInstance:
                                         needs_onboarding = "ONBOARDING_NEEDED" in _sf.read()
                                 except FileNotFoundError:
                                     needs_onboarding = True
+
+                                # Change 1: static welcome message right after pairing
+                                if needs_onboarding:
+                                    send_telegram_message(
+                                        self.token, chat_id,
+                                        "hey! i'm gooseclaw, your personal AI agent. i run 24/7 on your server, learn how you think, and remember everything.\n\ni'm setting up now. give me a few seconds and i'll introduce myself properly."
+                                    )
+                                else:
+                                    send_telegram_message(
+                                        self.token, chat_id,
+                                        "welcome back! new device paired. give me a moment."
+                                    )
+
+                                # Change 3: inject context into LLM kick message
                                 kick_msg = (
-                                    "I just paired via Telegram. Start the onboarding flow."
+                                    "I just paired via Telegram. I've already been shown a welcome message saying I'm gooseclaw, a personal AI agent that runs 24/7 and learns. Do NOT repeat any of that. Jump straight into the onboarding flow -- ask my name."
                                     if needs_onboarding else
-                                    "I just paired a new device via Telegram. Say hi."
+                                    "I just paired a new device via Telegram. I've already seen a 'welcome back' message. Just say hi casually, keep it very short."
                                 )
                                 sid = _get_session_id(chat_id, channel=self.channel_key)
-                                if sid:
-                                    def _kick_greeting(msg=kick_msg, s=sid, c=chat_id, bt=self.token, ck=self.channel_key):
+                                # Change 4: skip LLM kick greeting for returning users
+                                if sid and needs_onboarding:
+                                    # Change 5: greeting event to prevent message collision
+                                    _greet_evt = threading.Event()
+                                    self.state._greeting_events[str(chat_id)] = _greet_evt
+
+                                    def _kick_greeting(msg=kick_msg, s=sid, c=chat_id, bt=self.token, ck=self.channel_key, evt=_greet_evt):
+                                        # Change 2: typing indicator during kick_greeting
+                                        _typing_stop = threading.Event()
+
+                                        def _typing_loop():
+                                            while not _typing_stop.is_set():
+                                                _send_typing_action(bt, c)
+                                                _typing_stop.wait(4)
+
+                                        _typing_thread = threading.Thread(target=_typing_loop, daemon=True)
+                                        _typing_thread.start()
                                         try:
                                             with self.state.get_user_lock(c):
                                                 txt, err, *_ = _relay_to_goose_web(
@@ -632,6 +666,10 @@ class BotInstance:
                                                     send_telegram_message(bt, c, txt)
                                         except Exception as exc:
                                             print(f"[telegram:{self.name}] kick greeting exception: {exc}")
+                                        finally:
+                                            _typing_stop.set()
+                                            evt.set()
+                                            self.state._greeting_events.pop(str(c), None)
                                     threading.Thread(target=_kick_greeting, daemon=True).start()
                             except Exception as exc:
                                 print(f"[telegram:{self.name}] kick greeting setup failed: {exc}")
@@ -756,6 +794,7 @@ telegram_pair_lock = threading.Lock()
 _telegram_running = False  # True while the Python polling thread is active
 _session_manager = SessionManager(persist_dir=DATA_DIR)
 _telegram_state = ChannelState()
+_legacy_greeting_events = {}  # chat_id -> Event (legacy path kick_greeting sync)
 _command_router = CommandRouter()
 _bot_manager = BotManager()
 
@@ -5899,6 +5938,10 @@ def _telegram_poll_loop(bot_token):
                     if chat_id in paired_ids:
                         def _do_media_relay(_text="", _chat_id=chat_id, _bt=bot_token, _refs=media_refs):
                             _memory_touch(_chat_id)
+                            # Change 5: wait for pending greeting before acquiring lock
+                            _pending_greet = _legacy_greeting_events.get(str(_chat_id))
+                            if _pending_greet:
+                                _pending_greet.wait(timeout=30)
                             _chat_lock = _get_chat_lock(_chat_id)
                             if not _chat_lock.acquire(timeout=2):
                                 send_telegram_message(_bt, _chat_id, "Still thinking... send /stop to cancel.")
@@ -5980,6 +6023,10 @@ def _telegram_poll_loop(bot_token):
                     # per-chat lock prevents concurrent relays per user.
                     def _do_relay(_text=text, _chat_id=chat_id, _bt=bot_token, _media_refs=media_refs):
                         _memory_touch(_chat_id)
+                        # Change 5: wait for pending greeting before acquiring lock
+                        _pending_greet = _legacy_greeting_events.get(str(_chat_id))
+                        if _pending_greet:
+                            _pending_greet.wait(timeout=30)
                         _chat_lock = _get_chat_lock(_chat_id)
                         if not _chat_lock.acquire(timeout=2):
                             # another relay is running for this chat
@@ -6132,14 +6179,43 @@ def _telegram_poll_loop(bot_token):
                                     needs_onboarding = "ONBOARDING_NEEDED" in _sf.read()
                             except FileNotFoundError:
                                 needs_onboarding = True
+
+                            # Change 1: static welcome message right after pairing
+                            if needs_onboarding:
+                                send_telegram_message(
+                                    bot_token, chat_id,
+                                    "hey! i'm gooseclaw, your personal AI agent. i run 24/7 on your server, learn how you think, and remember everything.\n\ni'm setting up now. give me a few seconds and i'll introduce myself properly."
+                                )
+                            else:
+                                send_telegram_message(
+                                    bot_token, chat_id,
+                                    "welcome back! new device paired. give me a moment."
+                                )
+
+                            # Change 3: inject context into LLM kick message
                             kick_msg = (
-                                "I just paired via Telegram. Start the onboarding flow."
+                                "I just paired via Telegram. I've already been shown a welcome message saying I'm gooseclaw, a personal AI agent that runs 24/7 and learns. Do NOT repeat any of that. Jump straight into the onboarding flow -- ask my name."
                                 if needs_onboarding else
-                                "I just paired a new device via Telegram. Say hi."
+                                "I just paired a new device via Telegram. I've already seen a 'welcome back' message. Just say hi casually, keep it very short."
                             )
                             sid = _get_session_id(chat_id)
-                            if sid:
-                                def _kick_greeting(msg=kick_msg, s=sid, c=chat_id):
+                            # Change 4: skip LLM kick greeting for returning users
+                            if sid and needs_onboarding:
+                                # Change 5: greeting event to prevent message collision
+                                _greet_evt = threading.Event()
+                                _legacy_greeting_events[str(chat_id)] = _greet_evt
+
+                                def _kick_greeting(msg=kick_msg, s=sid, c=chat_id, evt=_greet_evt):
+                                    # Change 2: typing indicator during kick_greeting
+                                    _typing_stop = threading.Event()
+
+                                    def _typing_loop():
+                                        while not _typing_stop.is_set():
+                                            _send_typing_action(bot_token, c)
+                                            _typing_stop.wait(4)
+
+                                    _typing_thread = threading.Thread(target=_typing_loop, daemon=True)
+                                    _typing_thread.start()
                                     try:
                                         with _get_chat_lock(c):
                                             txt, err, *_ = _relay_to_goose_web(
@@ -6152,6 +6228,10 @@ def _telegram_poll_loop(bot_token):
                                                 send_telegram_message(bot_token, c, txt)
                                     except Exception as exc:
                                         print(f"[telegram] kick greeting exception: {exc}")
+                                    finally:
+                                        _typing_stop.set()
+                                        evt.set()
+                                        _legacy_greeting_events.pop(str(c), None)
                                 threading.Thread(target=_kick_greeting, daemon=True).start()
                         except Exception as exc:
                             print(f"[telegram] kick greeting setup failed: {exc}")

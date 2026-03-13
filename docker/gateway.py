@@ -463,6 +463,14 @@ class BotInstance:
                         send_telegram_message(bot_token, chat_id, f"Error: {error}")
                     elif not _edit_state["msg_id"] and response_text:
                         send_telegram_message(bot_token, chat_id, response_text)
+
+                # Route media blocks through adapter
+                if media and not _cancelled.is_set():
+                    try:
+                        _adapter = TelegramOutboundAdapter(bot_token, chat_id)
+                        _route_media_blocks(media, _adapter)
+                    except Exception as _media_exc:
+                        print(f"[telegram:{self.name}] media routing error: {_media_exc}")
             finally:
                 typing_stop.set()
                 typing_thread.join(timeout=2)
@@ -1443,12 +1451,15 @@ def _edit_telegram_message(bot_token, chat_id, message_id, text):
             return False
 
 
-def notify_all(text, channel=None):
+def notify_all(text, channel=None, media=None):
     """Send a message to notification channels.
 
     If channel is None, broadcasts to all registered channels.
     If channel is set, targets that specific channel. Falls back to notify_all
     with an error prefix if the channel is not found.
+
+    media: optional list of media blocks (e.g. [{"type":"image","data":"...","mimeType":"image/png"}]).
+    Handlers that accept media=... receive it; old-style (text-only) handlers are called without it.
 
     Channel names: "telegram", or "channel:<plugin_name>" for plugins (e.g. "channel:slack").
     Shorthand: just the plugin name (e.g. "slack") is also accepted.
@@ -1458,8 +1469,17 @@ def notify_all(text, channel=None):
     if not handlers:
         return {"sent": False, "error": "no notification channels registered"}
 
+    def _call_handler(handler_fn, text_val):
+        """Call a notification handler, trying media kwarg first for backward compat."""
+        if media:
+            try:
+                return handler_fn(text_val, media=media)
+            except TypeError:
+                return handler_fn(text_val)
+        return handler_fn(text_val)
+
     if channel:
-        # find the target handler — try exact match, then "channel:<name>"
+        # find the target handler -- try exact match, then "channel:<name>"
         target = None
         for h in handlers:
             if h["name"] == channel or h["name"] == f"channel:{channel}":
@@ -1467,27 +1487,27 @@ def notify_all(text, channel=None):
                 break
         if target:
             try:
-                result = target["handler"](text)
+                result = _call_handler(target["handler"], text)
                 return {"sent": result.get("sent", False), "channels": [{"channel": target["name"], **result}]}
             except Exception as e:
                 return {"sent": False, "channels": [{"channel": target["name"], "sent": False, "error": str(e)}]}
         else:
-            # channel not found — fallback to all with warning
+            # channel not found -- fallback to all with warning
             print(f"[notify] warn: channel '{channel}' not found, falling back to all")
             text = f"[warn: '{channel}' channel not loaded, broadcasting]\n{text}"
 
     results = []
     for h in handlers:
         try:
-            result = h["handler"](text)
+            result = _call_handler(h["handler"], text)
             results.append({"channel": h["name"], **result})
         except Exception as e:
             results.append({"channel": h["name"], "sent": False, "error": str(e)})
     return {"sent": any(r.get("sent") for r in results), "channels": results}
 
 
-def _telegram_notify_handler(text):
-    """Telegram notification handler — registered with the notification bus."""
+def _telegram_notify_handler(text, media=None):
+    """Telegram notification handler -- registered with the notification bus."""
     token = get_bot_token()
     if not token:
         return {"sent": False, "error": "no bot token configured"}
@@ -1499,6 +1519,14 @@ def _telegram_notify_handler(text):
         ok, err = send_telegram_message(token, cid, text)
         if not ok:
             ok_all = False
+    # Route media blocks after text delivery
+    if media:
+        for cid in chat_ids:
+            try:
+                _adapter = TelegramOutboundAdapter(token, cid)
+                _route_media_blocks(media, _adapter)
+            except Exception as _media_exc:
+                print(f"[telegram:notify] media routing error for {cid}: {_media_exc}")
     return {"sent": ok_all, "error": "" if ok_all else "some deliveries failed"}
 
 
@@ -3551,16 +3579,16 @@ class OutboundAdapter:
     def send_text(self, text):
         raise NotImplementedError("send_text() is required")
 
-    def send_image(self, url, caption=""):
-        fallback = f"{caption}\n{url}" if caption else url
+    def send_image(self, data, caption="", **kwargs):
+        fallback = f"{caption}\n[image]" if caption else "[image]"
         return self.send_text(fallback.strip())
 
-    def send_voice(self, url, transcript=""):
-        fallback = transcript or f"[Voice message: {url}]"
+    def send_voice(self, data, caption="", **kwargs):
+        fallback = caption or "[voice message]"
         return self.send_text(fallback)
 
-    def send_file(self, url, filename=""):
-        fallback = f"[File: {filename}] {url}" if filename else url
+    def send_file(self, data, filename="", **kwargs):
+        fallback = f"[File: {filename}]" if filename else "[file]"
         return self.send_text(fallback)
 
     def send_buttons(self, text, buttons):
@@ -3806,14 +3834,14 @@ class ChannelRelay:
                     _cb = _build_content_blocks(text, user_id_or_msg)
 
                 if use_streaming:
-                    response_text, error, *_ = _relay_to_goose_web(
+                    response_text, error, _media = _relay_to_goose_web(
                         text, session_id, chat_id=user_key, channel=self._name,
                         flush_cb=send_fn, verbosity=verbosity,
                         sock_ref=sock_ref, flush_interval=2.0,
                         content_blocks=_cb,
                     )
                 else:
-                    response_text, error, *_ = _relay_to_goose_web(
+                    response_text, error, _media = _relay_to_goose_web(
                         text, session_id, chat_id=user_key, channel=self._name,
                         sock_ref=sock_ref, content_blocks=_cb,
                     )
@@ -3826,14 +3854,14 @@ class ChannelRelay:
                     session_id = f"{self._name}_{user_key}_{time.strftime('%Y%m%d_%H%M%S')}"
                     _session_manager.set(self._name, user_key, session_id)
                     if use_streaming:
-                        response_text, error, *_ = _relay_to_goose_web(
+                        response_text, error, _media = _relay_to_goose_web(
                             text, session_id, chat_id=user_key, channel=self._name,
                             flush_cb=send_fn, verbosity=verbosity,
                             sock_ref=sock_ref, flush_interval=2.0,
                             content_blocks=_cb,
                         )
                     else:
-                        response_text, error, *_ = _relay_to_goose_web(
+                        response_text, error, _media = _relay_to_goose_web(
                             text, session_id, chat_id=user_key, channel=self._name,
                             sock_ref=sock_ref, content_blocks=_cb,
                         )
@@ -3842,6 +3870,16 @@ class ChannelRelay:
                     return ""
                 if error:
                     return f"Error: {error}"
+
+                # Route media blocks through channel adapter
+                if _media and not error:
+                    _ch_adapter = _loaded_channels.get(self._name, {}).get("adapter")
+                    if _ch_adapter:
+                        try:
+                            _route_media_blocks(_media, _ch_adapter)
+                        except Exception as _me:
+                            print(f"[channel:{self._name}] media routing error: {_me}")
+
                 return response_text
             finally:
                 self._state.pop_active_relay(user_key)
@@ -5443,7 +5481,7 @@ def _telegram_poll_loop(bot_token):
                                 _inbound = InboundMessage(user_id=_chat_id, text=_text, channel="telegram")
                                 _inbound.media = downloaded
                                 _leg_cb = _build_content_blocks(_text, _inbound) if _inbound.has_media else None
-                                response_text, error, *_ = _relay_to_goose_web(
+                                response_text, error, _resp_media = _relay_to_goose_web(
                                     _text, session_id, chat_id=_chat_id, channel="telegram",
                                     content_blocks=_leg_cb,
                                 )
@@ -5451,6 +5489,13 @@ def _telegram_poll_loop(bot_token):
                                     send_telegram_message(_bt, _chat_id, f"Error: {error}")
                                 elif response_text:
                                     send_telegram_message(_bt, _chat_id, response_text)
+                                # Route response media blocks
+                                if _resp_media:
+                                    try:
+                                        _adapter = TelegramOutboundAdapter(_bt, _chat_id)
+                                        _route_media_blocks(_resp_media, _adapter)
+                                    except Exception as _media_exc:
+                                        print(f"[telegram] media routing error: {_media_exc}")
                             except Exception as exc:
                                 print(f"[telegram] media relay exception for chat {_chat_id}: {exc}")
                             finally:
@@ -5544,7 +5589,7 @@ def _telegram_poll_loop(bot_token):
 
                             try:
                                 if _tg_verbosity == "quiet":
-                                    response_text, error, *_ = _relay_to_goose_web(
+                                    response_text, error, _leg_media = _relay_to_goose_web(
                                         _text, session_id, chat_id=_chat_id, channel="telegram",
                                         sock_ref=_sock_ref, content_blocks=_leg_content_blocks,
                                     )
@@ -5579,7 +5624,7 @@ def _telegram_poll_loop(bot_token):
                                         else:
                                             _edit_telegram_message(_bt, _chat_id, _st["msg_id"], txt)
 
-                                    response_text, error, *_ = _relay_to_goose_web(
+                                    response_text, error, _leg_media = _relay_to_goose_web(
                                         _text, session_id, chat_id=_chat_id, channel="telegram",
                                         flush_cb=_tg_flush_edit, verbosity=_tg_verbosity,
                                         sock_ref=_sock_ref, flush_interval=2.0,
@@ -5595,6 +5640,14 @@ def _telegram_poll_loop(bot_token):
                                         send_telegram_message(_bt, _chat_id, f"Error: {error}")
                                     elif not _edit_state["msg_id"] and response_text:
                                         send_telegram_message(_bt, _chat_id, response_text)
+
+                                # Route media blocks through adapter
+                                if _leg_media and not _cancelled.is_set():
+                                    try:
+                                        _adapter = TelegramOutboundAdapter(_bt, _chat_id)
+                                        _route_media_blocks(_leg_media, _adapter)
+                                    except Exception as _media_exc:
+                                        print(f"[telegram] media routing error: {_media_exc}")
                             finally:
                                 typing_stop.set()
                                 typing_thread.join(timeout=2)

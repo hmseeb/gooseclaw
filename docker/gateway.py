@@ -4749,6 +4749,43 @@ _command_router.register("clear", _handle_cmd_clear, "wipe conversation and star
 _command_router.register("compact", _handle_cmd_compact, "summarize history to save tokens")
 
 
+def _set_session_default_provider(session_id):
+    """Call /agent/update_provider on a fresh session to set the default provider.
+
+    goosed doesn't reliably inherit global config into sessions, so we must
+    explicitly set the provider via API after creating each session.
+    """
+    setup = load_setup()
+    if not setup or not _INTERNAL_GOOSE_TOKEN:
+        return
+    provider = setup.get("provider_type", "")
+    model = setup.get("model", "")
+    if not provider:
+        return
+    if provider == "claude-code":
+        model = "default"
+    if not model:
+        model = default_models.get(provider, "")
+    try:
+        payload = json.dumps({
+            "provider": provider, "model": model, "session_id": session_id,
+        }).encode("utf-8")
+        conn = _goosed_conn(timeout=10)
+        conn.request("POST", "/agent/update_provider", body=payload, headers={
+            "Content-Type": "application/json",
+            "X-Secret-Key": _INTERNAL_GOOSE_TOKEN,
+        })
+        resp = conn.getresponse()
+        resp.read()
+        conn.close()
+        if resp.status in (200, 204):
+            print(f"[session] set provider {provider}/{model} on {session_id}")
+        else:
+            print(f"[session] WARN: update_provider returned {resp.status} for {session_id}")
+    except Exception as e:
+        print(f"[session] WARN: failed to set provider on {session_id}: {e}")
+
+
 def _create_goose_session():
     """Create a new session via POST /agent/start on goosed.
 
@@ -4773,6 +4810,9 @@ def _create_goose_session():
             sid = session.get("id") or session.get("session_id")
             if sid:
                 print(f"[telegram] created session via /agent/start: {sid}")
+                # set default provider on the session immediately
+                # (goosed doesn't inherit global config into sessions reliably)
+                _set_session_default_provider(str(sid))
                 return str(sid)
 
         # fallback: try GET /sessions to find the latest

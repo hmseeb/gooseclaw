@@ -331,6 +331,15 @@ _channel_threads = {}       # name -> Thread
 _channel_stop_events = {}   # name -> threading.Event
 _channels_lock = threading.Lock()
 
+
+def _get_valid_channels():
+    """Build valid channel names dynamically from fixed set + loaded plugins."""
+    fixed = {"web", "telegram", "cron", "memory"}
+    with _channels_lock:
+        plugin_names = set(_loaded_channels.keys())
+    return fixed | plugin_names
+
+
 # ── session watcher state (auto-forward scheduled output to telegram) ───────
 _session_watcher_running = False
 _session_watcher_state_file = os.path.join(DATA_DIR, "session_watcher_state.json")
@@ -999,7 +1008,7 @@ def validate_setup_config(config):
                 errors.append("only one model can be default")
 
     # channel_routes validation
-    valid_channels = ("web", "telegram", "cron", "memory")
+    valid_channels = _get_valid_channels()
     channel_routes = config.get("channel_routes")
     if channel_routes is not None:
         if not isinstance(channel_routes, dict):
@@ -1020,8 +1029,9 @@ def validate_setup_config(config):
             errors.append("channel_verbosity must be an object")
         else:
             valid_levels = ("quiet", "balanced", "verbose")
+            valid_verb_channels = _get_valid_channels()
             for ch, level in channel_verbosity.items():
-                if ch not in ("web", "telegram"):
+                if ch not in valid_verb_channels:
                     errors.append(f"unknown channel in channel_verbosity: {ch!r}")
                 if level not in valid_levels:
                     errors.append(f"channel_verbosity[{ch!r}] must be quiet, balanced, or verbose")
@@ -3127,6 +3137,20 @@ def _load_channel(filepath):
                 daemon=True,
             )
             poll_thread.start()
+
+        # Register custom commands from CHANNEL dict (CHAN-04)
+        custom_commands = channel.get("commands", {})
+        if isinstance(custom_commands, dict):
+            for cmd_name, cmd_info in custom_commands.items():
+                if not isinstance(cmd_info, dict) or not callable(cmd_info.get("handler")):
+                    print(f"[channels] warn: {name} command /{cmd_name} has invalid handler, skipping")
+                    continue
+                # Check for conflicts with built-in commands
+                if _command_router.is_command(f"/{cmd_name}"):
+                    print(f"[channels] warn: {name} command /{cmd_name} conflicts with built-in, skipping")
+                    continue
+                _command_router.register(cmd_name, cmd_info["handler"], cmd_info.get("description", ""))
+                print(f"[channels] registered custom command /{cmd_name} from {name}")
 
         with _channels_lock:
             _loaded_channels[name] = {"module": mod, "channel": channel, "creds": creds}
@@ -5604,7 +5628,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
 
             migrate_config_models(setup)
             model_ids = {m.get("id") for m in setup.get("models", [])}
-            valid_channels = ("web", "telegram", "cron", "memory")
+            valid_channels = _get_valid_channels()
             clean_routes = {}
             for ch, mid in routes.items():
                 ch = _sanitize_string(ch)
@@ -5654,7 +5678,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             if not setup:
                 self.send_json(400, {"error": "not configured yet"}); return
 
-            valid_channels = ("web", "telegram")
+            valid_channels = _get_valid_channels()
             valid_levels = ("quiet", "balanced", "verbose")
             clean = {}
             for ch, level in verbosity.items():

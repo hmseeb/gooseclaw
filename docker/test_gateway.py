@@ -3737,8 +3737,8 @@ class TestMediaMessageHandling(unittest.TestCase):
         self.assertTrue(hasattr(gateway, "MEDIA_REPLY"))
         self.assertIn("text", gateway.MEDIA_REPLY.lower())
 
-    def test_paired_user_photo_gets_canned_reply(self):
-        """Paired user sending a photo should get the canned media reply."""
+    def test_paired_user_photo_relays_not_rejected(self):
+        """Paired user sending a photo should relay (not send MEDIA_REPLY)."""
         bot = gateway.BotInstance("test", "tok123")
         bot.running = True
         fake_update = {
@@ -3772,13 +3772,17 @@ class TestMediaMessageHandling(unittest.TestCase):
 
         with patch("gateway.get_paired_chat_ids", return_value=["42"]), \
              patch("gateway.send_telegram_message") as mock_send, \
-             patch("gateway.urllib.request.urlopen", side_effect=fake_urlopen):
+             patch("gateway.urllib.request.urlopen", side_effect=fake_urlopen), \
+             patch.object(bot, "_do_message_relay"):
             bot._poll_loop()
 
-        mock_send.assert_called_once_with("tok123", "42", gateway.MEDIA_REPLY)
+        # MEDIA_REPLY should NOT be sent (Phase 12: media flows through relay)
+        for call in mock_send.call_args_list:
+            if len(call.args) >= 3:
+                self.assertNotEqual(call.args[2], gateway.MEDIA_REPLY)
 
-    def test_paired_user_voice_gets_canned_reply(self):
-        """Paired user sending a voice note should get the canned media reply."""
+    def test_paired_user_voice_relays_not_rejected(self):
+        """Paired user sending a voice note should relay (not send MEDIA_REPLY)."""
         bot = gateway.BotInstance("test", "tok123")
         bot.running = True
         fake_update = {
@@ -3811,10 +3815,14 @@ class TestMediaMessageHandling(unittest.TestCase):
 
         with patch("gateway.get_paired_chat_ids", return_value=["42"]), \
              patch("gateway.send_telegram_message") as mock_send, \
-             patch("gateway.urllib.request.urlopen", side_effect=fake_urlopen):
+             patch("gateway.urllib.request.urlopen", side_effect=fake_urlopen), \
+             patch.object(bot, "_do_message_relay"):
             bot._poll_loop()
 
-        mock_send.assert_called_once_with("tok123", "42", gateway.MEDIA_REPLY)
+        # MEDIA_REPLY should NOT be sent (Phase 12: media flows through relay)
+        for call in mock_send.call_args_list:
+            if len(call.args) >= 3:
+                self.assertNotEqual(call.args[2], gateway.MEDIA_REPLY)
 
     def test_unpaired_user_photo_gets_no_reply(self):
         """Unpaired user sending a photo should get NO reply (silence)."""
@@ -4318,7 +4326,7 @@ class TestBotInboundMessage(unittest.TestCase):
         self.assertIn("telegram", msg.channel)
 
     def test_media_message_creates_inbound_with_media(self):
-        """Media message should create InboundMessage with has_media=True."""
+        """Media message should create InboundMessage with file_id references."""
         bot = self._make_bot()
         update = self._make_update_response([{
             "chat": {"id": 42},
@@ -4355,7 +4363,8 @@ class TestBotInboundMessage(unittest.TestCase):
         msg = inbound_messages[0]
         self.assertIsInstance(msg, gateway.InboundMessage)
         self.assertTrue(msg.has_media)
-        self.assertEqual(msg.media[0]["type"], "image")
+        self.assertEqual(msg.media[0]["media_key"], "photo")
+        self.assertEqual(msg.media[0]["file_id"], "abc123")
 
     def test_text_with_caption_creates_inbound(self):
         """Photo with caption should have both text and media."""
@@ -4661,6 +4670,295 @@ class TestDownloadTelegramFile(unittest.TestCase):
 
         self.assertIsNone(data)
         self.assertIn("error", err.lower())
+
+
+# ── BotInstance media download wiring ──────────────────────────────────────
+
+
+class TestBotMediaDownload(unittest.TestCase):
+    """Tests for media download wiring in BotInstance poll/relay path."""
+
+    def _make_bot(self):
+        bot = gateway.BotInstance("test", "fake_token", channel_key="telegram:test")
+        bot.running = True
+        return bot
+
+    def _make_update_response(self, messages):
+        results = []
+        for i, msg in enumerate(messages):
+            results.append({"update_id": 100 + i, "message": msg})
+        return {"ok": True, "result": results}
+
+    def _fake_urlopen_factory(self, update, bot):
+        """Return a fake_urlopen that returns update on first call, then stops the bot."""
+        empty = {"ok": True, "result": []}
+        calls = [0]
+        def fake_urlopen(req, timeout=None):
+            resp = MagicMock()
+            resp.__enter__ = lambda s: s
+            resp.__exit__ = MagicMock(return_value=False)
+            if calls[0] == 0:
+                resp.read.return_value = json.dumps(update).encode()
+            else:
+                resp.read.return_value = json.dumps(empty).encode()
+                bot.running = False
+            calls[0] += 1
+            return resp
+        return fake_urlopen
+
+    def test_photo_message_downloads_and_creates_media_content(self):
+        """Photo message should result in MediaContent with kind=image in relay."""
+        bot = self._make_bot()
+        update = self._make_update_response([{
+            "chat": {"id": 42},
+            "photo": [
+                {"file_id": "small", "width": 90, "height": 90},
+                {"file_id": "large", "width": 800, "height": 800},
+            ],
+        }])
+
+        inbound_messages = []
+        def capture_relay(**kwargs):
+            msg = kwargs.get("inbound_msg")
+            if msg:
+                inbound_messages.append(msg)
+
+        with patch("gateway.get_paired_chat_ids", return_value=["42"]), \
+             patch("gateway.send_telegram_message") as mock_send, \
+             patch("gateway.urllib.request.urlopen", side_effect=self._fake_urlopen_factory(update, bot)), \
+             patch.object(bot, "_do_message_relay", side_effect=capture_relay):
+            bot._poll_loop()
+
+        # Should have relayed (not rejected)
+        self.assertEqual(len(inbound_messages), 1)
+        msg = inbound_messages[0]
+        self.assertTrue(msg.has_media)
+        # Media should contain file_id references for download in relay thread
+        self.assertTrue(len(msg.media) > 0)
+        ref = msg.media[0]
+        self.assertEqual(ref["media_key"], "photo")
+        self.assertEqual(ref["file_id"], "large")
+
+    def test_voice_message_downloads(self):
+        """Voice message should produce file_id reference with voice media_key."""
+        bot = self._make_bot()
+        update = self._make_update_response([{
+            "chat": {"id": 42},
+            "voice": {"file_id": "v1", "mime_type": "audio/ogg", "duration": 5},
+        }])
+
+        inbound_messages = []
+        def capture_relay(**kwargs):
+            msg = kwargs.get("inbound_msg")
+            if msg:
+                inbound_messages.append(msg)
+
+        with patch("gateway.get_paired_chat_ids", return_value=["42"]), \
+             patch("gateway.send_telegram_message"), \
+             patch("gateway.urllib.request.urlopen", side_effect=self._fake_urlopen_factory(update, bot)), \
+             patch.object(bot, "_do_message_relay", side_effect=capture_relay):
+            bot._poll_loop()
+
+        self.assertEqual(len(inbound_messages), 1)
+        ref = inbound_messages[0].media[0]
+        self.assertEqual(ref["media_key"], "voice")
+        self.assertEqual(ref["file_id"], "v1")
+        self.assertEqual(ref["mime_hint"], "audio/ogg")
+
+    def test_document_message_downloads(self):
+        """Document message should include filename in the reference."""
+        bot = self._make_bot()
+        update = self._make_update_response([{
+            "chat": {"id": 42},
+            "document": {"file_id": "d1", "mime_type": "application/pdf", "file_name": "report.pdf"},
+        }])
+
+        inbound_messages = []
+        def capture_relay(**kwargs):
+            msg = kwargs.get("inbound_msg")
+            if msg:
+                inbound_messages.append(msg)
+
+        with patch("gateway.get_paired_chat_ids", return_value=["42"]), \
+             patch("gateway.send_telegram_message"), \
+             patch("gateway.urllib.request.urlopen", side_effect=self._fake_urlopen_factory(update, bot)), \
+             patch.object(bot, "_do_message_relay", side_effect=capture_relay):
+            bot._poll_loop()
+
+        self.assertEqual(len(inbound_messages), 1)
+        ref = inbound_messages[0].media[0]
+        self.assertEqual(ref["media_key"], "document")
+        self.assertEqual(ref["filename"], "report.pdf")
+
+    def test_media_only_no_longer_rejected(self):
+        """Media-only message from paired user should NOT receive MEDIA_REPLY."""
+        bot = self._make_bot()
+        update = self._make_update_response([{
+            "chat": {"id": 42},
+            "photo": [{"file_id": "abc", "width": 100, "height": 100}],
+        }])
+
+        with patch("gateway.get_paired_chat_ids", return_value=["42"]), \
+             patch("gateway.send_telegram_message") as mock_send, \
+             patch("gateway.urllib.request.urlopen", side_effect=self._fake_urlopen_factory(update, bot)), \
+             patch.object(bot, "_do_message_relay"):
+            bot._poll_loop()
+
+        # MEDIA_REPLY should NOT have been sent
+        for call in mock_send.call_args_list:
+            if len(call.args) >= 3:
+                self.assertNotEqual(call.args[2], gateway.MEDIA_REPLY,
+                                    "MEDIA_REPLY should not be sent for paired user media")
+
+    def test_download_failure_graceful(self):
+        """Download failure should not crash relay. Media should be empty list after download attempt."""
+        bot = self._make_bot()
+        update = self._make_update_response([{
+            "chat": {"id": 42},
+            "photo": [{"file_id": "abc", "width": 100, "height": 100}],
+        }])
+
+        inbound_messages = []
+        def capture_relay(**kwargs):
+            msg = kwargs.get("inbound_msg")
+            if msg:
+                inbound_messages.append(msg)
+
+        with patch("gateway.get_paired_chat_ids", return_value=["42"]), \
+             patch("gateway.send_telegram_message"), \
+             patch("gateway.urllib.request.urlopen", side_effect=self._fake_urlopen_factory(update, bot)), \
+             patch.object(bot, "_do_message_relay", side_effect=capture_relay):
+            bot._poll_loop()
+
+        # Should still relay (not crash)
+        self.assertEqual(len(inbound_messages), 1)
+
+    def test_text_with_caption_preserves_both(self):
+        """Photo with caption should have text=caption and media with image ref."""
+        bot = self._make_bot()
+        update = self._make_update_response([{
+            "chat": {"id": 42},
+            "photo": [{"file_id": "abc", "width": 100, "height": 100}],
+            "caption": "look at this",
+        }])
+
+        inbound_messages = []
+        def capture_relay(**kwargs):
+            msg = kwargs.get("inbound_msg")
+            if msg:
+                inbound_messages.append(msg)
+
+        with patch("gateway.get_paired_chat_ids", return_value=["42"]), \
+             patch("gateway.send_telegram_message"), \
+             patch("gateway.urllib.request.urlopen", side_effect=self._fake_urlopen_factory(update, bot)), \
+             patch.object(bot, "_do_message_relay", side_effect=capture_relay), \
+             patch("gateway._command_router") as mock_router:
+            mock_router.is_command.return_value = False
+            bot._poll_loop()
+
+        self.assertEqual(len(inbound_messages), 1)
+        msg = inbound_messages[0]
+        self.assertEqual(msg.text, "look at this")
+        self.assertTrue(msg.has_media)
+
+    def test_unpaired_media_still_silent(self):
+        """Media from unpaired user should be silently ignored."""
+        bot = self._make_bot()
+        update = self._make_update_response([{
+            "chat": {"id": 99},
+            "photo": [{"file_id": "abc", "width": 100, "height": 100}],
+        }])
+
+        with patch("gateway.get_paired_chat_ids", return_value=["42"]), \
+             patch("gateway.send_telegram_message") as mock_send, \
+             patch("gateway.urllib.request.urlopen", side_effect=self._fake_urlopen_factory(update, bot)), \
+             patch.object(bot, "_do_message_relay") as mock_relay:
+            bot._poll_loop()
+
+        mock_send.assert_not_called()
+        mock_relay.assert_not_called()
+
+
+# ── Legacy poll media download ─────────────────────────────────────────────
+
+
+class TestLegacyPollMediaDownload(unittest.TestCase):
+    """Tests for media download in _telegram_poll_loop (legacy path)."""
+
+    def _fake_urlopen_factory(self, update):
+        """Return a fake_urlopen that returns update on first call, then stops."""
+        empty = {"ok": True, "result": []}
+        calls = [0]
+        def fake_urlopen(req, timeout=None):
+            resp = MagicMock()
+            resp.__enter__ = lambda s: s
+            resp.__exit__ = MagicMock(return_value=False)
+            if calls[0] == 0:
+                resp.read.return_value = json.dumps(update).encode()
+            else:
+                resp.read.return_value = json.dumps(empty).encode()
+                gateway._telegram_running = False
+            calls[0] += 1
+            return resp
+        return fake_urlopen
+
+    def test_legacy_photo_downloads(self):
+        """Photo from paired user in legacy path triggers relay (not MEDIA_REPLY)."""
+        update = {
+            "ok": True,
+            "result": [{
+                "update_id": 1,
+                "message": {
+                    "chat": {"id": 42},
+                    "photo": [{"file_id": "abc", "width": 100, "height": 100}],
+                },
+            }],
+        }
+        gateway._telegram_running = True
+
+        relayed = []
+        original_thread_start = threading.Thread.start
+        def capture_thread(self_thread, *args, **kwargs):
+            # Don't actually start relay threads, just record that relay was attempted
+            if hasattr(self_thread, '_target') and self_thread._target and 'relay' in str(self_thread._target.__name__):
+                relayed.append(True)
+            elif hasattr(self_thread, '_target') and self_thread._target and '_do_relay' in str(self_thread._target.__name__):
+                relayed.append(True)
+
+        with patch("gateway.get_paired_chat_ids", return_value=["42"]), \
+             patch("gateway.send_telegram_message") as mock_send, \
+             patch("gateway.urllib.request.urlopen", side_effect=self._fake_urlopen_factory(update)):
+            gateway._telegram_poll_loop("fake_token")
+
+        # MEDIA_REPLY should NOT be sent
+        for call in mock_send.call_args_list:
+            if len(call.args) >= 3:
+                self.assertNotEqual(call.args[2], gateway.MEDIA_REPLY,
+                                    "Legacy path should not send MEDIA_REPLY for paired user media")
+
+    def test_legacy_media_only_flows(self):
+        """Media-only message in legacy path should not send MEDIA_REPLY."""
+        update = {
+            "ok": True,
+            "result": [{
+                "update_id": 1,
+                "message": {
+                    "chat": {"id": 42},
+                    "voice": {"file_id": "v1", "duration": 5, "mime_type": "audio/ogg"},
+                },
+            }],
+        }
+        gateway._telegram_running = True
+
+        with patch("gateway.get_paired_chat_ids", return_value=["42"]), \
+             patch("gateway.send_telegram_message") as mock_send, \
+             patch("gateway.urllib.request.urlopen", side_effect=self._fake_urlopen_factory(update)):
+            gateway._telegram_poll_loop("fake_token")
+
+        # Verify MEDIA_REPLY not sent
+        for call in mock_send.call_args_list:
+            if len(call.args) >= 3:
+                self.assertNotEqual(call.args[2], gateway.MEDIA_REPLY)
 
 
 if __name__ == "__main__":

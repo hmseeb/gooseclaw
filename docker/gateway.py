@@ -366,6 +366,24 @@ class BotInstance:
             send_telegram_message(bot_token, chat_id, "Still thinking... send /stop to cancel.")
             return
         try:
+            # download media in relay thread (not poll loop) to keep poll responsive
+            if inbound_msg and inbound_msg.media:
+                downloaded = []
+                for ref in inbound_msg.media:
+                    if isinstance(ref, dict) and ref.get("file_id"):
+                        file_bytes, file_path = _download_telegram_file(bot_token, ref["file_id"])
+                        if file_bytes is not None:
+                            mc = _make_media_content(
+                                ref.get("media_key", "document"),
+                                file_bytes, file_path,
+                                mime_hint=ref.get("mime_hint"),
+                                filename=ref.get("filename"),
+                            )
+                            downloaded.append(mc)
+                        else:
+                            print(f"[telegram:{self.name}] media download failed for {ref.get('media_key')}: {file_path}")
+                inbound_msg.media = downloaded
+
             _send_typing_action(bot_token, chat_id)
             session_id = _get_session_id(chat_id, channel=self.channel_key)
             _cancelled = threading.Event()
@@ -493,29 +511,31 @@ class BotInstance:
                     has_media = _has_media(msg)
                     media_list = []
                     if has_media:
-                        _media_type_map = {
-                            "photo": "image", "voice": "voice", "document": "file",
-                            "sticker": "sticker", "video": "video", "audio": "audio",
-                            "video_note": "video", "animation": "animation",
-                        }
-                        for mkey in _MEDIA_KEYS:
-                            if mkey in msg:
-                                media_list.append({"type": _media_type_map.get(mkey, mkey)})
                         # use caption as text if no text field
                         if not text:
                             text = msg.get("caption", "").strip()
+                        # build file_id references for deferred download in relay thread
+                        for mkey in _MEDIA_KEYS:
+                            if mkey in msg:
+                                fid, mime_hint, fname = _extract_file_info(msg, mkey)
+                                if fid:
+                                    media_list.append({
+                                        "media_key": mkey,
+                                        "file_id": fid,
+                                        "mime_hint": mime_hint,
+                                        "filename": fname,
+                                    })
 
                     inbound_msg = InboundMessage(
                         user_id=chat_id, text=text,
                         channel=self.channel_key, media=media_list,
                     )
 
-                    # media without text: send MEDIA_REPLY for now (Phase 12 handles media relay)
-                    if not text and has_media:
+                    # media-only or text+media from paired users: relay (downloads happen in relay thread)
+                    # unpaired users with media: silently ignore
+                    if has_media and not text:
                         paired_ids = get_paired_chat_ids(platform=self.channel_key)
                         if chat_id in paired_ids:
-                            send_telegram_message(self.token, chat_id, MEDIA_REPLY)
-                            # pass InboundMessage to relay for future use
                             threading.Thread(
                                 target=self._do_message_relay,
                                 kwargs={"chat_id": chat_id, "text": "", "bot_token": self.token, "inbound_msg": inbound_msg},
@@ -5322,11 +5342,63 @@ def _telegram_poll_loop(bot_token):
                 if not chat_id:
                     continue
 
-                # media without text: reply to paired users only
-                if not text and _has_media(msg):
+                # build media file_id references for deferred download
+                has_media = _has_media(msg)
+                media_refs = []
+                if has_media:
+                    if not text:
+                        text = msg.get("caption", "").strip()
+                    for mkey in _MEDIA_KEYS:
+                        if mkey in msg:
+                            fid, mime_hint, fname = _extract_file_info(msg, mkey)
+                            if fid:
+                                media_refs.append({
+                                    "media_key": mkey,
+                                    "file_id": fid,
+                                    "mime_hint": mime_hint,
+                                    "filename": fname,
+                                })
+
+                # media-only from paired users: relay (no MEDIA_REPLY)
+                # unpaired users with media: silently ignore
+                if has_media and not text:
                     paired_ids = get_paired_chat_ids()
                     if chat_id in paired_ids:
-                        send_telegram_message(bot_token, chat_id, MEDIA_REPLY)
+                        def _do_media_relay(_text="", _chat_id=chat_id, _bt=bot_token, _refs=media_refs):
+                            _memory_touch(_chat_id)
+                            _chat_lock = _get_chat_lock(_chat_id)
+                            if not _chat_lock.acquire(timeout=2):
+                                send_telegram_message(_bt, _chat_id, "Still thinking... send /stop to cancel.")
+                                return
+                            try:
+                                # download media in relay thread
+                                downloaded = []
+                                for ref in _refs:
+                                    file_bytes, file_path = _download_telegram_file(_bt, ref["file_id"])
+                                    if file_bytes is not None:
+                                        mc = _make_media_content(
+                                            ref.get("media_key", "document"),
+                                            file_bytes, file_path,
+                                            mime_hint=ref.get("mime_hint"),
+                                            filename=ref.get("filename"),
+                                        )
+                                        downloaded.append(mc)
+                                    else:
+                                        print(f"[telegram] media download failed for {ref.get('media_key')}: {file_path}")
+                                _send_typing_action(_bt, _chat_id)
+                                session_id = _get_session_id(_chat_id)
+                                response_text, error = _relay_to_goose_web(
+                                    _text, session_id, chat_id=_chat_id, channel="telegram",
+                                )
+                                if error:
+                                    send_telegram_message(_bt, _chat_id, f"Error: {error}")
+                                elif response_text:
+                                    send_telegram_message(_bt, _chat_id, response_text)
+                            except Exception as exc:
+                                print(f"[telegram] media relay exception for chat {_chat_id}: {exc}")
+                            finally:
+                                _chat_lock.release()
+                        threading.Thread(target=_do_media_relay, daemon=True).start()
                     continue
 
                 if not text:
@@ -5361,7 +5433,7 @@ def _telegram_poll_loop(bot_token):
                     # ── relay to goose web (runs in a background thread) ──
                     # threaded so the poll loop stays responsive for /stop commands.
                     # per-chat lock prevents concurrent relays per user.
-                    def _do_relay(_text=text, _chat_id=chat_id, _bt=bot_token):
+                    def _do_relay(_text=text, _chat_id=chat_id, _bt=bot_token, _media_refs=media_refs):
                         _memory_touch(_chat_id)
                         _chat_lock = _get_chat_lock(_chat_id)
                         if not _chat_lock.acquire(timeout=2):
@@ -5369,6 +5441,22 @@ def _telegram_poll_loop(bot_token):
                             send_telegram_message(_bt, _chat_id, "Still thinking... send /stop to cancel.")
                             return
                         try:
+                            # download media in relay thread
+                            if _media_refs:
+                                downloaded = []
+                                for ref in _media_refs:
+                                    file_bytes, file_path = _download_telegram_file(_bt, ref["file_id"])
+                                    if file_bytes is not None:
+                                        mc = _make_media_content(
+                                            ref.get("media_key", "document"),
+                                            file_bytes, file_path,
+                                            mime_hint=ref.get("mime_hint"),
+                                            filename=ref.get("filename"),
+                                        )
+                                        downloaded.append(mc)
+                                    else:
+                                        print(f"[telegram] media download failed for {ref.get('media_key')}: {file_path}")
+
                             _send_typing_action(_bt, _chat_id)
                             session_id = _get_session_id(_chat_id)
                             _cancelled = threading.Event()

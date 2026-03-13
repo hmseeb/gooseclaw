@@ -6834,5 +6834,149 @@ class TestGetConfigEndpointRedaction(unittest.TestCase):
         self.assertEqual(sent["data"]["config"]["api_key"], "***REDACTED***")
 
 
+# ── session expiry and invalidation ──────────────────────────────────────────
+
+class TestSessionExpiry(unittest.TestCase):
+    """Tests for 24h session expiry and password-change invalidation."""
+
+    def setUp(self):
+        """Clear auth sessions before each test."""
+        gateway._auth_sessions.clear()
+
+    def tearDown(self):
+        gateway._auth_sessions.clear()
+
+    def _make_handler(self, cookie=None):
+        """Build a minimal mock handler for check_auth testing."""
+        handler = MagicMock()
+        handler.headers = MagicMock()
+        handler.headers.get = MagicMock(side_effect=lambda key, default="": {
+            "Cookie": cookie or "",
+            "Authorization": "",
+        }.get(key, default))
+        handler._set_session_cookie = False
+        return handler
+
+    @patch("gateway.load_setup")
+    def test_fresh_session_is_valid(self, mock_setup):
+        """A session created just now should pass check_auth."""
+        pw_hash = gateway.hash_token("testpass")
+        mock_setup.return_value = {"web_auth_token_hash": pw_hash}
+
+        # create a session token via the internal API
+        session_token = gateway._create_auth_session()
+        handler = self._make_handler(cookie=f"gooseclaw_session={session_token}")
+        self.assertTrue(gateway.check_auth(handler))
+
+    @patch("gateway.load_setup")
+    def test_expired_session_is_rejected(self, mock_setup):
+        """A session older than SESSION_MAX_AGE should be rejected."""
+        pw_hash = gateway.hash_token("testpass")
+        mock_setup.return_value = {"web_auth_token_hash": pw_hash}
+
+        session_token = gateway._create_auth_session()
+        # fast-forward the creation time to exceed SESSION_MAX_AGE
+        gateway._auth_sessions[session_token] = time.time() - gateway.SESSION_MAX_AGE - 1
+
+        handler = self._make_handler(cookie=f"gooseclaw_session={session_token}")
+        self.assertFalse(gateway.check_auth(handler))
+
+    @patch("gateway.load_setup")
+    def test_unknown_session_token_rejected(self, mock_setup):
+        """A random cookie value not in _auth_sessions should be rejected."""
+        pw_hash = gateway.hash_token("testpass")
+        mock_setup.return_value = {"web_auth_token_hash": pw_hash}
+
+        handler = self._make_handler(cookie="gooseclaw_session=bogus_random_token")
+        self.assertFalse(gateway.check_auth(handler))
+
+    def test_password_change_invalidates_all_sessions(self):
+        """_invalidate_all_auth_sessions should clear every active session."""
+        gateway._create_auth_session()
+        gateway._create_auth_session()
+        gateway._create_auth_session()
+        self.assertEqual(len(gateway._auth_sessions), 3)
+
+        gateway._invalidate_all_auth_sessions()
+        self.assertEqual(len(gateway._auth_sessions), 0)
+
+    @patch("gateway.load_setup")
+    def test_login_cookie_has_correct_max_age(self, mock_setup):
+        """Login endpoint should set Max-Age matching SESSION_MAX_AGE, not 1 year."""
+        pw_hash = gateway.hash_token("mypassword")
+        mock_setup.return_value = {"web_auth_token_hash": pw_hash}
+
+        handler = self._make_handler()
+        handler._read_body = MagicMock(
+            return_value=json.dumps({"password": "mypassword"}).encode()
+        )
+        handler._check_rate_limit = MagicMock(return_value=True)
+        handler.send_response = MagicMock()
+        handler.send_header = MagicMock()
+        handler.end_headers = MagicMock()
+        handler.wfile = MagicMock()
+        handler._internal_error = MagicMock()
+
+        gateway.GatewayHandler.handle_auth_login(handler)
+
+        cookie_calls = [c for c in handler.send_header.call_args_list if c[0][0] == "Set-Cookie"]
+        self.assertTrue(len(cookie_calls) > 0, "Expected Set-Cookie header")
+        cookie_val = cookie_calls[0][0][1]
+        self.assertIn(f"Max-Age={gateway.SESSION_MAX_AGE}", cookie_val)
+        self.assertNotIn("Max-Age=31536000", cookie_val)
+
+    @patch("gateway.save_setup")
+    @patch("gateway.load_setup")
+    def test_recovery_clears_all_sessions(self, mock_load, mock_save):
+        """Password recovery should invalidate all existing auth sessions."""
+        mock_load.return_value = {"web_auth_token_hash": "oldhash"}
+        recovery_secret = "my-recovery-secret"
+
+        # create some sessions first
+        gateway._create_auth_session()
+        gateway._create_auth_session()
+        self.assertEqual(len(gateway._auth_sessions), 2)
+
+        handler = self._make_handler()
+        handler._read_body = MagicMock(
+            return_value=json.dumps({"secret": recovery_secret}).encode()
+        )
+        handler._check_rate_limit = MagicMock(return_value=True)
+
+        sent_json = {}
+        def capture_json(status, data):
+            sent_json["status"] = status
+            sent_json["data"] = data
+        handler.send_json = capture_json
+
+        with patch.dict(os.environ, {"GOOSECLAW_RECOVERY_SECRET": recovery_secret}):
+            gateway.GatewayHandler.handle_auth_recover(handler)
+
+        self.assertEqual(sent_json["status"], 200)
+        self.assertEqual(len(gateway._auth_sessions), 0)
+
+    @patch("gateway.load_setup")
+    def test_inject_session_cookie_has_correct_max_age(self, mock_setup):
+        """_inject_session_cookie (Basic Auth path) should use SESSION_MAX_AGE."""
+        pw_hash = gateway.hash_token("mypassword")
+        mock_setup.return_value = {"web_auth_token_hash": pw_hash}
+
+        handler = MagicMock()
+        handler._set_session_cookie = True
+        handler.send_header = MagicMock()
+
+        gateway.GatewayHandler._inject_session_cookie(handler)
+
+        cookie_calls = [c for c in handler.send_header.call_args_list if c[0][0] == "Set-Cookie"]
+        self.assertTrue(len(cookie_calls) > 0, "Expected Set-Cookie header")
+        cookie_val = cookie_calls[0][0][1]
+        self.assertIn(f"Max-Age={gateway.SESSION_MAX_AGE}", cookie_val)
+        self.assertNotIn("Max-Age=31536000", cookie_val)
+
+    def test_session_max_age_constant_is_24_hours(self):
+        """SESSION_MAX_AGE should be 86400 (24 hours)."""
+        self.assertEqual(gateway.SESSION_MAX_AGE, 86400)
+
+
 if __name__ == "__main__":
     unittest.main()

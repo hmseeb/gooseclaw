@@ -4742,11 +4742,135 @@ def _handle_cmd_compact(ctx):
         ctx["send_fn"](f"\U0001f4dd Compacted:\n\n{response_text}")
 
 
+# known context windows per model (tokens)
+_MODEL_CONTEXT = {
+    "claude-opus-4-6": 200000, "claude-sonnet-4-6": 200000,
+    "claude-sonnet-4-5": 200000, "claude-haiku-4-5": 200000,
+    "claude-3-5-sonnet": 200000, "claude-3-5-haiku": 200000,
+    "gpt-4o": 128000, "gpt-4o-mini": 128000, "gpt-4-turbo": 128000,
+    "o1": 200000, "o1-mini": 128000, "o3-mini": 200000,
+    "gemini-2.0-flash": 1000000, "gemini-1.5-pro": 2000000,
+    "llama-3.3-70b-versatile": 128000, "deepseek-chat": 128000,
+    "mistral-large-latest": 128000,
+}
+
+
+def _estimate_tokens(text):
+    """Rough token estimate: ~4 chars per token for English."""
+    return max(1, len(text) // 4)
+
+
+def _format_duration(seconds):
+    """Format seconds into human-readable duration."""
+    if seconds < 60:
+        return f"{int(seconds)}s"
+    if seconds < 3600:
+        return f"{int(seconds // 60)}m {int(seconds % 60)}s"
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    return f"{h}h {m}m"
+
+
+def _make_progress_bar(pct, width=15):
+    """Create a text progress bar."""
+    filled = int(width * pct / 100)
+    return "\u2593" * filled + "\u2591" * (width - filled)
+
+
+def _handle_cmd_status(ctx):
+    """Handle /status command -- show session, provider, and context info."""
+    channel = ctx.get("channel", "telegram")
+    chat_id = ctx.get("user_id", "")
+    send = ctx["send_fn"]
+
+    # provider & model
+    setup = load_setup()
+    provider_type = setup.get("provider_type", "unknown") if setup else "unknown"
+    model = setup.get("model", "unknown") if setup else "unknown"
+    display_provider = provider_names.get(provider_type, provider_type)
+    goose_mode = os.environ.get("GOOSE_MODE", "auto")
+
+    # session info
+    session_id = _session_manager.get(channel, chat_id)
+    msg_count = 0
+    total_chars = 0
+    uptime_str = "n/a"
+
+    if session_id:
+        # fetch session messages for count and token estimate
+        messages = _fetch_session_messages(session_id)
+        msg_count = len(messages)
+        for msg in messages:
+            total_chars += len(msg.get("text", ""))
+
+        # session uptime from ID (format: YYYYMMDD_N or timestamp-based)
+        try:
+            date_part = session_id.split("_")[0]
+            if len(date_part) == 8 and date_part.isdigit():
+                from datetime import datetime
+                created = datetime.strptime(date_part, "%Y%m%d")
+                delta = (datetime.now() - created).total_seconds()
+                uptime_str = _format_duration(delta)
+        except Exception:
+            pass
+
+    # extensions count from goosed /config
+    ext_count = 0
+    try:
+        conn = _goosed_conn(timeout=5)
+        conn.request("GET", "/config", headers={"X-Secret-Key": _INTERNAL_GOOSE_TOKEN})
+        resp = conn.getresponse()
+        if resp.status == 200:
+            cfg = json.loads(resp.read().decode("utf-8", errors="replace"))
+            extensions = cfg.get("config", {}).get("extensions", {})
+            ext_count = sum(1 for e in extensions.values()
+                           if isinstance(e, dict) and e.get("enabled", True))
+        conn.close()
+    except Exception:
+        pass
+
+    # context window
+    tokens_used = _estimate_tokens("x" * total_chars) if total_chars else 0
+    # find context limit for current model
+    context_limit = 200000  # default
+    for key, limit in _MODEL_CONTEXT.items():
+        if key in model:
+            context_limit = limit
+            break
+    pct = min(100, int(tokens_used / context_limit * 100)) if context_limit else 0
+    bar = _make_progress_bar(pct)
+
+    def _fmt_tokens(n):
+        if n >= 1000000:
+            return f"{n / 1000000:.1f}M"
+        if n >= 1000:
+            return f"{n // 1000}K"
+        return str(n)
+
+    lines = [
+        "\U0001f527 *GooseClaw Status*",
+        "",
+        f"\U0001f4e1 Provider: {display_provider}",
+        f"\U0001f916 Model: `{model}`",
+        f"\u26a1 Mode: {goose_mode}",
+        "",
+        f"\U0001f4ac Session: `{session_id or 'none'}`",
+        f"\U0001f4dd Messages: {msg_count}",
+        f"\u23f1 Uptime: {uptime_str}",
+        f"\U0001f9e9 Extensions: {ext_count} active",
+        "",
+        f"\U0001f4ca Context: ~{_fmt_tokens(tokens_used)} / {_fmt_tokens(context_limit)} tokens",
+        f"`{bar}` {pct}%",
+    ]
+    send("\n".join(lines))
+
+
 # register commands on the module-level router
 _command_router.register("help", _handle_cmd_help, "this message")
 _command_router.register("stop", _handle_cmd_stop, "cancel the current response")
 _command_router.register("clear", _handle_cmd_clear, "wipe conversation and start fresh")
 _command_router.register("compact", _handle_cmd_compact, "summarize history to save tokens")
+_command_router.register("status", _handle_cmd_status, "show session and provider info")
 
 
 def _set_session_default_provider(session_id):

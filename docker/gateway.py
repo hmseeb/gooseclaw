@@ -353,10 +353,11 @@ class BotInstance:
             return True
         return False
 
-    def _do_message_relay(self, chat_id, text, bot_token):
+    def _do_message_relay(self, chat_id, text, bot_token, inbound_msg=None):
         """Relay a user message to goose web. Uses self.state and self.channel_key.
 
         Extracted from the poll loop to make the relay path unit-testable.
+        inbound_msg: optional InboundMessage envelope (v2 contract, Phase 12+ uses media).
         """
         _memory_touch(chat_id)
         _chat_lock = self.state.get_user_lock(chat_id)
@@ -487,11 +488,38 @@ class BotInstance:
                     if not chat_id:
                         continue
 
-                    # media without text: reply to paired users only
-                    if not text and _has_media(msg):
+                    # build InboundMessage envelope (v2 contract)
+                    has_media = _has_media(msg)
+                    media_list = []
+                    if has_media:
+                        _media_type_map = {
+                            "photo": "image", "voice": "voice", "document": "file",
+                            "sticker": "sticker", "video": "video", "audio": "audio",
+                            "video_note": "video", "animation": "animation",
+                        }
+                        for mkey in _MEDIA_KEYS:
+                            if mkey in msg:
+                                media_list.append({"type": _media_type_map.get(mkey, mkey)})
+                        # use caption as text if no text field
+                        if not text:
+                            text = msg.get("caption", "").strip()
+
+                    inbound_msg = InboundMessage(
+                        user_id=chat_id, text=text,
+                        channel=self.channel_key, media=media_list,
+                    )
+
+                    # media without text: send MEDIA_REPLY for now (Phase 12 handles media relay)
+                    if not text and has_media:
                         paired_ids = get_paired_chat_ids(platform=self.channel_key)
                         if chat_id in paired_ids:
                             send_telegram_message(self.token, chat_id, MEDIA_REPLY)
+                            # pass InboundMessage to relay for future use
+                            threading.Thread(
+                                target=self._do_message_relay,
+                                kwargs={"chat_id": chat_id, "text": "", "bot_token": self.token, "inbound_msg": inbound_msg},
+                                daemon=True,
+                            ).start()
                         continue
 
                     if not text:
@@ -526,7 +554,7 @@ class BotInstance:
                         # relay to goose web (runs in a background thread)
                         threading.Thread(
                             target=self._do_message_relay,
-                            kwargs={"chat_id": chat_id, "text": text, "bot_token": self.token},
+                            kwargs={"chat_id": chat_id, "text": text, "bot_token": self.token, "inbound_msg": inbound_msg},
                             daemon=True,
                         ).start()
                     else:
@@ -3479,15 +3507,25 @@ class ChannelRelay:
         # Load any persisted sessions for this channel
         _session_manager.load(channel_name)
 
-    def __call__(self, user_id, text, send_fn=None):
+    def __call__(self, user_id_or_msg, text=None, send_fn=None):
         """Relay a message from channel user to goose web. Returns response text.
+
+        Accepts either:
+          - relay(user_id, text, send_fn)     # legacy signature
+          - relay(InboundMessage, send_fn)    # v2 signature
 
         If text is a slash command, intercepts and dispatches via _command_router.
         If send_fn is provided, streams response chunks via send_fn(text) based
         on the channel's verbosity setting. Backward compatible: plugins that
         don't pass send_fn get the original single-response behavior.
         """
-        user_key = str(user_id)
+        if isinstance(user_id_or_msg, InboundMessage):
+            msg = user_id_or_msg
+            send_fn = text  # second arg is send_fn in v2 signature
+            text = msg.text
+            user_key = msg.user_id
+        else:
+            user_key = str(user_id_or_msg)
 
         # Command interception (CHAN-01)
         if text and text.strip().startswith("/"):
@@ -3520,7 +3558,7 @@ class ChannelRelay:
                 def _typing_loop():
                     while not typing_stop.is_set():
                         try:
-                            self._typing_cb(user_id)
+                            self._typing_cb(user_key)
                         except Exception:
                             pass  # buggy callback must not crash relay
                         typing_stop.wait(4)
@@ -3649,7 +3687,14 @@ def _load_channel(filepath):
                 print(f"[channels] skip {name}: setup() raised: {e}")
                 return False
 
-        # register notification handler (wraps send_fn)
+        # wrap send_fn in adapter (v2 contract)
+        adapter = channel.get("adapter")
+        if isinstance(adapter, OutboundAdapter):
+            pass  # v2 plugin, use adapter directly
+        else:
+            adapter = LegacyOutboundAdapter(send_fn)
+
+        # register notification handler (wraps adapter.send_text)
         def _make_handler(fn):
             def handler(text):
                 try:
@@ -3658,7 +3703,7 @@ def _load_channel(filepath):
                     return {"sent": False, "error": str(e)}
             return handler
 
-        register_notification_handler(f"channel:{name}", _make_handler(send_fn))
+        register_notification_handler(f"channel:{name}", _make_handler(adapter.send_text))
 
         # start poll thread if provided
         poll_fn = channel.get("poll")
@@ -3700,7 +3745,7 @@ def _load_channel(filepath):
                 print(f"[channels] registered custom command /{cmd_name} from {name}")
 
         with _channels_lock:
-            _loaded_channels[name] = {"module": mod, "channel": channel, "creds": creds}
+            _loaded_channels[name] = {"module": mod, "channel": channel, "creds": creds, "adapter": adapter}
             _channel_stop_events[name] = stop_event
             if poll_thread:
                 _channel_threads[name] = poll_thread
@@ -6838,12 +6883,15 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             channels = []
             for name, entry in _loaded_channels.items():
                 ch = entry["channel"]
+                adapter = entry.get("adapter")
+                caps = adapter.capabilities().to_dict() if adapter else ChannelCapabilities().to_dict()
                 channels.append({
                     "name": name,
                     "version": ch.get("version", 0),
                     "has_poll": callable(ch.get("poll")),
                     "has_setup": callable(ch.get("setup")),
                     "credentials": ch.get("credentials", []),
+                    "capabilities": caps,
                 })
         self.send_json(200, {"channels": channels, "count": len(channels)})
 

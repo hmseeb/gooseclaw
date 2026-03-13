@@ -4104,5 +4104,336 @@ class TestLegacyOutboundAdapter(unittest.TestCase):
         self.assertFalse(caps.supports_voice)
 
 
+# ── LoadChannel v2 ─────────────────────────────────────────────────────────
+
+
+class TestLoadChannelV2(unittest.TestCase):
+    """Tests for _load_channel v2 adapter wrapping (MEDIA-05)."""
+
+    def _make_plugin_module(self, channel_dict):
+        """Create a fake module with CHANNEL attribute."""
+        mod = MagicMock()
+        mod.CHANNEL = channel_dict
+        return mod
+
+    @patch("gateway._channels_lock", threading.Lock())
+    @patch("gateway._loaded_channels", {})
+    @patch("gateway._channel_stop_events", {})
+    @patch("gateway._channel_threads", {})
+    @patch("gateway.register_notification_handler")
+    @patch("gateway._command_router")
+    def test_legacy_plugin_wrapped(self, mock_router, mock_register):
+        """Legacy send(text) plugins should be wrapped in LegacyOutboundAdapter."""
+        mock_fn = MagicMock(return_value={"sent": True})
+        channel = {"name": "test_legacy", "version": 1, "send": mock_fn}
+
+        with patch("gateway.importlib.util") as mock_importlib:
+            mock_spec = MagicMock()
+            mock_importlib.spec_from_file_location.return_value = mock_spec
+            mock_mod = MagicMock()
+            mock_mod.CHANNEL = channel
+            mock_importlib.module_from_spec.return_value = mock_mod
+            mock_spec.loader.exec_module = MagicMock()
+
+            result = gateway._load_channel("/fake/test_legacy.py")
+
+        self.assertTrue(result)
+        # The loaded channel should have an adapter key
+        entry = gateway._loaded_channels.get("test_legacy", {})
+        adapter = entry.get("adapter")
+        self.assertIsNotNone(adapter, "loaded channel must have an 'adapter' key")
+        self.assertIsInstance(adapter, gateway.LegacyOutboundAdapter)
+        # adapter.send_text should delegate to the original send_fn
+        adapter.send_text("hi")
+        mock_fn.assert_called_with("hi")
+
+    @patch("gateway._channels_lock", threading.Lock())
+    @patch("gateway._loaded_channels", {})
+    @patch("gateway._channel_stop_events", {})
+    @patch("gateway._channel_threads", {})
+    @patch("gateway.register_notification_handler")
+    @patch("gateway._command_router")
+    def test_v2_plugin_used_directly(self, mock_router, mock_register):
+        """v2 plugins with adapter field should use it directly, not wrap."""
+        custom_adapter = gateway.OutboundAdapter()
+        channel = {
+            "name": "test_v2",
+            "version": 2,
+            "send": lambda t: {"sent": True},
+            "adapter": custom_adapter,
+        }
+
+        with patch("gateway.importlib.util") as mock_importlib:
+            mock_spec = MagicMock()
+            mock_importlib.spec_from_file_location.return_value = mock_spec
+            mock_mod = MagicMock()
+            mock_mod.CHANNEL = channel
+            mock_importlib.module_from_spec.return_value = mock_mod
+            mock_spec.loader.exec_module = MagicMock()
+
+            result = gateway._load_channel("/fake/test_v2.py")
+
+        self.assertTrue(result)
+        entry = gateway._loaded_channels.get("test_v2", {})
+        adapter = entry.get("adapter")
+        self.assertIs(adapter, custom_adapter, "v2 adapter should be used directly")
+
+    @patch("gateway._channels_lock", threading.Lock())
+    @patch("gateway._loaded_channels", {})
+    @patch("gateway._channel_stop_events", {})
+    @patch("gateway._channel_threads", {})
+    @patch("gateway.register_notification_handler")
+    @patch("gateway._command_router")
+    def test_legacy_notification_uses_adapter(self, mock_router, mock_register):
+        """Notification handler should use adapter.send_text, not raw send_fn."""
+        mock_fn = MagicMock(return_value={"sent": True})
+        channel = {"name": "test_notify", "version": 1, "send": mock_fn}
+
+        with patch("gateway.importlib.util") as mock_importlib:
+            mock_spec = MagicMock()
+            mock_importlib.spec_from_file_location.return_value = mock_spec
+            mock_mod = MagicMock()
+            mock_mod.CHANNEL = channel
+            mock_importlib.module_from_spec.return_value = mock_mod
+            mock_spec.loader.exec_module = MagicMock()
+
+            gateway._load_channel("/fake/test_notify.py")
+
+        # The notification handler should have been registered
+        self.assertTrue(mock_register.called)
+        call_args = mock_register.call_args
+        handler_name = call_args[0][0]
+        handler_fn = call_args[0][1]
+        self.assertEqual(handler_name, "channel:test_notify")
+        # Calling the handler should ultimately call the original send_fn
+        handler_fn("hello")
+        mock_fn.assert_called_with("hello")
+
+
+# ── ChannelRelay v2 ───────────────────────────────────────────────────────
+
+
+class TestChannelRelayV2(unittest.TestCase):
+    """Tests for ChannelRelay accepting InboundMessage (MEDIA-05)."""
+
+    def setUp(self):
+        self.relay = gateway.ChannelRelay("test_relay_v2")
+
+    @patch("gateway._relay_to_goose_web", return_value=("response", None))
+    @patch("gateway.load_setup", return_value=None)
+    @patch("gateway._session_manager")
+    def test_relay_accepts_inbound_message(self, mock_sm, mock_setup, mock_relay):
+        """ChannelRelay.__call__ should accept InboundMessage as first arg."""
+        mock_sm.get.return_value = "sess_123"
+        msg = gateway.InboundMessage(user_id="123", text="hello")
+        # Should not raise
+        result = self.relay(msg)
+        self.assertIsNotNone(result)
+
+    @patch("gateway._relay_to_goose_web", return_value=("response", None))
+    @patch("gateway.load_setup", return_value=None)
+    @patch("gateway._session_manager")
+    def test_relay_still_accepts_legacy_args(self, mock_sm, mock_setup, mock_relay):
+        """ChannelRelay.__call__ should still accept (user_id, text) signature."""
+        mock_sm.get.return_value = "sess_123"
+        result = self.relay("123", "hello")
+        self.assertIsNotNone(result)
+
+    @patch("gateway._relay_to_goose_web", return_value=("response", None))
+    @patch("gateway.load_setup", return_value=None)
+    @patch("gateway._session_manager")
+    def test_relay_inbound_message_extracts_text(self, mock_sm, mock_setup, mock_relay):
+        """When called with InboundMessage, text should be forwarded to relay."""
+        mock_sm.get.return_value = "sess_123"
+        msg = gateway.InboundMessage(user_id="456", text="test message")
+        self.relay(msg)
+        # Verify _relay_to_goose_web was called with the text from InboundMessage
+        self.assertTrue(mock_relay.called)
+        call_args = mock_relay.call_args
+        self.assertEqual(call_args[0][0], "test message")
+
+
+# ── BotInstance InboundMessage ─────────────────────────────────────────────
+
+
+class TestBotInboundMessage(unittest.TestCase):
+    """Tests for BotInstance._poll_loop creating InboundMessage envelopes."""
+
+    def _make_bot(self):
+        bot = gateway.BotInstance("test", "fake_token", channel_key="telegram:test")
+        bot.running = True
+        return bot
+
+    def _make_update_response(self, messages):
+        """Build a Telegram getUpdates response."""
+        results = []
+        for i, msg in enumerate(messages):
+            results.append({"update_id": 100 + i, "message": msg})
+        return {"ok": True, "result": results}
+
+    def test_text_message_creates_inbound(self):
+        """Text message should create InboundMessage with user_id and text."""
+        bot = self._make_bot()
+        update = self._make_update_response([{
+            "chat": {"id": 123},
+            "text": "hello",
+        }])
+        empty = {"ok": True, "result": []}
+        calls = [0]
+
+        def fake_urlopen(req, timeout=None):
+            resp = MagicMock()
+            if calls[0] == 0:
+                resp.read.return_value = json.dumps(update).encode()
+            else:
+                resp.read.return_value = json.dumps(empty).encode()
+                bot.running = False
+            calls[0] += 1
+            resp.__enter__ = lambda s: s
+            resp.__exit__ = MagicMock(return_value=False)
+            return resp
+
+        inbound_messages = []
+        original_do_relay = bot._do_message_relay
+
+        def capture_relay(**kwargs):
+            # Check if an inbound_msg kwarg is passed
+            if "inbound_msg" in kwargs:
+                inbound_messages.append(kwargs["inbound_msg"])
+
+        with patch("gateway.get_paired_chat_ids", return_value=["123"]), \
+             patch("gateway.send_telegram_message"), \
+             patch("gateway.urllib.request.urlopen", side_effect=fake_urlopen), \
+             patch.object(bot, "_do_message_relay", side_effect=capture_relay), \
+             patch("gateway._command_router") as mock_router:
+            mock_router.is_command.return_value = False
+            bot._poll_loop()
+
+        self.assertEqual(len(inbound_messages), 1, "Should create one InboundMessage")
+        msg = inbound_messages[0]
+        self.assertIsInstance(msg, gateway.InboundMessage)
+        self.assertEqual(msg.user_id, "123")
+        self.assertEqual(msg.text, "hello")
+        self.assertIn("telegram", msg.channel)
+
+    def test_media_message_creates_inbound_with_media(self):
+        """Media message should create InboundMessage with has_media=True."""
+        bot = self._make_bot()
+        update = self._make_update_response([{
+            "chat": {"id": 42},
+            "photo": [{"file_id": "abc123", "width": 100, "height": 100}],
+        }])
+        empty = {"ok": True, "result": []}
+        calls = [0]
+
+        def fake_urlopen(req, timeout=None):
+            resp = MagicMock()
+            if calls[0] == 0:
+                resp.read.return_value = json.dumps(update).encode()
+            else:
+                resp.read.return_value = json.dumps(empty).encode()
+                bot.running = False
+            calls[0] += 1
+            resp.__enter__ = lambda s: s
+            resp.__exit__ = MagicMock(return_value=False)
+            return resp
+
+        inbound_messages = []
+
+        def capture_relay(**kwargs):
+            if "inbound_msg" in kwargs:
+                inbound_messages.append(kwargs["inbound_msg"])
+
+        with patch("gateway.get_paired_chat_ids", return_value=["42"]), \
+             patch("gateway.send_telegram_message"), \
+             patch("gateway.urllib.request.urlopen", side_effect=fake_urlopen), \
+             patch.object(bot, "_do_message_relay", side_effect=capture_relay):
+            bot._poll_loop()
+
+        self.assertEqual(len(inbound_messages), 1, "Media message should produce InboundMessage")
+        msg = inbound_messages[0]
+        self.assertIsInstance(msg, gateway.InboundMessage)
+        self.assertTrue(msg.has_media)
+        self.assertEqual(msg.media[0]["type"], "image")
+
+    def test_text_with_caption_creates_inbound(self):
+        """Photo with caption should have both text and media."""
+        bot = self._make_bot()
+        update = self._make_update_response([{
+            "chat": {"id": 42},
+            "photo": [{"file_id": "abc123"}],
+            "caption": "look at this",
+        }])
+        empty = {"ok": True, "result": []}
+        calls = [0]
+
+        def fake_urlopen(req, timeout=None):
+            resp = MagicMock()
+            if calls[0] == 0:
+                resp.read.return_value = json.dumps(update).encode()
+            else:
+                resp.read.return_value = json.dumps(empty).encode()
+                bot.running = False
+            calls[0] += 1
+            resp.__enter__ = lambda s: s
+            resp.__exit__ = MagicMock(return_value=False)
+            return resp
+
+        inbound_messages = []
+
+        def capture_relay(**kwargs):
+            if "inbound_msg" in kwargs:
+                inbound_messages.append(kwargs["inbound_msg"])
+
+        with patch("gateway.get_paired_chat_ids", return_value=["42"]), \
+             patch("gateway.send_telegram_message"), \
+             patch("gateway.urllib.request.urlopen", side_effect=fake_urlopen), \
+             patch.object(bot, "_do_message_relay", side_effect=capture_relay):
+            bot._poll_loop()
+
+        self.assertEqual(len(inbound_messages), 1)
+        msg = inbound_messages[0]
+        self.assertTrue(msg.has_text)
+        self.assertTrue(msg.has_media)
+
+
+# ── Channels API Capabilities ─────────────────────────────────────────────
+
+
+class TestChannelsAPICapabilities(unittest.TestCase):
+    """Tests for GET /api/channels including capabilities."""
+
+    @patch("gateway._channels_lock", threading.Lock())
+    @patch("gateway._loaded_channels")
+    def test_api_channels_includes_capabilities(self, mock_channels):
+        """GET /api/channels should include capabilities key for each channel."""
+        adapter = gateway.LegacyOutboundAdapter(lambda t: {"sent": True})
+        mock_channels.items.return_value = [
+            ("test_ch", {
+                "module": MagicMock(),
+                "channel": {"name": "test_ch", "version": 1, "send": lambda t: None},
+                "creds": {},
+                "adapter": adapter,
+            }),
+        ]
+
+        # Create a mock request handler
+        handler = MagicMock()
+        handler._check_rate_limit = MagicMock(return_value=True)
+        handler._check_local_or_auth = MagicMock(return_value=True)
+        handler.send_json = MagicMock()
+
+        # Call the handler method directly
+        gateway.GatewayHandler.handle_list_channels(handler)
+
+        handler.send_json.assert_called_once()
+        args = handler.send_json.call_args[0]
+        self.assertEqual(args[0], 200)
+        channels = args[1]["channels"]
+        self.assertEqual(len(channels), 1)
+        self.assertIn("capabilities", channels[0],
+                       "Channel info must include capabilities")
+
+
 if __name__ == "__main__":
     unittest.main()

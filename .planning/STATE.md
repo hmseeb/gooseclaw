@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-03-13)
 ## Current Position
 
 Phase: 6 of 10 (Shared Infrastructure Extraction)
-Plan: 2 of 3 in current phase
-Status: Executing
-Last activity: 2026-03-13 -- Completed 06-01 SessionManager + ChannelState TDD
+Plan: 3 of 3 in current phase
+Status: Phase 6 Complete
+Last activity: 2026-03-13 -- Completed 06-03 Wire integration (Phase 6 complete)
 
-Progress: [=====-----] 50% (5/10 phases complete)
+Progress: [======----] 60% (6/10 phases complete)
 
 ## Performance Metrics
 
@@ -34,6 +34,7 @@ Progress: [=====-----] 50% (5/10 phases complete)
 | 5. Hardening | 6 | Complete |
 | Phase 06 P01 | 3min | 2 tasks | 2 files |
 | Phase 06 P02 | 2min | 2 tasks | 2 files |
+| Phase 06 P03 | 7min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -49,6 +50,8 @@ Recent decisions affecting current work:
 - notify_all() already accepts channel param, but /api/notify and cron don't use it (CHAN-07/08 partially done)
 - [Phase 06]: CommandRouter uses register/dispatch pattern with case-insensitive matching, no module-level instance yet
 - [Phase 06]: SessionManager uses composite key channel:user_id with atomic disk persistence, ChannelState provides per-user locks and relay kill
+- [Phase 06]: /clear scoping fixed: only removes requesting user's session (INFRA-04), goose web restart still documented limitation
+- [Phase 06]: All telegram globals replaced with SessionManager/ChannelState/CommandRouter instances (INFRA-03)
 
 ### Pending Todos
 
@@ -72,5 +75,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-03-13
-Stopped at: Completed 06-01-PLAN.md (SessionManager + ChannelState TDD)
+Stopped at: Completed 06-03-PLAN.md (Wire integration -- Phase 6 complete)
 Resume file: None

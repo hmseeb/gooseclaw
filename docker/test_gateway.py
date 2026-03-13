@@ -4961,5 +4961,353 @@ class TestLegacyPollMediaDownload(unittest.TestCase):
                 self.assertNotEqual(call.args[2], gateway.MEDIA_REPLY)
 
 
+# ── REST relay helpers (Phase 13) ─────────────────────────────────────────────
+
+import io
+import socket
+
+
+class TestParseSSEEvents(unittest.TestCase):
+    """Tests for _parse_sse_events() SSE line parser."""
+
+    def _make_response(self, data):
+        """Create a BytesIO that acts like an http.client response with readline()."""
+        return io.BytesIO(data)
+
+    def test_single_message_event(self):
+        stream = self._make_response(
+            b'data: {"type":"Message","message":{"content":[{"type":"text","text":"hello"}]}}\r\n\r\n'
+        )
+        events = list(gateway._parse_sse_events(stream))
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["type"], "Message")
+
+    def test_multiple_events(self):
+        stream = self._make_response(
+            b'data: {"type":"Message","message":{"content":[{"type":"text","text":"hi"}]}}\r\n'
+            b'\r\n'
+            b'data: {"type":"Finish","reason":"endTurn"}\r\n'
+            b'\r\n'
+        )
+        events = list(gateway._parse_sse_events(stream))
+        self.assertEqual(len(events), 2)
+
+    def test_finish_event(self):
+        stream = self._make_response(
+            b'data: {"type":"Finish","reason":"endTurn"}\r\n\r\n'
+        )
+        events = list(gateway._parse_sse_events(stream))
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["type"], "Finish")
+        self.assertEqual(events[0]["reason"], "endTurn")
+
+    def test_error_event(self):
+        stream = self._make_response(
+            b'data: {"type":"Error","error":"something broke"}\r\n\r\n'
+        )
+        events = list(gateway._parse_sse_events(stream))
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["type"], "Error")
+
+    def test_invalid_json_skipped(self):
+        stream = self._make_response(b'data: not-json\r\n\r\n')
+        events = list(gateway._parse_sse_events(stream))
+        self.assertEqual(len(events), 0)
+
+    def test_non_data_lines_ignored(self):
+        stream = self._make_response(
+            b'event: message\r\n'
+            b'data: {"type":"Ping"}\r\n'
+            b'\r\n'
+        )
+        events = list(gateway._parse_sse_events(stream))
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["type"], "Ping")
+
+    def test_empty_stream(self):
+        stream = self._make_response(b'')
+        events = list(gateway._parse_sse_events(stream))
+        self.assertEqual(len(events), 0)
+
+
+class TestBuildContentBlocks(unittest.TestCase):
+    """Tests for _build_content_blocks() content array builder."""
+
+    def test_text_only(self):
+        result = gateway._build_content_blocks("hello")
+        self.assertEqual(result, [{"type": "text", "text": "hello"}])
+
+    def test_text_with_image(self):
+        mc = gateway.MediaContent(kind="image", mime_type="image/jpeg", data=b"\xff\xd8")
+        msg = gateway.InboundMessage(user_id="1", text="describe this", media=[mc])
+        result = gateway._build_content_blocks("describe this", inbound_msg=msg)
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0]["type"], "text")
+        self.assertEqual(result[1]["type"], "image")
+
+    def test_media_only_no_text(self):
+        mc = gateway.MediaContent(kind="image", mime_type="image/png", data=b"\x89PNG")
+        msg = gateway.InboundMessage(user_id="1", text="", media=[mc])
+        result = gateway._build_content_blocks("", inbound_msg=msg)
+        # should have image block, no text block (since text is empty and there's an image)
+        types = [b["type"] for b in result]
+        self.assertIn("image", types)
+
+    def test_non_image_media_skipped(self):
+        mc = gateway.MediaContent(kind="audio", mime_type="audio/ogg", data=b"\x00\x01")
+        msg = gateway.InboundMessage(user_id="1", text="listen", media=[mc])
+        result = gateway._build_content_blocks("listen", inbound_msg=msg)
+        # audio to_content_block returns None, so only text block
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["type"], "text")
+
+    def test_empty_fallback(self):
+        result = gateway._build_content_blocks("", None)
+        self.assertEqual(result, [{"type": "text", "text": ""}])
+
+    def test_whitespace_only_text_ignored(self):
+        result = gateway._build_content_blocks("  ", None)
+        self.assertEqual(result, [{"type": "text", "text": ""}])
+
+
+class TestExtractResponseContent(unittest.TestCase):
+    """Tests for _extract_response_content() response parser."""
+
+    def test_text_only(self):
+        content = [{"type": "text", "text": "hello"}]
+        text, media = gateway._extract_response_content(content)
+        self.assertEqual(text, "hello")
+        self.assertEqual(media, [])
+
+    def test_text_and_image(self):
+        content = [
+            {"type": "text", "text": "here is the image"},
+            {"type": "image", "data": "abc123", "mimeType": "image/png"},
+        ]
+        text, media = gateway._extract_response_content(content)
+        self.assertEqual(text, "here is the image")
+        self.assertEqual(len(media), 1)
+        self.assertEqual(media[0]["type"], "image")
+
+    def test_multiple_text_blocks(self):
+        content = [
+            {"type": "text", "text": "line one"},
+            {"type": "text", "text": "line two"},
+        ]
+        text, media = gateway._extract_response_content(content)
+        self.assertEqual(text, "line one\nline two")
+
+    def test_tool_response_with_nested_image(self):
+        content = [
+            {"type": "toolResponse", "id": "t1", "tool_result": {
+                "value": {"content": [
+                    {"type": "text", "text": "screenshot captured"},
+                    {"type": "image", "data": "screenshotdata", "mimeType": "image/png"},
+                ]}
+            }},
+        ]
+        text, media = gateway._extract_response_content(content)
+        self.assertIn("screenshot captured", text)
+        self.assertEqual(len(media), 1)
+        self.assertEqual(media[0]["data"], "screenshotdata")
+
+    def test_thinking_blocks_ignored(self):
+        content = [
+            {"type": "thinking", "thinking": "let me think..."},
+            {"type": "text", "text": "answer"},
+        ]
+        text, media = gateway._extract_response_content(content)
+        self.assertEqual(text, "answer")
+        self.assertEqual(media, [])
+
+    def test_empty_content(self):
+        text, media = gateway._extract_response_content([])
+        self.assertEqual(text, "")
+        self.assertEqual(media, [])
+
+
+class TestRestRelay(unittest.TestCase):
+    """Tests for _do_rest_relay() with mocked http.client."""
+
+    def _make_sse_response(self, events, status=200):
+        """Build a mock HTTPResponse that yields SSE data lines."""
+        lines = []
+        for evt in events:
+            lines.append(f"data: {json.dumps(evt)}\r\n".encode())
+            lines.append(b"\r\n")
+        body = b"".join(lines)
+
+        resp = MagicMock()
+        resp.status = status
+        stream = io.BytesIO(body)
+        resp.readline = stream.readline
+        resp.read = MagicMock(return_value=b"error body")
+        return resp
+
+    @patch("gateway.http.client.HTTPConnection")
+    def test_successful_text_relay(self, mock_conn_cls):
+        conn = MagicMock()
+        mock_conn_cls.return_value = conn
+
+        events = [
+            {"type": "Message", "message": {"content": [{"type": "text", "text": "hello world"}]}},
+            {"type": "Finish", "reason": "endTurn"},
+        ]
+        conn.getresponse.return_value = self._make_sse_response(events)
+
+        text, err, media = gateway._do_rest_relay("hi", "sess1")
+        self.assertEqual(text, "hello world")
+        self.assertEqual(err, "")
+        self.assertEqual(media, [])
+
+    @patch("gateway.http.client.HTTPConnection")
+    def test_multimodal_response(self, mock_conn_cls):
+        conn = MagicMock()
+        mock_conn_cls.return_value = conn
+
+        events = [
+            {"type": "Message", "message": {"content": [
+                {"type": "text", "text": "check this"},
+                {"type": "image", "data": "imgdata", "mimeType": "image/png"},
+            ]}},
+            {"type": "Finish", "reason": "endTurn"},
+        ]
+        conn.getresponse.return_value = self._make_sse_response(events)
+
+        text, err, media = gateway._do_rest_relay("show me", "sess1")
+        self.assertEqual(text, "check this")
+        self.assertEqual(len(media), 1)
+
+    @patch("gateway.http.client.HTTPConnection")
+    def test_error_response(self, mock_conn_cls):
+        conn = MagicMock()
+        mock_conn_cls.return_value = conn
+
+        events = [
+            {"type": "Error", "error": "model overloaded"},
+        ]
+        conn.getresponse.return_value = self._make_sse_response(events)
+
+        text, err, media = gateway._do_rest_relay("hello", "sess1")
+        self.assertEqual(text, "")
+        self.assertIn("model overloaded", err)
+
+    @patch("gateway.http.client.HTTPConnection")
+    def test_http_error_status(self, mock_conn_cls):
+        conn = MagicMock()
+        mock_conn_cls.return_value = conn
+        conn.getresponse.return_value = self._make_sse_response([], status=500)
+
+        text, err, media = gateway._do_rest_relay("hi", "sess1")
+        self.assertEqual(text, "")
+        self.assertIn("500", err)
+
+    @patch("gateway.http.client.HTTPConnection")
+    def test_connection_stores_in_sock_ref(self, mock_conn_cls):
+        conn = MagicMock()
+        mock_conn_cls.return_value = conn
+
+        events = [{"type": "Finish", "reason": "endTurn"}]
+        conn.getresponse.return_value = self._make_sse_response(events)
+
+        sock_ref = [None, threading.Event()]
+        gateway._do_rest_relay("hi", "sess1", sock_ref=sock_ref)
+        self.assertIs(sock_ref[0], conn)
+
+    @patch("gateway.http.client.HTTPConnection")
+    def test_timeout_handling(self, mock_conn_cls):
+        conn = MagicMock()
+        mock_conn_cls.return_value = conn
+        conn.getresponse.side_effect = socket.timeout("timed out")
+
+        text, err, media = gateway._do_rest_relay("hi", "sess1")
+        self.assertEqual(text, "")
+        self.assertIn("timeout", err.lower())
+
+
+class TestRestRelayStreaming(unittest.TestCase):
+    """Tests for _do_rest_relay_streaming() with mocked http.client."""
+
+    def _make_sse_response(self, events, status=200):
+        """Build a mock HTTPResponse that yields SSE data lines."""
+        lines = []
+        for evt in events:
+            lines.append(f"data: {json.dumps(evt)}\r\n".encode())
+            lines.append(b"\r\n")
+        body = b"".join(lines)
+
+        resp = MagicMock()
+        resp.status = status
+        stream = io.BytesIO(body)
+        resp.readline = stream.readline
+        resp.read = MagicMock(return_value=b"error body")
+        return resp
+
+    @patch("gateway.http.client.HTTPConnection")
+    def test_text_chunks_flushed(self, mock_conn_cls):
+        conn = MagicMock()
+        mock_conn_cls.return_value = conn
+
+        events = [
+            {"type": "Message", "message": {"content": [{"type": "text", "text": "chunk one "}]}},
+            {"type": "Message", "message": {"content": [{"type": "text", "text": "chunk two"}]}},
+            {"type": "Finish", "reason": "endTurn"},
+        ]
+        conn.getresponse.return_value = self._make_sse_response(events)
+
+        flushed = []
+        def flush_cb(text):
+            flushed.append(text)
+
+        text, err, media = gateway._do_rest_relay_streaming(
+            "hi", "sess1", flush_cb=flush_cb
+        )
+        self.assertIn("chunk one", text)
+        self.assertIn("chunk two", text)
+        self.assertEqual(err, "")
+
+    @patch("gateway.http.client.HTTPConnection")
+    def test_tool_request_emits_status(self, mock_conn_cls):
+        conn = MagicMock()
+        mock_conn_cls.return_value = conn
+
+        events = [
+            {"type": "Message", "message": {"content": [
+                {"type": "toolRequest", "id": "t1", "tool_call": {"name": "bash", "arguments": {}}}
+            ]}},
+            {"type": "Message", "message": {"content": [{"type": "text", "text": "done"}]}},
+            {"type": "Finish", "reason": "endTurn"},
+        ]
+        conn.getresponse.return_value = self._make_sse_response(events)
+
+        flushed = []
+        def flush_cb(text):
+            flushed.append(text)
+
+        text, err, media = gateway._do_rest_relay_streaming(
+            "run something", "sess1", flush_cb=flush_cb
+        )
+        # should have emitted a tool status like "[Using bash...]"
+        tool_msgs = [f for f in flushed if "bash" in f.lower() or "Using" in f]
+        self.assertTrue(len(tool_msgs) > 0, f"Expected tool status in flushed: {flushed}")
+
+    @patch("gateway.http.client.HTTPConnection")
+    def test_error_stops_streaming(self, mock_conn_cls):
+        conn = MagicMock()
+        mock_conn_cls.return_value = conn
+
+        events = [
+            {"type": "Message", "message": {"content": [{"type": "text", "text": "partial"}]}},
+            {"type": "Error", "error": "context limit exceeded"},
+        ]
+        conn.getresponse.return_value = self._make_sse_response(events)
+
+        flushed = []
+        text, err, media = gateway._do_rest_relay_streaming(
+            "hi", "sess1", flush_cb=lambda t: flushed.append(t)
+        )
+        self.assertIn("context limit exceeded", err)
+
+
 if __name__ == "__main__":
     unittest.main()

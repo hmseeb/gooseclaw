@@ -1427,7 +1427,7 @@ body::after {
   padding: 10px 0;
   background: none;
   border: none;
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: none;
   color: var(--text-secondary);
   font-family: 'JetBrains Mono', monospace;
   font-size: 12px;
@@ -1437,7 +1437,7 @@ body::after {
   transition: color 0.2s;
 }
 .advanced-toggle:hover { color: var(--text-primary); }
-.advanced-toggle.open { color: var(--accent-bright); border-color: var(--border-accent); }
+.advanced-toggle.open { color: var(--accent-bright); border-bottom: 1px solid var(--border-accent); }
 .advanced-arrow {
   display: inline-block;
   font-size: 10px;
@@ -3384,15 +3384,15 @@ function renderModelCards(config) {
 
     const needsKey = m.provider !== 'github-copilot' && !['ollama','lm-studio','docker-model-runner','ramalama'].includes(m.provider);
     const isEditing = _openEditModelId === m.id;
-    html += `<div class="model-card${isDefault ? ' active' : ''}${isEditing ? ' editing' : ''}">
+    html += `<div class="model-card${isDefault ? ' active' : ''}${isEditing ? ' editing' : ''}"${!isDefault && !isEditing ? ` onclick="activateModel('${m.id}')" style="cursor:pointer" title="Click to set as default"` : ''}>
       <div class="model-card-actions">
-        <button class="model-card-btn edit-btn" onclick="toggleModelEdit('${m.id}')" title="Edit">&#9998;</button>
-        ${!isDefault ? `<button class="model-card-btn" onclick="removeModel('${m.id}')" title="Remove">&#x2715;</button>` : ''}
+        <button class="model-card-btn edit-btn" onclick="event.stopPropagation();toggleModelEdit('${m.id}')" title="Edit">&#9998;</button>
+        ${!isDefault ? `<button class="model-card-btn" onclick="event.stopPropagation();removeModel('${m.id}')" title="Remove">&#x2715;</button>` : ''}
       </div>
       <div class="model-card-provider">${icon} ${provName}</div>
       <div class="model-card-name">${m.model}</div>
       <div class="model-card-badges">
-        ${isDefault ? '<span class="model-badge default">default</span>' : ''}
+        ${isDefault ? '<span class="model-badge default">default</span>' : '<span class="model-badge" style="opacity:0.5">click to set default</span>'}
         ${channels.map(ch => `<span class="model-badge channel">${ch}</span>`).join('')}
       </div>`;
 

@@ -1,3 +1,17 @@
+# ── Stage 1: Build goosed from source ──────────────────────────────────────────
+FROM rust:1.82-bookworm AS goosed-builder
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      git pkg-config libssl-dev cmake protobuf-compiler && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN git clone --depth 1 --branch stable https://github.com/block/goose.git /build/goose
+WORKDIR /build/goose
+RUN cargo build --release -p goose-server && \
+    strip target/release/goosed
+
+# ── Stage 2: Runtime ──────────────────────────────────────────────────────────
 FROM ubuntu:22.04
 
 LABEL maintainer="gooseclaw" \
@@ -13,7 +27,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # python3-yaml pinned via apt; see docker/requirements.txt for pip-based version tracking
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-      curl git python3 python3-yaml ca-certificates jq bzip2 libgomp1 tzdata && \
+      curl git python3 python3-yaml ca-certificates jq bzip2 libgomp1 tzdata libssl3 && \
     rm -rf /var/lib/apt/lists/*
 
 # install node 20 LTS (ubuntu 22.04 apt ships v12, MCP tools need 18+)
@@ -21,7 +35,9 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     apt-get install -y --no-install-recommends nodejs && \
     rm -rf /var/lib/apt/lists/*
 
-# install goose (prebuilt binary via official script)
+# install goosed (built from source in stage 1)
+COPY --from=goosed-builder /build/goose/target/release/goosed /usr/local/bin/goosed
+# also install goose CLI for non-server commands (configure, etc.)
 RUN curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh \
     | CONFIGURE=false GOOSE_BIN_DIR=/usr/local/bin bash
 

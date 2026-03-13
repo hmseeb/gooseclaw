@@ -4379,13 +4379,13 @@ def _save_watcher_state():
 
 
 def _fetch_scheduled_sessions():
-    """Fetch sessions from goose web and return only scheduled ones."""
+    """Fetch sessions from goosed and return only scheduled ones."""
     if not _INTERNAL_GOOSE_TOKEN:
         return []
     try:
         conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=10)
-        conn.request("GET", "/api/sessions", headers={
-            "Authorization": f"Bearer {_INTERNAL_GOOSE_TOKEN}",
+        conn.request("GET", "/sessions", headers={
+            "X-Secret-Key": _INTERNAL_GOOSE_TOKEN,
         })
         resp = conn.getresponse()
         body = resp.read().decode("utf-8", errors="replace")
@@ -4401,13 +4401,13 @@ def _fetch_scheduled_sessions():
 
 
 def _fetch_session_messages(session_id):
-    """Fetch full conversation from a goose web session. Returns list of message dicts."""
+    """Fetch full conversation from a goosed session. Returns list of message dicts."""
     if not _INTERNAL_GOOSE_TOKEN:
         return []
     try:
         conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=15)
-        conn.request("GET", f"/api/sessions/{urllib.parse.quote(str(session_id))}", headers={
-            "Authorization": f"Bearer {_INTERNAL_GOOSE_TOKEN}",
+        conn.request("GET", f"/sessions/{urllib.parse.quote(str(session_id))}", headers={
+            "X-Secret-Key": _INTERNAL_GOOSE_TOKEN,
         })
         resp = conn.getresponse()
         body = resp.read().decode("utf-8", errors="replace")
@@ -4729,7 +4729,7 @@ _command_router.register("compact", _handle_cmd_compact, "summarize history to s
 
 
 def _create_goose_session():
-    """Create a new session via GET / on goose web (follows redirect to get session_id).
+    """Create a new session via POST /agent/start on goosed.
 
     Returns the session_id string, or None on failure.
     """
@@ -4737,27 +4737,27 @@ def _create_goose_session():
         return None
 
     try:
+        payload = json.dumps({"working_dir": "/data"}).encode("utf-8")
         conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=10)
-        conn.request("GET", "/", headers={
-            "Authorization": f"Bearer {_INTERNAL_GOOSE_TOKEN}",
+        conn.request("POST", "/agent/start", body=payload, headers={
+            "Content-Type": "application/json",
+            "X-Secret-Key": _INTERNAL_GOOSE_TOKEN,
         })
         resp = conn.getresponse()
-        resp.read()  # consume body
-
-        if resp.status in (301, 302, 303, 307, 308):
-            location = resp.getheader("Location", "")
-            # location is like /session/20260311_170000
-            if "/session/" in location:
-                sid = location.split("/session/")[-1].strip("/")
-                conn.close()
-                print(f"[telegram] created session via redirect: {sid}")
-                return sid
-
-        # fallback: try GET /api/sessions to find the latest
+        body = resp.read().decode("utf-8", errors="replace")
         conn.close()
+
+        if resp.status == 200:
+            session = json.loads(body)
+            sid = session.get("id") or session.get("session_id")
+            if sid:
+                print(f"[telegram] created session via /agent/start: {sid}")
+                return str(sid)
+
+        # fallback: try GET /sessions to find the latest
         conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=10)
-        conn.request("GET", "/api/sessions", headers={
-            "Authorization": f"Bearer {_INTERNAL_GOOSE_TOKEN}",
+        conn.request("GET", "/sessions", headers={
+            "X-Secret-Key": _INTERNAL_GOOSE_TOKEN,
         })
         resp = conn.getresponse()
         body = resp.read().decode("utf-8", errors="replace")
@@ -4768,10 +4768,10 @@ def _create_goose_session():
             if isinstance(sessions, list) and sessions:
                 sid = sessions[-1].get("id") or sessions[-1].get("session_id")
                 if sid:
-                    print(f"[telegram] using latest session from /api/sessions: {sid}")
+                    print(f"[telegram] using latest session from /sessions: {sid}")
                     return str(sid)
 
-        print(f"[telegram] could not create session: GET / returned {resp.status}")
+        print(f"[telegram] could not create session: /agent/start returned {resp.status}")
         return None
 
     except Exception as e:
@@ -5095,7 +5095,7 @@ def _send_typing_action(bot_token, chat_id):
 
 
 def _update_goose_session_provider(session_id, model_config):
-    """Call POST /agent/update_provider on goose web to hot-swap the model on a session.
+    """Call POST /agent/update_provider on goosed to hot-swap the model on a session.
 
     model_config is a dict with keys: provider, model.
     Skips the call if the session already has this model set (cached).
@@ -5115,11 +5115,10 @@ def _update_goose_session_provider(session_id, model_config):
             "model": model,
             "session_id": session_id,
         }).encode()
-        auth_value = base64.b64encode(f"user:{_INTERNAL_GOOSE_TOKEN}".encode()).decode()
         conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=10)
         conn.request("POST", "/agent/update_provider", body=payload, headers={
             "Content-Type": "application/json",
-            "Authorization": f"Basic {auth_value}",
+            "X-Secret-Key": _INTERNAL_GOOSE_TOKEN,
         })
         resp = conn.getresponse()
         resp.read()
@@ -5370,8 +5369,6 @@ def _do_rest_relay(user_text, session_id, content_blocks=None, sock_ref=None):
         }
     }).encode("utf-8")
 
-    auth_value = base64.b64encode(f"user:{_INTERNAL_GOOSE_TOKEN}".encode()).decode()
-
     conn = None
     try:
         conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=300)
@@ -5380,7 +5377,7 @@ def _do_rest_relay(user_text, session_id, content_blocks=None, sock_ref=None):
 
         conn.request("POST", "/reply", body=chat_request, headers={
             "Content-Type": "application/json",
-            "Authorization": f"Basic {auth_value}",
+            "X-Secret-Key": _INTERNAL_GOOSE_TOKEN,
             "Accept": "text/event-stream",
         })
 
@@ -5469,8 +5466,6 @@ def _do_rest_relay_streaming(user_text, session_id, flush_cb, verbosity="balance
         }
     }).encode("utf-8")
 
-    auth_value = base64.b64encode(f"user:{_INTERNAL_GOOSE_TOKEN}".encode()).decode()
-
     buf = _StreamBuffer(flush_cb, interval=flush_interval)
     collected = []
     media_blocks = []
@@ -5483,7 +5478,7 @@ def _do_rest_relay_streaming(user_text, session_id, flush_cb, verbosity="balance
 
         conn.request("POST", "/reply", body=chat_request, headers={
             "Content-Type": "application/json",
-            "Authorization": f"Basic {auth_value}",
+            "X-Secret-Key": _INTERNAL_GOOSE_TOKEN,
             "Accept": "text/event-stream",
         })
 
@@ -6019,8 +6014,8 @@ def start_telegram_gateway(bot_token):
 
 def start_goose_web():
     global goose_process, _INTERNAL_GOOSE_TOKEN
-    _check_stale_pid("goose_web")
-    _set_startup_state("starting", "Starting goose web...")
+    _check_stale_pid("goosed")
+    _set_startup_state("starting", "Starting goosed...")
     with goose_lock:
         if goose_process and goose_process.poll() is None:
             goose_process.terminate()
@@ -6029,22 +6024,26 @@ def start_goose_web():
             except subprocess.TimeoutExpired:
                 goose_process.kill()
 
-        # Generate a random internal token for goose web communication.
+        # Generate a random internal token for goosed communication.
         # This token is never exposed to users -- gateway handles all user auth.
         # Users authenticate against the stored hash; gateway then proxies
-        # requests to goose web using this internal token.
+        # requests to goosed using this internal token.
         _INTERNAL_GOOSE_TOKEN = secrets.token_urlsafe(32)
-        cmd = ["goose", "web", "--host", "127.0.0.1", "--port", str(GOOSE_WEB_PORT)]
-        cmd += ["--auth-token", _INTERNAL_GOOSE_TOKEN]
+        cmd = ["goosed", "agent"]
+        env = os.environ.copy()
+        env["GOOSE_TLS"] = "false"
+        env["GOOSE_HOST"] = "127.0.0.1"
+        env["GOOSE_PORT"] = str(GOOSE_WEB_PORT)
+        env["GOOSE_SERVER__SECRET_KEY"] = _INTERNAL_GOOSE_TOKEN
 
-        print(f"[gateway] starting goose web on 127.0.0.1:{GOOSE_WEB_PORT}")
-        print(f"[gateway] cmd: goose web --host 127.0.0.1 --port {GOOSE_WEB_PORT} --auth-token [internal]")
+        print(f"[gateway] starting goosed agent on 127.0.0.1:{GOOSE_WEB_PORT}")
+        print(f"[gateway] cmd: goosed agent (TLS=false, port={GOOSE_WEB_PORT})")
         # diagnostic: check critical env vars for claude-code provider
         has_oauth = bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"))
         goose_mode = os.environ.get("GOOSE_MODE", "NOT SET")
         print(f"[gateway] env: CLAUDE_CODE_OAUTH_TOKEN={'set' if has_oauth else 'MISSING'} GOOSE_MODE={goose_mode}")
-        goose_process = subprocess.Popen(cmd, stdout=sys.stdout, stderr=subprocess.PIPE)
-        _write_pid("goose_web", goose_process.pid)
+        goose_process = subprocess.Popen(cmd, stdout=sys.stdout, stderr=subprocess.PIPE, env=env)
+        _write_pid("goosed", goose_process.pid)
 
         # Start daemon thread to read stderr line-by-line, forward to sys.stderr,
         # and buffer lines for the startup status API.
@@ -6056,23 +6055,23 @@ def start_goose_web():
             # check if process exited prematurely
             if goose_process.poll() is not None:
                 exit_code = goose_process.returncode
-                _set_startup_state("error", f"goose web exited with code {exit_code}", error=_get_recent_stderr(20))
-                print(f"[gateway] goose web exited during startup with code {exit_code}")
+                _set_startup_state("error", f"goosed exited with code {exit_code}", error=_get_recent_stderr(20))
+                print(f"[gateway] goosed exited during startup with code {exit_code}")
                 return False
             try:
                 conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=2)
-                conn.request("GET", "/api/health")
+                conn.request("GET", "/status")
                 resp = conn.getresponse()
                 if resp.status == 200:
-                    _set_startup_state("ready", "goose web is running")
-                    print("[gateway] goose web is ready")
+                    _set_startup_state("ready", "goosed is running")
+                    print("[gateway] goosed is ready")
                     return True
                 conn.close()
             except Exception:
                 pass
 
-        _set_startup_state("error", "goose web did not become ready in 30s", error=_get_recent_stderr(20))
-        print("[gateway] WARN: goose web did not become ready in 30s")
+        _set_startup_state("error", "goosed did not become ready in 30s", error=_get_recent_stderr(20))
+        print("[gateway] WARN: goosed did not become ready in 30s")
         return False
 
 
@@ -6086,11 +6085,11 @@ def stop_goose_web():
             except subprocess.TimeoutExpired:
                 goose_process.kill()
         goose_process = None
-    _remove_pid("goose_web")
+    _remove_pid("goosed")
 
 
 def goose_health_monitor():
-    """Monitor goose web subprocess and auto-restart on crash with backoff."""
+    """Monitor goosed subprocess and auto-restart on crash with backoff."""
     backoff = 5  # initial backoff seconds
     max_backoff = 120
     consecutive_failures = 0
@@ -6110,14 +6109,14 @@ def goose_health_monitor():
             exit_code = proc.returncode
             consecutive_failures += 1
             wait_time = min(backoff * (2 ** (consecutive_failures - 1)), max_backoff)
-            _set_startup_state("starting", f"Restarting goose web (attempt #{consecutive_failures})...")
-            print(f"[health] goose web exited (code {exit_code}). "
+            _set_startup_state("starting", f"Restarting goosed (attempt #{consecutive_failures})...")
+            print(f"[health] goosed exited (code {exit_code}). "
                   f"Restart #{consecutive_failures} in {wait_time}s...")
-            _remove_pid("goose_web")
+            _remove_pid("goosed")
             time.sleep(wait_time)
             try:
                 start_goose_web()
-                print(f"[health] goose web restarted after failure #{consecutive_failures}")
+                print(f"[health] goosed restarted after failure #{consecutive_failures}")
             except Exception as e:
                 print(f"[health] restart failed: {e}")
         else:
@@ -6126,7 +6125,7 @@ def goose_health_monitor():
                 # verify it's actually responding
                 try:
                     conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=3)
-                    conn.request("GET", "/api/health")
+                    conn.request("GET", "/status")
                     resp = conn.getresponse()
                     conn.close()
                     if resp.status == 200:
@@ -6377,11 +6376,11 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
 
     # ── health endpoints ──
 
-    def _ping_goose_web(self):
-        """Try to ping goose web subprocess. Returns 'healthy', 'unhealthy (HTTP N)', or 'unreachable'."""
+    def _ping_goosed(self):
+        """Try to ping goosed subprocess. Returns 'healthy', 'unhealthy (HTTP N)', or 'unreachable'."""
         try:
             conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=2)
-            conn.request("GET", "/api/health")
+            conn.request("GET", "/status")
             resp = conn.getresponse()
             conn.close()
             return "healthy" if resp.status == 200 else f"unhealthy (HTTP {resp.status})"
@@ -6389,18 +6388,18 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             return "unreachable"
 
     def handle_health(self):
-        """GET /api/health — deep health check: liveness + goose web subprocess status."""
+        """GET /api/health — deep health check: liveness + goosed subprocess status."""
         status = {"service": "gooseclaw", "configured": is_configured()}
 
         if goose_process and goose_process.poll() is None:
             # process is alive — probe it
-            status["goose_web"] = self._ping_goose_web()
+            status["goosed"] = self._ping_goosed()
         else:
-            status["goose_web"] = "not running" if is_configured() else "not started (unconfigured)"
+            status["goosed"] = "not running" if is_configured() else "not started (unconfigured)"
 
         if not is_configured():
             status["status"] = "setup_required"
-        elif status.get("goose_web") == "healthy":
+        elif status.get("goosed") == "healthy":
             status["status"] = "ok"
         else:
             status["status"] = "degraded"
@@ -6410,16 +6409,16 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         self.send_json(code, status)
 
     def handle_health_ready(self):
-        """GET /api/health/ready — readiness probe: 200 only when goose web is up and responding."""
+        """GET /api/health/ready — readiness probe: 200 only when goosed is up and responding."""
         if goose_process and goose_process.poll() is None:
-            result = self._ping_goose_web()
+            result = self._ping_goosed()
             if result == "healthy":
-                self.send_json(200, {"ready": True, "goose_web": "healthy"})
+                self.send_json(200, {"ready": True, "goosed": "healthy"})
                 return
-            self.send_json(503, {"ready": False, "goose_web": result})
+            self.send_json(503, {"ready": False, "goosed": result})
         else:
             reason = "not started (unconfigured)" if not is_configured() else "not running"
-            self.send_json(503, {"ready": False, "goose_web": reason})
+            self.send_json(503, {"ready": False, "goosed": reason})
 
     def handle_version(self):
         """GET /api/version — return the deployed version from VERSION file."""
@@ -7594,10 +7593,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             # replace user Authorization with internal token
             # gateway already authenticated the user in do_GET/do_POST
             if _INTERNAL_GOOSE_TOKEN:
-                auth_value = base64.b64encode(
-                    f"user:{_INTERNAL_GOOSE_TOKEN}".encode()
-                ).decode()
-                headers["Authorization"] = f"Basic {auth_value}"
+                headers.pop("Authorization", None)
+                headers["X-Secret-Key"] = _INTERNAL_GOOSE_TOKEN
 
             # read body
             content_length = int(self.headers.get("Content-Length", 0))
@@ -7812,7 +7809,7 @@ def main():
             _unload_channel(ch_name)
         # terminate goose web and clean up PID
         stop_goose_web()
-        _remove_pid("goose_web")
+        _remove_pid("goosed")
         # stop all telegram bots via BotManager
         _bot_manager.stop_all()
         # stop session watcher, job engine, cron scheduler

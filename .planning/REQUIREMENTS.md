@@ -13,9 +13,9 @@
 - [x] **CHAN-04**: Channel plugins can register custom commands via CHANNEL dict `commands` field
 - [x] **CHAN-05**: Notification bus validates channel names dynamically from loaded plugins, not hardcoded list
 - [x] **CHAN-06**: Channel plugins can signal typing/activity indicators via optional `typing` callback in CHANNEL dict
-- [ ] **CHAN-07**: POST /api/notify accepts optional `channel` parameter for targeted delivery
-- [ ] **CHAN-08**: Cron scheduler passes `notify_channel` to notify_all when job specifies it
-- [ ] **CHAN-09**: remind.sh accepts --notify-channel flag matching job.sh behavior
+- [x] **CHAN-07**: POST /api/notify accepts optional `channel` parameter for targeted delivery
+- [x] **CHAN-08**: Cron scheduler passes `notify_channel` to notify_all when job specifies it
+- [x] **CHAN-09**: remind.sh accepts --notify-channel flag matching job.sh behavior
 
 ### Multi-Bot
 
@@ -69,9 +69,9 @@
 | CHAN-04 | Phase 7 | Complete |
 | CHAN-05 | Phase 7 | Complete |
 | CHAN-06 | Phase 7 | Complete |
-| CHAN-07 | Phase 8 | Pending |
-| CHAN-08 | Phase 8 | Pending |
-| CHAN-09 | Phase 8 | Pending |
+| CHAN-07 | Phase 8 | Complete |
+| CHAN-08 | Phase 8 | Complete |
+| CHAN-09 | Phase 8 | Complete |
 | BOT-01 | Phase 9 | Pending |
 | BOT-02 | Phase 9 | Pending |
 | BOT-03 | Phase 9 | Pending |

@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-03-13)
 
 **Core value:** A user with zero DevOps knowledge can deploy and configure GooseClaw correctly on the first try
-**Current focus:** Phase 7 - Channel Plugin Parity
+**Current focus:** Phase 8 - Notification Channel Targeting
 
 ## Current Position
 
-Phase: 7 of 10 (Channel Plugin Parity)
-Plan: 3 of 3 in current phase
-Status: Phase 7 Complete
-Last activity: 2026-03-13 -- Completed 07-03 Custom command registration + dynamic channel validation
+Phase: 8 of 10 (Notification Channel Targeting)
+Plan: 1 of 1 in current phase
+Status: Phase 8 Complete
+Last activity: 2026-03-13 -- Completed 08-01 Wire channel targeting through API, cron, and remind.sh
 
-Progress: [=======---] 70% (7/10 phases complete)
+Progress: [========--] 80% (8/10 phases complete)
 
 ## Performance Metrics
 
@@ -38,6 +38,7 @@ Progress: [=======---] 70% (7/10 phases complete)
 | Phase 07 P01 | 3min | 2 tasks | 2 files |
 | Phase 07 P02 | 3min | 2 tasks | 2 files |
 | Phase 07 P03 | 5min | 2 tasks | 2 files |
+| Phase 08 P01 | 3min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -50,7 +51,7 @@ Recent decisions affecting current work:
 - /clear currently restarts entire goose web -- needs scoping decision in Phase 6
 - 17 threading.Lock() instances with no ordering hierarchy -- lock audit needed
 - 132 Telegram-specific references need refactoring into shared abstractions
-- notify_all() already accepts channel param, but /api/notify and cron don't use it (CHAN-07/08 partially done)
+- [Phase 08]: All notification paths (API, cron, remind.sh) now support per-channel targeting via notify_all(text, channel=...)
 - [Phase 06]: CommandRouter uses register/dispatch pattern with case-insensitive matching, no module-level instance yet
 - [Phase 06]: SessionManager uses composite key channel:user_id with atomic disk persistence, ChannelState provides per-user locks and relay kill
 - [Phase 06]: /clear scoping fixed: only removes requesting user's session (INFRA-04), goose web restart still documented limitation
@@ -85,5 +86,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-03-13
-Stopped at: Completed 07-03-PLAN.md (Custom command registration + dynamic channel validation) -- Phase 7 complete
+Stopped at: Completed 08-01-PLAN.md (Wire channel targeting through API, cron, and remind.sh) -- Phase 8 complete
 Resume file: None

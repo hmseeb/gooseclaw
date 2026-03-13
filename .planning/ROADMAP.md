@@ -76,7 +76,7 @@ Plans:
 **Plans:** 1 plan
 
 Plans:
-- [ ] 08-01-PLAN.md -- Wire channel targeting through API, cron scheduler, and remind.sh (CHAN-07, CHAN-08, CHAN-09)
+- [x] 08-01-PLAN.md -- Wire channel targeting through API, cron scheduler, and remind.sh (CHAN-07, CHAN-08, CHAN-09)
 
 ### Phase 9: Multi-Bot Core
 **Goal**: Users can run multiple Telegram bots on a single GooseClaw gateway, each with its own sessions, provider, and model
@@ -122,6 +122,6 @@ Phase 9 depends on Phase 6 (not Phase 7/8), so Phase 9 could start after Phase 6
 | 5. Production Hardening | v1.0 | 6/6 | Complete | 2026-03-10 |
 | 6. Shared Infrastructure Extraction | v2.0 | 0/3 | Planned | - |
 | 7. Channel Plugin Parity | v2.0 | 3/3 | Complete | 2026-03-13 |
-| 8. Notification Channel Targeting | v2.0 | 0/1 | Planned | - |
+| 8. Notification Channel Targeting | v2.0 | 1/1 | Complete | 2026-03-13 |
 | 9. Multi-Bot Core | v2.0 | 0/? | Not started | - |
 | 10. Multi-Bot Lifecycle | v2.0 | 0/? | Not started | - |

@@ -10,9 +10,9 @@ See: .planning/PROJECT.md (updated 2026-03-13)
 ## Current Position
 
 Phase: 6 of 10 (Shared Infrastructure Extraction)
-Plan: 1 of 3 in current phase
+Plan: 2 of 3 in current phase
 Status: Executing
-Last activity: 2026-03-13 -- Completed 06-02 CommandRouter TDD
+Last activity: 2026-03-13 -- Completed 06-01 SessionManager + ChannelState TDD
 
 Progress: [=====-----] 50% (5/10 phases complete)
 
@@ -32,6 +32,7 @@ Progress: [=====-----] 50% (5/10 phases complete)
 | 3. Gateway | 2 | Complete |
 | 4. Advanced | 1 | Complete |
 | 5. Hardening | 6 | Complete |
+| Phase 06 P01 | 3min | 2 tasks | 2 files |
 | Phase 06 P02 | 2min | 2 tasks | 2 files |
 
 ## Accumulated Context
@@ -47,6 +48,7 @@ Recent decisions affecting current work:
 - 132 Telegram-specific references need refactoring into shared abstractions
 - notify_all() already accepts channel param, but /api/notify and cron don't use it (CHAN-07/08 partially done)
 - [Phase 06]: CommandRouter uses register/dispatch pattern with case-insensitive matching, no module-level instance yet
+- [Phase 06]: SessionManager uses composite key channel:user_id with atomic disk persistence, ChannelState provides per-user locks and relay kill
 
 ### Pending Todos
 
@@ -70,5 +72,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-03-13
-Stopped at: Completed 06-02-PLAN.md (CommandRouter TDD)
+Stopped at: Completed 06-01-PLAN.md (SessionManager + ChannelState TDD)
 Resume file: None

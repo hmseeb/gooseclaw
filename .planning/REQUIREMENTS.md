@@ -29,9 +29,9 @@
 
 ### Infrastructure
 
-- [ ] **INFRA-01**: SessionManager class with composite key (channel:user_id) replaces per-channel session dicts
+- [x] **INFRA-01**: SessionManager class with composite key (channel:user_id) replaces per-channel session dicts
 - [x] **INFRA-02**: CommandRouter class dispatches /help /stop /clear /compact to shared handlers
-- [ ] **INFRA-03**: Telegram globals (_telegram_sessions, _telegram_active_relays, _telegram_chat_locks) refactored into per-instance state
+- [x] **INFRA-03**: Telegram globals (_telegram_sessions, _telegram_active_relays, _telegram_chat_locks) refactored into per-instance state
 - [ ] **INFRA-04**: /clear scoped to requesting channel's sessions only, not global goose web restart (or documented limitation)
 
 ## v3.0 Requirements
@@ -59,9 +59,9 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| INFRA-01 | Phase 6 | Pending |
+| INFRA-01 | Phase 6 | Complete |
 | INFRA-02 | Phase 6 | Complete |
-| INFRA-03 | Phase 6 | Pending |
+| INFRA-03 | Phase 6 | Complete |
 | INFRA-04 | Phase 6 | Pending |
 | CHAN-01 | Phase 7 | Pending |
 | CHAN-02 | Phase 7 | Pending |

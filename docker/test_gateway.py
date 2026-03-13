@@ -2199,5 +2199,256 @@ class TestCronNotifyChannel(unittest.TestCase):
         self.assertIsNone(kwargs.get("channel"))
 
 
+# ── BotInstance tests ────────────────────────────────────────────────────────
+
+class TestBotInstance(unittest.TestCase):
+    """Tests for BotInstance class."""
+
+    def test_init_default_channel_key(self):
+        bot = gateway.BotInstance("mybot", "123:ABC")
+        self.assertEqual(bot.channel_key, "telegram:mybot")
+
+    def test_init_custom_channel_key(self):
+        bot = gateway.BotInstance("default", "123:ABC", channel_key="telegram")
+        self.assertEqual(bot.channel_key, "telegram")
+
+    def test_has_own_channel_state(self):
+        bot = gateway.BotInstance("test", "123:ABC")
+        self.assertIsInstance(bot.state, gateway.ChannelState)
+
+    def test_separate_channel_states(self):
+        bot_a = gateway.BotInstance("a", "111:AAA")
+        bot_b = gateway.BotInstance("b", "222:BBB")
+        self.assertIs(type(bot_a.state), gateway.ChannelState)
+        self.assertIsNot(bot_a.state, bot_b.state)
+
+    def test_generate_pair_code(self):
+        bot = gateway.BotInstance("test", "123:ABC")
+        code = bot.generate_pair_code()
+        self.assertEqual(len(code), 6)
+        self.assertTrue(code.isalnum())
+        self.assertEqual(code, code.upper())
+        self.assertEqual(bot.pair_code, code)
+
+    def test_pair_code_independent(self):
+        bot_a = gateway.BotInstance("a", "111:AAA")
+        bot_b = gateway.BotInstance("b", "222:BBB")
+        code_a = bot_a.generate_pair_code()
+        code_b = bot_b.generate_pair_code()
+        # codes are random, extremely unlikely to match
+        self.assertEqual(bot_a.pair_code, code_a)
+        self.assertEqual(bot_b.pair_code, code_b)
+
+    def test_running_initially_false(self):
+        bot = gateway.BotInstance("test", "123:ABC")
+        self.assertFalse(bot.running)
+
+
+# ── BotManager tests ────────────────────────────────────────────────────────
+
+class TestBotManager(unittest.TestCase):
+    """Tests for BotManager class."""
+
+    def test_start_bot_creates_instance(self):
+        mgr = gateway.BotManager()
+        bot = mgr.add_bot("test", "123:ABC")
+        self.assertIsInstance(bot, gateway.BotInstance)
+        self.assertIs(mgr.get_bot("test"), bot)
+
+    def test_start_bot_duplicate_name(self):
+        mgr = gateway.BotManager()
+        bot1 = mgr.add_bot("test", "123:ABC")
+        bot2 = mgr.add_bot("test", "456:DEF")
+        self.assertIs(bot1, bot2)
+
+    def test_start_bot_duplicate_token(self):
+        mgr = gateway.BotManager()
+        mgr.add_bot("a", "123:ABC")
+        with self.assertRaises(ValueError):
+            mgr.add_bot("b", "123:ABC")
+
+    def test_remove_bot(self):
+        mgr = gateway.BotManager()
+        mgr.add_bot("test", "123:ABC")
+        mgr.remove_bot("test")
+        self.assertIsNone(mgr.get_bot("test"))
+
+    def test_remove_nonexistent(self):
+        mgr = gateway.BotManager()
+        mgr.remove_bot("ghost")  # should not raise
+
+    def test_get_all(self):
+        mgr = gateway.BotManager()
+        mgr.add_bot("a", "111:AAA")
+        mgr.add_bot("b", "222:BBB")
+        all_bots = mgr.get_all()
+        self.assertIn("a", all_bots)
+        self.assertIn("b", all_bots)
+        self.assertEqual(len(all_bots), 2)
+
+    def test_stop_all(self):
+        mgr = gateway.BotManager()
+        mgr.add_bot("a", "111:AAA")
+        mgr.add_bot("b", "222:BBB")
+        mgr.stop_all()
+        self.assertEqual(len(mgr.get_all()), 0)
+
+    def test_default_bot_channel_key(self):
+        mgr = gateway.BotManager()
+        bot = mgr.add_bot("default", "123:ABC", channel_key="telegram")
+        self.assertEqual(bot.channel_key, "telegram")
+
+
+# ── _resolve_bot_configs tests ───────────────────────────────────────────────
+
+class TestResolveBotConfigs(unittest.TestCase):
+    """Tests for _resolve_bot_configs()."""
+
+    def test_bots_array_returned(self):
+        config = {"bots": [{"name": "a", "token": "111:AAA"}]}
+        result = gateway._resolve_bot_configs(config)
+        self.assertEqual(result, [{"name": "a", "token": "111:AAA"}])
+
+    def test_legacy_single_token(self):
+        config = {"telegram_bot_token": "123:ABC"}
+        result = gateway._resolve_bot_configs(config)
+        self.assertEqual(result, [{"name": "default", "token": "123:ABC"}])
+
+    def test_no_token_no_bots(self):
+        config = {"provider_type": "openai"}
+        result = gateway._resolve_bot_configs(config)
+        self.assertEqual(result, [])
+
+    def test_empty_bots_array_falls_back(self):
+        config = {"bots": [], "telegram_bot_token": "123:ABC"}
+        result = gateway._resolve_bot_configs(config)
+        self.assertEqual(result, [{"name": "default", "token": "123:ABC"}])
+
+    def test_bots_array_takes_priority(self):
+        config = {
+            "bots": [{"name": "main", "token": "111:AAA"}],
+            "telegram_bot_token": "999:ZZZ"
+        }
+        result = gateway._resolve_bot_configs(config)
+        self.assertEqual(result, [{"name": "main", "token": "111:AAA"}])
+
+
+# ── Bot config validation tests ──────────────────────────────────────────────
+
+class TestBotConfigValidation(unittest.TestCase):
+    """Tests for validate_setup_config bots array extensions."""
+
+    def _base_config(self, **overrides):
+        config = {"provider_type": "ollama"}
+        config.update(overrides)
+        return config
+
+    def test_valid_bots_array(self):
+        config = self._base_config(bots=[
+            {"name": "a", "token": "111:AAA"},
+            {"name": "b", "token": "222:BBB"},
+        ])
+        valid, errors = gateway.validate_setup_config(config)
+        self.assertTrue(valid, f"Expected valid but got errors: {errors}")
+
+    def test_bots_not_array(self):
+        config = self._base_config(bots="bad")
+        valid, errors = gateway.validate_setup_config(config)
+        self.assertFalse(valid)
+        self.assertTrue(any("bots" in e and "array" in e.lower() for e in errors))
+
+    def test_bots_missing_name(self):
+        config = self._base_config(bots=[{"token": "111:AAA"}])
+        valid, errors = gateway.validate_setup_config(config)
+        self.assertFalse(valid)
+        self.assertTrue(any("name" in e for e in errors))
+
+    def test_bots_missing_token(self):
+        config = self._base_config(bots=[{"name": "a"}])
+        valid, errors = gateway.validate_setup_config(config)
+        self.assertFalse(valid)
+        self.assertTrue(any("token" in e for e in errors))
+
+    def test_bots_duplicate_name(self):
+        config = self._base_config(bots=[
+            {"name": "a", "token": "111:AAA"},
+            {"name": "a", "token": "222:BBB"},
+        ])
+        valid, errors = gateway.validate_setup_config(config)
+        self.assertFalse(valid)
+        self.assertTrue(any("duplicate" in e.lower() and "name" in e.lower() for e in errors))
+
+    def test_bots_duplicate_token(self):
+        config = self._base_config(bots=[
+            {"name": "a", "token": "111:AAA"},
+            {"name": "b", "token": "111:AAA"},
+        ])
+        valid, errors = gateway.validate_setup_config(config)
+        self.assertFalse(valid)
+        self.assertTrue(any("duplicate" in e.lower() and "token" in e.lower() for e in errors))
+
+
+# ── Bot valid channels tests ─────────────────────────────────────────────────
+
+class TestBotValidChannels(unittest.TestCase):
+    """Tests for _get_valid_channels with bot channel keys."""
+
+    @patch("gateway.load_setup")
+    def test_includes_bot_channel_keys(self, mock_setup):
+        mock_setup.return_value = {
+            "bots": [{"name": "research", "token": "111:AAA"}]
+        }
+        channels = gateway._get_valid_channels()
+        self.assertIn("telegram:research", channels)
+
+    @patch("gateway.load_setup")
+    def test_default_bot_not_added(self, mock_setup):
+        mock_setup.return_value = {
+            "bots": [{"name": "default", "token": "111:AAA"}]
+        }
+        channels = gateway._get_valid_channels()
+        self.assertNotIn("telegram:default", channels)
+        self.assertIn("telegram", channels)  # fixed set always has "telegram"
+
+    @patch("gateway.load_setup")
+    def test_no_bots_unchanged(self, mock_setup):
+        mock_setup.return_value = {"provider_type": "openai"}
+        channels = gateway._get_valid_channels()
+        self.assertIn("web", channels)
+        self.assertIn("telegram", channels)
+        self.assertIn("cron", channels)
+        self.assertIn("memory", channels)
+
+
+# ── Bot isolation tests ──────────────────────────────────────────────────────
+
+class TestBotIsolation(unittest.TestCase):
+    """Tests for per-bot state isolation."""
+
+    def test_different_bots_different_locks(self):
+        bot_a = gateway.BotInstance("a", "111:AAA")
+        bot_b = gateway.BotInstance("b", "222:BBB")
+        lock_a = bot_a.state.get_user_lock("user1")
+        lock_b = bot_b.state.get_user_lock("user1")
+        self.assertIsNot(lock_a, lock_b)
+
+    def test_different_bots_different_relay_tracking(self):
+        bot_a = gateway.BotInstance("a", "111:AAA")
+        bot_b = gateway.BotInstance("b", "222:BBB")
+        mock_ref = [MagicMock()]
+        bot_a.state.set_active_relay("u1", mock_ref)
+        result = bot_b.state.pop_active_relay("u1")
+        self.assertIsNone(result)
+        # cleanup
+        bot_a.state.pop_active_relay("u1")
+
+    def test_session_manager_isolation(self):
+        sm = gateway.SessionManager()
+        sm.set("telegram:bot_a", "user1", "session_a")
+        sm.set("telegram:bot_b", "user1", "session_b")
+        self.assertEqual(sm.get("telegram:bot_a", "user1"), "session_a")
+        self.assertEqual(sm.get("telegram:bot_b", "user1"), "session_b")
+
+
 if __name__ == "__main__":
     unittest.main()

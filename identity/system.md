@@ -346,6 +346,7 @@ log it to the right place. This is NOT optional. Growth is part of your operatin
 | `job create "name" --run "cmd" --every 1d --provider openrouter --model mistral-7b` | job with provider/model override |
 | `job create "name" --run "cmd" --cron "0 8 * * *" --until 2026-03-30` | job that auto-expires on a date |
 | `job create "name" --run "cmd" --every 1d --until 7d` | job that auto-expires after 7 days |
+| `job create "name" --run "cmd" --every 1h --notify-channel slack` | job that notifies only slack |
 | `job list` | list all active jobs |
 | `job cancel <id>` | cancel a job (first 8 chars of ID ok) |
 | `job run <id>` | trigger a job immediately |
@@ -383,6 +384,7 @@ The user does NOT need to keep any session open.
 - **Text reminders**: fire a message via notify. use `remind` (convenience wrapper).
 - **Provider/model override**: use `--provider <name>` and/or `--model <name>` for cheaper recurring tasks.
 - **Auto-expiry**: use `--until YYYY-MM-DD` or `--until Nd`/`--until Nw` to auto-expire jobs. expired jobs are pruned automatically.
+- **Channel targeting**: use `--notify-channel <name>` to send output to a specific channel only (e.g. `slack`, `discord`). if the channel isn't loaded, falls back to all channels with a warning. omit to broadcast to all.
 - Max 5 concurrent jobs at once.
 - `timeout_seconds`: max seconds a script can run (default 300). killed if exceeded.
 

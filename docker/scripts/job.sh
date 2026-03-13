@@ -209,6 +209,7 @@ cmd_create() {
     local model=""
     local provider=""
     local expires_at=""
+    local notify_channel=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -235,6 +236,10 @@ cmd_create() {
             --until)
                 shift
                 expires_at=$(_parse_until "$1")
+                ;;
+            --notify-channel)
+                shift
+                notify_channel="$1"
                 ;;
             --model)
                 shift
@@ -276,7 +281,7 @@ cmd_create() {
         delay_seconds="$recurring_seconds"
     fi
 
-    PAYLOAD=$(_NAME="$name" _CMD="$command" _DELAY="$delay_seconds" _FIREAT="$fire_at" _RECUR="$recurring_seconds" _CRON="$cron_expr" _MODEL="$model" _PROVIDER="$provider" _EXPIRES="$expires_at" python3 -c "
+    PAYLOAD=$(_NAME="$name" _CMD="$command" _DELAY="$delay_seconds" _FIREAT="$fire_at" _RECUR="$recurring_seconds" _CRON="$cron_expr" _MODEL="$model" _PROVIDER="$provider" _EXPIRES="$expires_at" _NOTIFY_CH="$notify_channel" python3 -c "
 import json, os
 d = {
     'type': 'script',
@@ -290,6 +295,7 @@ cr = os.environ.get('_CRON', '')
 ml = os.environ.get('_MODEL', '')
 pv = os.environ.get('_PROVIDER', '')
 ex = os.environ.get('_EXPIRES', '')
+nc = os.environ.get('_NOTIFY_CH', '')
 if ds:
     d['delay_seconds'] = int(ds)
 elif fa:
@@ -304,6 +310,8 @@ if pv:
     d['provider'] = pv
 if ex:
     d['expires_at'] = float(ex)
+if nc:
+    d['notify_channel'] = nc
 print(json.dumps(d))
 ")
 

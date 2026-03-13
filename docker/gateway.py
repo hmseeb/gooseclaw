@@ -698,16 +698,39 @@ def _edit_telegram_message(bot_token, chat_id, message_id, text):
             return False
 
 
-def notify_all(text):
-    """Send a message to all registered notification channels.
+def notify_all(text, channel=None):
+    """Send a message to notification channels.
 
-    Channel-agnostic: telegram, slack, whatsapp, etc. each register via
-    register_notification_handler(). This function just calls all of them.
+    If channel is None, broadcasts to all registered channels.
+    If channel is set, targets that specific channel. Falls back to notify_all
+    with an error prefix if the channel is not found.
+
+    Channel names: "telegram", or "channel:<plugin_name>" for plugins (e.g. "channel:slack").
+    Shorthand: just the plugin name (e.g. "slack") is also accepted.
     """
     with _notification_handlers_lock:
         handlers = list(_notification_handlers)
     if not handlers:
         return {"sent": False, "error": "no notification channels registered"}
+
+    if channel:
+        # find the target handler — try exact match, then "channel:<name>"
+        target = None
+        for h in handlers:
+            if h["name"] == channel or h["name"] == f"channel:{channel}":
+                target = h
+                break
+        if target:
+            try:
+                result = target["handler"](text)
+                return {"sent": result.get("sent", False), "channels": [{"channel": target["name"], **result}]}
+            except Exception as e:
+                return {"sent": False, "channels": [{"channel": target["name"], "sent": False, "error": str(e)}]}
+        else:
+            # channel not found — fallback to all with warning
+            print(f"[notify] warn: channel '{channel}' not found, falling back to all")
+            text = f"[warn: '{channel}' channel not loaded, broadcasting]\n{text}"
+
     results = []
     for h in handlers:
         try:
@@ -1895,6 +1918,7 @@ def create_job(job_data):
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "fired": False,
         "expires_at": job_data.get("expires_at"),
+        "notify_channel": job_data.get("notify_channel"),
     }
     if job_data.get("env"):
         job["env"] = job_data["env"]
@@ -1932,7 +1956,8 @@ def update_job(job_id, updates):
     # allowed fields to update
     allowed = {"name", "command", "text", "cron", "fire_at", "recurring_seconds",
                "timeout_seconds", "enabled", "notify", "notify_on_error_only",
-               "model", "provider", "env", "working_dir", "expires_at"}
+               "model", "provider", "env", "working_dir", "expires_at",
+               "notify_channel"}
     with _jobs_lock:
         for key, val in updates.items():
             if key in allowed:
@@ -2195,7 +2220,7 @@ def _run_script(job):
         if not error_only or status != "ok":
             prefix = {"ok": "", "error": "[ERROR] ", "timeout": "[TIMEOUT] "}.get(status, "")
             msg = f"[{job_name}] {prefix}{full_output}"
-            notify_all(msg)
+            notify_all(msg, channel=job.get("notify_channel"))
 
     print(f"[jobs] {job_name}: {status} ({len(full_output)} chars)")
     return status, full_output
@@ -2207,7 +2232,7 @@ def _fire_reminder(job):
     emoji = "\U0001f501" if job.get("recurring_seconds") else "\U0001f514"
     msg = f"{emoji} Reminder: {text}"
     try:
-        result = notify_all(msg)
+        result = notify_all(msg, channel=job.get("notify_channel"))
         if result.get("sent"):
             print(f"[jobs] fired reminder: '{text}'")
             return "ok", msg

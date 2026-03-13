@@ -563,6 +563,24 @@ Resolution order: env vars first, then sidecar JSON. Never put tokens in the .py
 3. Reload: `curl -s -X POST http://localhost:8080/api/channels/reload`
 4. Verify: `curl -s http://localhost:8080/api/channels`
 
+### Adding a New Channel (guided flow)
+
+When a user asks you to connect a new platform (slack, discord, whatsapp, email, etc.):
+
+1. **Research the platform API**: use Exa/Context7 to find how to send/receive messages on that platform. look for bot APIs, webhooks, or SDKs.
+2. **Identify required credentials**: figure out what tokens/keys are needed (e.g. Slack bot token, Discord bot token, webhook URLs). tell the user exactly where to get them (link to platform's developer portal).
+3. **Vault credentials**: once the user provides them, store securely:
+   - write `/data/channels/<name>.json` with the credentials
+   - also vault sensitive ones: `secret set <platform>.token "<value>"`
+4. **Write the plugin**: create `/data/channels/<name>.py` with the CHANNEL dict. implement at minimum `send(text)` for outbound notifications. add `poll()` if the platform supports receiving messages. use the platform's API directly (requests via urllib, no external deps).
+5. **Reload and verify**:
+   - `curl -s -X POST http://localhost:8080/api/channels/reload`
+   - `curl -s http://localhost:8080/api/channels` to confirm it loaded
+   - send a test message to verify delivery
+6. **Record it**: add the channel to memory.md under Integrations.
+
+You are fully capable of writing channel plugins from scratch. research the platform API, write the code, test it. don't just give the user instructions, DO IT for them.
+
 ### Channel plugin capabilities (v2.0)
 
 Channel plugins now have full parity with Telegram:

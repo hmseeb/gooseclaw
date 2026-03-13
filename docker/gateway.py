@@ -1894,6 +1894,7 @@ def create_job(job_data):
         "currently_running": False,
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "fired": False,
+        "expires_at": job_data.get("expires_at"),
     }
     if job_data.get("env"):
         job["env"] = job_data["env"]
@@ -1931,7 +1932,7 @@ def update_job(job_id, updates):
     # allowed fields to update
     allowed = {"name", "command", "text", "cron", "fire_at", "recurring_seconds",
                "timeout_seconds", "enabled", "notify", "notify_on_error_only",
-               "model", "provider", "env", "working_dir"}
+               "model", "provider", "env", "working_dir", "expires_at"}
     with _jobs_lock:
         for key, val in updates.items():
             if key in allowed:
@@ -2236,6 +2237,17 @@ def _job_engine_loop():
             running_count = sum(1 for j in jobs_snapshot if j.get("currently_running"))
 
             for job in jobs_snapshot:
+                # check expiry -- treat expired jobs like fired one-shots
+                exp = job.get("expires_at")
+                if exp and exp <= now:
+                    if not job.get("fired"):
+                        job["fired"] = True
+                        job["last_status"] = "expired"
+                        job["last_run"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                        save_needed = True
+                        print(f"[jobs] expired: {job.get('name', job.get('id', '?'))}")
+                    continue
+
                 if not job.get("enabled", True):
                     continue
                 if job.get("fired"):
@@ -5596,6 +5608,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
           enabled: bool (default: true)
           notify: bool (default: true)
           notify_on_error_only: bool (default: false)
+          expires_at: float — unix timestamp after which the job auto-expires (optional)
 
         Must provide a schedule: cron, delay_seconds, fire_at, or recurring_seconds.
         """
@@ -5635,6 +5648,19 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                     data["fire_at"] = fire_at
                 except (ValueError, TypeError):
                     self.send_json(400, {"error": "fire_at must be a unix timestamp"})
+                    return
+
+            # validate expires_at if provided
+            expires_at = data.get("expires_at")
+            if expires_at is not None:
+                try:
+                    expires_at = float(expires_at)
+                    if expires_at <= time.time():
+                        self.send_json(400, {"error": "expires_at must be in the future"})
+                        return
+                    data["expires_at"] = expires_at
+                except (ValueError, TypeError):
+                    self.send_json(400, {"error": "expires_at must be a unix timestamp"})
                     return
 
             # validate recurring_seconds
@@ -5694,6 +5720,9 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                 if job.get("fire_at"):
                     response["fires_in_seconds"] = round(job["fire_at"] - time.time())
                     response["fires_at_human"] = time.strftime("%Y-%m-%d %H:%M:%S %Z", time.localtime(job["fire_at"]))
+                if job.get("expires_at"):
+                    response["expires_in_seconds"] = round(job["expires_at"] - time.time())
+                    response["expires_at_human"] = time.strftime("%Y-%m-%d %H:%M:%S %Z", time.localtime(job["expires_at"]))
                 self.send_json(201, response)
         except json.JSONDecodeError:
             self.send_json(400, {"error": "invalid JSON"})
@@ -5714,6 +5743,9 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                 j["fires_at_human"] = time.strftime("%Y-%m-%d %H:%M:%S %Z", time.localtime(j["fire_at"]))
             if j.get("cron"):
                 j["cron_human"] = humanize_cron(j["cron"])
+            if j.get("expires_at"):
+                j["expires_in_seconds"] = round(j["expires_at"] - now)
+                j["expires_at_human"] = time.strftime("%Y-%m-%d %H:%M:%S %Z", time.localtime(j["expires_at"]))
         self.send_json(200, {"jobs": active, "count": len(active)})
 
     def handle_delete_job(self, job_id):

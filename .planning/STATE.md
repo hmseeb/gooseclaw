@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-03-13)
 
 **Core value:** A user with zero DevOps knowledge can deploy and configure GooseClaw correctly on the first try
-**Current focus:** Phase 8 - Notification Channel Targeting
+**Current focus:** Phase 9 - Multi-Bot Core
 
 ## Current Position
 
-Phase: 8 of 10 (Notification Channel Targeting)
-Plan: 1 of 1 in current phase
-Status: Phase 8 Complete
-Last activity: 2026-03-13 -- Completed 08-01 Wire channel targeting through API, cron, and remind.sh
+Phase: 9 of 10 (Multi-Bot Core)
+Plan: 2 of 3 in current phase
+Status: In Progress
+Last activity: 2026-03-13 -- Completed 09-01 BotInstance + BotManager classes with config resolution
 
-Progress: [========--] 80% (8/10 phases complete)
+Progress: [=========-] 85% (8.3/10 phases complete)
 
 ## Performance Metrics
 
@@ -39,6 +39,7 @@ Progress: [========--] 80% (8/10 phases complete)
 | Phase 07 P02 | 3min | 2 tasks | 2 files |
 | Phase 07 P03 | 5min | 2 tasks | 2 files |
 | Phase 08 P01 | 3min | 2 tasks | 3 files |
+| Phase 09 P01 | 4min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -63,6 +64,9 @@ Recent decisions affecting current work:
 - [Phase 07]: Typing indicator loop fires callback every 4s during relay, stops in finally block
 - [Phase 07]: Custom commands registered on global _command_router with conflict detection (built-in wins)
 - [Phase 07]: _get_valid_channels() replaces all hardcoded valid_channels tuples dynamically
+- [Phase 09]: BotInstance uses channel_key "telegram:<name>" by default, "telegram" for default bot (zero migration)
+- [Phase 09]: BotManager returns existing bot on duplicate name (idempotent), raises ValueError on duplicate token
+- [Phase 09]: _resolve_bot_configs falls back: bots array > telegram_bot_token > TELEGRAM_BOT_TOKEN env > empty
 
 ### Pending Todos
 
@@ -86,5 +90,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-03-13
-Stopped at: Completed 08-01-PLAN.md (Wire channel targeting through API, cron, and remind.sh) -- Phase 8 complete
+Stopped at: Completed 09-01-PLAN.md (BotInstance + BotManager classes with config resolution)
 Resume file: None

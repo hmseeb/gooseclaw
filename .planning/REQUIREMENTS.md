@@ -1,149 +1,90 @@
-# Requirements: GooseClaw Setup Wizard v2
+# Requirements: GooseClaw v2.0
 
-**Defined:** 2026-03-10
+**Defined:** 2026-03-13
 **Core Value:** A user with zero DevOps knowledge can deploy and configure GooseClaw correctly on the first try
 
-## v1 Requirements
+## v2.0 Requirements
 
-### Provider Support
+### Channel Parity
 
-- [x] **PROV-01**: Wizard offers 15+ providers organized into categories (Cloud API, Subscription, Local, Custom)
-- [x] **PROV-02**: Each provider card shows name, description, pricing hint, and "get API key" link
-- [x] **PROV-03**: New providers added: mistral, xai, deepseek, together, cerebras, perplexity, ollama, azure-openai
-- [x] **PROV-04**: Each provider has correct env var mapping in gateway.py and entrypoint.sh
-- [x] **PROV-05**: Each provider has a sensible default model
-- [x] **PROV-06**: Each provider has a working validation endpoint
+- [ ] **CHAN-01**: Channel plugins receive /help, /stop, /clear, /compact commands identical to telegram
+- [ ] **CHAN-02**: Channel plugins have per-user relay locks preventing concurrent goose requests from same user
+- [ ] **CHAN-03**: Channel plugins can cancel in-flight requests via /stop (active relay tracking + socket close)
+- [ ] **CHAN-04**: Channel plugins can register custom commands via CHANNEL dict `commands` field
+- [ ] **CHAN-05**: Notification bus validates channel names dynamically from loaded plugins, not hardcoded list
+- [ ] **CHAN-06**: Channel plugins can signal typing/activity indicators via optional `typing` callback in CHANNEL dict
+- [ ] **CHAN-07**: POST /api/notify accepts optional `channel` parameter for targeted delivery
+- [ ] **CHAN-08**: Cron scheduler passes `notify_channel` to notify_all when job specifies it
+- [ ] **CHAN-09**: remind.sh accepts --notify-channel flag matching job.sh behavior
 
-### Credential Validation
+### Multi-Bot
 
-- [x] **CRED-01**: API key field rejects empty input before save
-- [x] **CRED-02**: API key format is validated per provider (prefix check, length check)
-- [x] **CRED-03**: "Test" button is mandatory or strongly gated (save disabled until tested or explicitly skipped)
-- [x] **CRED-04**: Validation errors show specific messages (not just "invalid key")
-- [x] **CRED-05**: Claude-code shows clear instructions since remote validation is impossible
+- [ ] **BOT-01**: User can configure multiple telegram bots in setup.json `bots` array with name, token, and optional provider/model
+- [ ] **BOT-02**: Each telegram bot runs its own poll loop with independent session store and pair codes
+- [ ] **BOT-03**: Each bot has per-user session locks and active relay tracking (not shared across bots)
+- [ ] **BOT-04**: Each bot routes to its own LLM provider/model via extended channel_routes keyed by bot name
+- [ ] **BOT-05**: User can add a new bot via API without container restart (hot-add)
+- [ ] **BOT-06**: User can remove a bot via API without container restart (hot-remove)
+- [ ] **BOT-07**: Existing single-bot `telegram_bot_token` config remains backward-compatible as default bot
 
-### Model Selection
+### Infrastructure
 
-- [x] **MODL-01**: Each provider shows its recommended default model prominently
-- [x] **MODL-02**: Model field uses datalist/suggestions with valid models per provider
-- [x] **MODL-03**: Ollama shows note that models must be pre-pulled locally
-- [x] **MODL-04**: OpenRouter shows note about multi-model routing
+- [ ] **INFRA-01**: SessionManager class with composite key (channel:user_id) replaces per-channel session dicts
+- [ ] **INFRA-02**: CommandRouter class dispatches /help /stop /clear /compact to shared handlers
+- [ ] **INFRA-03**: Telegram globals (_telegram_sessions, _telegram_active_relays, _telegram_chat_locks) refactored into per-instance state
+- [ ] **INFRA-04**: /clear scoped to requesting channel's sessions only, not global goose web restart (or documented limitation)
 
-### Gateway Resilience
+## v3.0 Requirements
 
-- [x] **GATE-01**: Health check thread monitors goose web process and auto-restarts on crash
-- [x] **GATE-02**: Auto-restart uses exponential backoff (not infinite fast loop)
-- [x] **GATE-03**: Web UI shows actual error message when goose web fails (not "refresh in a few seconds")
-- [x] **GATE-04**: goose web stderr is captured and available for debugging
-- [x] **GATE-05**: Gateway proxy returns goose web error details to the browser
+### Deferred
 
-### Env Var Rehydration
-
-- [x] **ENV-01**: entrypoint.sh reads ALL provider env vars from setup.json on restart (not just 5)
-- [x] **ENV-02**: gateway.py calls apply_config on startup when setup.json exists
-- [x] **ENV-03**: All new providers (mistral, xai, deepseek, etc.) are in env_map in both files
-- [x] **ENV-04**: PATH includes ~/.local/bin for claude CLI
-
-### UX Flow
-
-- [x] **UX-01**: Step 0 shows providers in categorized grid (Cloud API / Subscription / Local / Custom)
-- [x] **UX-02**: Step 1 shows credentials with inline help link and format hints
-- [x] **UX-03**: Step 2 shows model selection with smart defaults and suggestions
-- [x] **UX-04**: Step 3 shows optional settings (telegram, timezone, auth token)
-- [x] **UX-05**: Step 4 shows confirmation summary of what was configured
-- [x] **UX-06**: After save, shows real-time startup status (checking config, starting goose, ready/error)
-- [x] **UX-07**: Reconfigure pre-fills form with existing values (secrets masked)
-
-### Telegram
-
-- [x] **TG-01**: Wizard shows BotFather instructions for creating a bot
-- [x] **TG-02**: Telegram token format is validated (digits:alphanumeric)
-- [x] **TG-03**: Pairing code is shown in the web UI after setup completes (not just logs)
-
-### Advanced Settings
-
-- [x] **ADV-01**: Optional "Advanced" toggle reveals lead/worker multi-model settings
-- [x] **ADV-02**: Lead provider, model, and turn count configurable
-- [x] **ADV-03**: Advanced settings write to config.yaml correctly (GOOSE_LEAD_PROVIDER, etc.)
-
-### Auth Recovery
-
-- [x] **AUTH-01**: If user is locked out (lost auth token), there's a recovery path
-- [x] **AUTH-02**: Recovery mechanism works without SSH access to container
-
-## v2 Requirements
-
-### Provider Profiles
-- **PROF-01**: Save multiple provider configurations
-- **PROF-02**: Quick-switch between saved profiles
-
-### OAuth Flows
-- **OATH-01**: OpenRouter OAuth device flow
-- **OATH-02**: GitHub Copilot device flow authentication
-
-### Extensions
-- **EXT-01**: Enable/disable goose extensions from wizard
-- **EXT-02**: Add custom MCP servers from wizard
+- **CROSS-01**: Cross-channel session continuity (same goose session across telegram + discord)
+- **CROSS-02**: Unified user identity layer mapping platform IDs to GooseClaw user
+- **PERF-01**: Webhook mode for telegram bots (polling fine for 1-5 bots)
+- **PERS-01**: Per-bot personality/system prompt (each bot gets its own soul.md)
+- **COMM-01**: Reference channel plugins for Discord, Slack, WhatsApp
 
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
-| Mobile-responsive wizard | Railway dashboard is desktop, users configure from desktop |
-| Custom extension management | goose web handles this natively |
-| Full planner/subagent multi-model UI | Too complex, lead/worker covers 90% of multi-model use cases |
-| Automatic model discovery from API | Adds latency to wizard load, static suggestions are good enough |
-| Provider cost calculator | Nice to have but not core to configuration |
+| Cross-channel message bridging | GooseClaw is an AI gateway, not a chat bridge. Use Matterbridge for that. |
+| Platform-specific rich UI abstraction | Unified "rich message" format is a rabbit hole. Plugins handle their own formatting in send(). |
+| OAuth/SSO for channels | Too complex per-platform. Stick with API tokens and pairing codes. |
+| Per-message provider switching | Goose sessions are tied to a provider. Switching mid-session breaks context. |
+| Auto-downloading plugins from registry | Massive attack surface. Manual .py file drops only. |
+| Multiple goose web processes | Single process, sessions provide isolation. |
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| PROV-01 | Phase 1 | Complete |
-| PROV-02 | Phase 1 | Complete |
-| PROV-03 | Phase 1 | Complete |
-| PROV-04 | Phase 2 | Complete |
-| PROV-05 | Phase 2 | Complete |
-| PROV-06 | Phase 2 | Complete |
-| CRED-01 | Phase 2 | Complete |
-| CRED-02 | Phase 2 | Complete |
-| CRED-03 | Phase 2 | Complete |
-| CRED-04 | Phase 2 | Complete |
-| CRED-05 | Phase 2 | Complete |
-| MODL-01 | Phase 1 | Complete |
-| MODL-02 | Phase 1 | Complete |
-| MODL-03 | Phase 1 | Complete |
-| MODL-04 | Phase 1 | Complete |
-| GATE-01 | Phase 3 | Complete |
-| GATE-02 | Phase 3 | Complete |
-| GATE-03 | Phase 3 | Complete |
-| GATE-04 | Phase 3 | Complete |
-| GATE-05 | Phase 3 | Complete |
-| ENV-01 | Phase 2 | Complete |
-| ENV-02 | Phase 2 | Complete |
-| ENV-03 | Phase 2 | Complete |
-| ENV-04 | Phase 2 | Complete |
-| UX-01 | Phase 1 | Complete |
-| UX-02 | Phase 1 | Complete |
-| UX-03 | Phase 1 | Complete |
-| UX-04 | Phase 1 | Complete |
-| UX-05 | Phase 1 | Complete |
-| UX-06 | Phase 3 | Complete |
-| UX-07 | Phase 2 | Complete |
-| TG-01 | Phase 1 | Complete |
-| TG-02 | Phase 2 | Complete |
-| TG-03 | Phase 3 | Complete |
-| ADV-01 | Phase 4 | Complete |
-| ADV-02 | Phase 4 | Complete |
-| ADV-03 | Phase 4 | Complete |
-| AUTH-01 | Phase 3 | Complete |
-| AUTH-02 | Phase 3 | Complete |
+| CHAN-01 | — | Pending |
+| CHAN-02 | — | Pending |
+| CHAN-03 | — | Pending |
+| CHAN-04 | — | Pending |
+| CHAN-05 | — | Pending |
+| CHAN-06 | — | Pending |
+| CHAN-07 | — | Pending |
+| CHAN-08 | — | Pending |
+| CHAN-09 | — | Pending |
+| BOT-01 | — | Pending |
+| BOT-02 | — | Pending |
+| BOT-03 | — | Pending |
+| BOT-04 | — | Pending |
+| BOT-05 | — | Pending |
+| BOT-06 | — | Pending |
+| BOT-07 | — | Pending |
+| INFRA-01 | — | Pending |
+| INFRA-02 | — | Pending |
+| INFRA-03 | — | Pending |
+| INFRA-04 | — | Pending |
 
 **Coverage:**
-- v1 requirements: 39 total
-- Mapped to phases: 39
-- Unmapped: 0
+- v2.0 requirements: 20 total
+- Mapped to phases: 0
+- Unmapped: 20
 
 ---
-*Requirements defined: 2026-03-10*
-*Last updated: 2026-03-10 after roadmap creation*
+*Requirements defined: 2026-03-13*
+*Last updated: 2026-03-13 after initial definition*

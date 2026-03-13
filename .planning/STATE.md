@@ -9,13 +9,13 @@ See: .planning/PROJECT.md (updated 2026-03-13)
 
 ## Current Position
 
-Phase: 14 of 15 (in progress)
-Plan: 1 of 2 (done)
-Status: Phase 14 Plan 01 complete, outbound media helpers and TelegramOutboundAdapter implemented
-Last activity: 2026-03-13 -- Phase 14 Plan 01 executed: TelegramOutboundAdapter, _build_multipart, _route_media_blocks, 437 tests passing
+Phase: 14 of 15 (complete)
+Plan: 2 of 2 (done)
+Status: Phase 14 complete, full outbound media pipeline wired end-to-end
+Last activity: 2026-03-13 -- Phase 14 Plan 02 executed: media routing wired into BotInstance, ChannelRelay, legacy poll, notify_all. 447 tests passing.
 
 Progress v2.0: [==========] 100% (10/10 phases complete, shipped)
-Progress v3.0: [=======...] 70% (3.5/5 phases in progress)
+Progress v3.0: [========..] 80% (4/5 phases complete)
 
 ## Performance Metrics
 
@@ -51,6 +51,7 @@ Progress v3.0: [=======...] 70% (3.5/5 phases in progress)
 | Phase 13 P01 | 3min | 2 tasks | 2 files |
 | Phase 13 P02 | 12min | 2 tasks | 2 files |
 | Phase 14 P01 | 4min | 2 tasks | 2 files |
+| Phase 14 P02 | 14min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -107,6 +108,9 @@ Recent decisions affecting current work:
 - [Phase 13]: WS relay code fully removed (~280 lines), REST /reply + SSE is the sole relay path
 - [Phase 13]: content_blocks from InboundMessage media flow through BotInstance, ChannelRelay, and legacy poll loop
 - [Phase 14]: Multipart boundary uses uuid.uuid4().hex, caption truncated to 1024 in _send_media, images >10MB route to send_file
+- [Phase 14]: OutboundAdapter base class send_image/send_voice/send_file accept **kwargs for subclass signature compat
+- [Phase 14]: notify_all uses try/except TypeError for backward-compat media kwarg passing to old handlers
+- [Phase 14]: Media routing placed after text delivery in all relay paths, own try/except prevents media errors from crashing text delivery
 
 ### Pending Todos
 
@@ -134,5 +138,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-03-13
-Stopped at: Completed 14-01-PLAN.md (outbound media helpers). 437 tests passing. TelegramOutboundAdapter, _build_multipart, _route_media_blocks ready for wiring in Plan 02.
+Stopped at: Completed 14-02-PLAN.md (media routing wiring). 447 tests passing. Full outbound media pipeline done. Phase 14 complete.
 Resume file: None

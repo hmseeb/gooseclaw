@@ -63,8 +63,8 @@
 
 #### Outbound Rich Media
 
-- **MEDIA-13**: Telegram adapter implements send_image (sendPhoto), send_voice (sendVoice), send_file (sendDocument)
-- **MEDIA-14**: notify_all supports media attachments alongside text
+- [x] **MEDIA-13**: Telegram adapter implements send_image (sendPhoto), send_voice (sendVoice), send_file (sendDocument)
+- [x] **MEDIA-14**: notify_all supports media attachments alongside text
 
 #### Reference Plugin
 
@@ -136,7 +136,7 @@
 | MEDIA-11 | Phase 13 | Complete |
 | MEDIA-12 | Phase 13 | Complete |
 | MEDIA-13 | Phase 14 | Complete |
-| MEDIA-14 | Phase 14 | Pending |
+| MEDIA-14 | Phase 14 | Complete |
 | MEDIA-15 | Phase 15 | Pending |
 | MEDIA-16 | Phase 15 | Pending |
 

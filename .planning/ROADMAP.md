@@ -116,7 +116,7 @@ Plans:
 - [x] **Phase 11: Channel Contract v2** - Define InboundMessage envelope, OutboundAdapter interface, ChannelCapabilities. Refactor existing send(text) to send_text() with backward compatibility. (completed 2026-03-13)
 - [x] **Phase 12: Inbound Media Pipeline** - Download + normalize incoming media from Telegram (getFile API). MediaContent class. Base64 encoding for images. Replace MEDIA_REPLY with actual processing. (completed 2026-03-13)
 - [x] **Phase 13: Relay Protocol Upgrade** - Switch from custom WS text-only to goosed REST /reply with multimodal content blocks. Parse typed content blocks in responses. (completed 2026-03-13)
-- [ ] **Phase 14: Outbound Rich Media** - Implement send_image, send_voice, send_file on Telegram adapter. Graceful degradation. Media-aware notify_all.
+- [x] **Phase 14: Outbound Rich Media** - Implement send_image, send_voice, send_file on Telegram adapter. Graceful degradation. Media-aware notify_all. (completed 2026-03-13)
 - [ ] **Phase 15: Reference Channel Plugin** - Build Slack or Discord plugin with full rich media using the v2 contract. Validates the abstraction.
 
 ## Phase Details (v3.0)
@@ -170,7 +170,7 @@ Plans:
   2. Agent-generated media (from goose tools or TTS) routes through the correct send method
   3. notify_all supports optional media attachment alongside text
   4. Channels without media support get graceful text fallback (not errors)
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 ### Phase 15: Reference Channel Plugin
 **Goal**: A non-Telegram channel plugin (Slack or Discord) ships with full rich media support, validating the v2 contract
@@ -209,5 +209,5 @@ Phase 15 (reference plugin) depends on Phase 14 (outbound media).
 | 11. Channel Contract v2 | 2/2 | Complete   | 2026-03-13 | - |
 | 12. Inbound Media Pipeline | v3.0 | 2/2 | Complete | 2026-03-13 |
 | 13. Relay Protocol Upgrade | 2/2 | Complete   | 2026-03-13 | - |
-| 14. Outbound Rich Media | 1/2 | In Progress|  | - |
+| 14. Outbound Rich Media | v3.0 | 2/2 | Complete | 2026-03-13 |
 | 15. Reference Channel Plugin | v3.0 | 0/? | Pending | - |

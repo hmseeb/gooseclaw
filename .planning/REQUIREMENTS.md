@@ -123,11 +123,11 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| MEDIA-01 | Phase 11 | Pending |
-| MEDIA-02 | Phase 11 | Pending |
-| MEDIA-03 | Phase 11 | Pending |
-| MEDIA-04 | Phase 11 | Pending |
-| MEDIA-05 | Phase 11 | Pending |
+| MEDIA-01 | Phase 11 | Complete |
+| MEDIA-02 | Phase 11 | Complete |
+| MEDIA-03 | Phase 11 | Complete |
+| MEDIA-04 | Phase 11 | Complete |
+| MEDIA-05 | Phase 11 | Complete |
 | MEDIA-06 | Phase 12 | Pending |
 | MEDIA-07 | Phase 12 | Pending |
 | MEDIA-08 | Phase 12 | Pending |

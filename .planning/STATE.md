@@ -9,13 +9,13 @@ See: .planning/PROJECT.md (updated 2026-03-13)
 
 ## Current Position
 
-Phase: 11 of 15 (next up)
-Plan: None yet (phase planning needed)
-Status: v3.0 milestone scoped, requirements defined, roadmap updated
-Last activity: 2026-03-13 -- v3.0 scoped with 5 phases, 16 requirements
+Phase: 11 of 15 (complete)
+Plan: 2 of 2 (done)
+Status: Phase 11 complete, v2 channel contract types + wiring shipped
+Last activity: 2026-03-13 -- Phase 11 executed: 4 types + wiring, 345 tests passing
 
 Progress v2.0: [==========] 100% (10/10 phases complete, shipped)
-Progress v3.0: [..........] 0% (0/5 phases complete)
+Progress v3.0: [==........] 20% (1/5 phases complete)
 
 ## Performance Metrics
 
@@ -44,6 +44,8 @@ Progress v3.0: [..........] 0% (0/5 phases complete)
 | Phase 09 P02 | 6min | 2 tasks | 2 files |
 | Phase 09 P03 | 5min | 2 tasks | 2 files |
 | Phase 10 P01 | 4min | 2 tasks | 2 files |
+| Phase 11 P01 | 3min | 2 tasks | 2 files |
+| Phase 11 P02 | 2min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -80,6 +82,13 @@ Recent decisions affecting current work:
 - [Phase 10]: POST /api/bots hot-adds bot with validation, start, and setup.json persistence
 - [Phase 10]: DELETE /api/bots/<name> hot-removes bot with stop, session clear, notification unregister, and setup.json persistence
 - [Phase 10]: BotManager.remove_bot() enhanced with full cleanup cascade (stop + sessions + notifications)
+- [Phase 11]: Plain classes (no dataclasses/ABC) for InboundMessage, OutboundAdapter, ChannelCapabilities (stdlib only)
+- [Phase 11]: Graceful degradation built into OutboundAdapter base class, not a separate dispatcher
+- [Phase 11]: LegacyOutboundAdapter wraps send(text) with single send_text override
+- [Phase 11]: ChannelRelay.__call__ uses isinstance(first_arg, InboundMessage) for dual-signature overload
+- [Phase 11]: _load_channel stores adapter in _loaded_channels, registers adapter.send_text for notifications
+- [Phase 11]: BotInstance._poll_loop creates InboundMessage envelopes, passes as inbound_msg kwarg to _do_message_relay
+- [Phase 11]: Media messages still get MEDIA_REPLY but InboundMessage envelope is created for future Phase 12 use
 
 ### Pending Todos
 
@@ -107,5 +116,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-03-13
-Stopped at: v3.0 milestone scoped. 312 tests passing. System prompt overhauled. 3 code fixes shipped (memory writer, media reply, onboarding extraction).
+Stopped at: Completed Phase 11 (Channel Contract v2). 345 tests passing. InboundMessage, OutboundAdapter, ChannelCapabilities, LegacyOutboundAdapter implemented and wired.
 Resume file: None

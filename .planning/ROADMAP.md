@@ -113,7 +113,7 @@ Plans:
 
 **Milestone Goal:** Make channels truly flexible for rich media. Images, voice, files flow seamlessly in both directions across any channel. The agent is channel-agnostic. Adding a new channel with full media support requires only implementing adapter methods.
 
-- [ ] **Phase 11: Channel Contract v2** - Define InboundMessage envelope, OutboundAdapter interface, ChannelCapabilities. Refactor existing send(text) to send_text() with backward compatibility.
+- [x] **Phase 11: Channel Contract v2** - Define InboundMessage envelope, OutboundAdapter interface, ChannelCapabilities. Refactor existing send(text) to send_text() with backward compatibility. (completed 2026-03-13)
 - [ ] **Phase 12: Inbound Media Pipeline** - Download + normalize incoming media from Telegram (getFile API). MediaContent class. Base64 encoding for images. Replace MEDIA_REPLY with actual processing.
 - [ ] **Phase 13: Relay Protocol Upgrade** - Switch from custom WS text-only to goosed REST /reply with multimodal content blocks. Parse typed content blocks in responses.
 - [ ] **Phase 14: Outbound Rich Media** - Implement send_image, send_voice, send_file on Telegram adapter. Graceful degradation. Media-aware notify_all.
@@ -131,7 +131,7 @@ Plans:
   3. ChannelCapabilities dict declares what each channel supports (images, voice, files, buttons, max sizes)
   4. If a channel doesn't implement send_image, sending an image gracefully falls back to text (URL or description)
   5. Existing channel plugins with only send(text) continue to work with zero changes
-**Plans:** TBD during phase planning
+**Plans:** 2/2 plans complete
 
 ### Phase 12: Inbound Media Pipeline
 **Goal**: Media messages from users (photos, voice, documents, videos) are downloaded, normalized into MediaContent, and prepared for relay to goose
@@ -202,7 +202,7 @@ Phase 15 (reference plugin) depends on Phase 14 (outbound media).
 | 8. Notification Channel Targeting | v2.0 | 1/1 | Complete | 2026-03-13 |
 | 9. Multi-Bot Core | v2.0 | 3/3 | Complete | 2026-03-13 |
 | 10. Multi-Bot Lifecycle | v2.0 | 1/1 | Complete | 2026-03-13 |
-| 11. Channel Contract v2 | v3.0 | 0/? | Pending | - |
+| 11. Channel Contract v2 | 2/2 | Complete   | 2026-03-13 | - |
 | 12. Inbound Media Pipeline | v3.0 | 0/? | Pending | - |
 | 13. Relay Protocol Upgrade | v3.0 | 0/? | Pending | - |
 | 14. Outbound Rich Media | v3.0 | 0/? | Pending | - |

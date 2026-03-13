@@ -790,12 +790,10 @@ class TestPrewarmSession(unittest.TestCase):
     """Tests for _prewarm_session() background session creation after /clear."""
 
     def setUp(self):
-        with gateway._telegram_sessions_lock:
-            gateway._telegram_sessions.clear()
+        gateway._session_manager._sessions.clear()
 
     def tearDown(self):
-        with gateway._telegram_sessions_lock:
-            gateway._telegram_sessions.clear()
+        gateway._session_manager._sessions.clear()
 
     @patch("gateway._create_goose_session", return_value="new_session_abc")
     @patch("gateway._save_telegram_sessions")
@@ -803,8 +801,7 @@ class TestPrewarmSession(unittest.TestCase):
         gateway._prewarm_session("chat_99")
         # give the background thread a moment
         time.sleep(0.1)
-        with gateway._telegram_sessions_lock:
-            sid = gateway._telegram_sessions.get("chat_99")
+        sid = gateway._session_manager.get("telegram", "chat_99")
         assert sid == "new_session_abc"
         mock_create.assert_called_once()
 
@@ -813,8 +810,7 @@ class TestPrewarmSession(unittest.TestCase):
     def test_no_session_stored_on_failure(self, _save, mock_create):
         gateway._prewarm_session("chat_99")
         time.sleep(0.1)
-        with gateway._telegram_sessions_lock:
-            sid = gateway._telegram_sessions.get("chat_99")
+        sid = gateway._session_manager.get("telegram", "chat_99")
         assert sid is None
 
     @patch("gateway._create_goose_session", return_value="new_session_xyz")
@@ -822,12 +818,10 @@ class TestPrewarmSession(unittest.TestCase):
     def test_does_not_overwrite_if_user_sent_message_first(self, _save, mock_create):
         """If user sends a message before prewarm finishes, don't clobber."""
         # simulate: user message arrived and created session already
-        with gateway._telegram_sessions_lock:
-            gateway._telegram_sessions["chat_99"] = "user_initiated_session"
+        gateway._session_manager.set("telegram", "chat_99", "user_initiated_session")
         gateway._prewarm_session("chat_99")
         time.sleep(0.1)
-        with gateway._telegram_sessions_lock:
-            sid = gateway._telegram_sessions.get("chat_99")
+        sid = gateway._session_manager.get("telegram", "chat_99")
         assert sid == "user_initiated_session"
 
     @patch("gateway._create_goose_session", return_value="prewarmed_session")
@@ -848,43 +842,41 @@ class TestClearKillsRelay(unittest.TestCase):
     otherwise the old relay holds the chat lock and user gets 'Still thinking...'"""
 
     def setUp(self):
-        gateway._telegram_active_relays.clear()
-        with gateway._telegram_sessions_lock:
-            gateway._telegram_sessions.clear()
+        gateway._telegram_state._active_relays.clear()
+        gateway._session_manager._sessions.clear()
+
+    def tearDown(self):
+        gateway._telegram_state._active_relays.clear()
+        gateway._session_manager._sessions.clear()
 
     def test_clear_pops_active_relay(self):
         """_clear_chat should remove active relay entry for the chat."""
         mock_sock = MagicMock()
-        gateway._telegram_active_relays["chat_1"] = [mock_sock]
-        with gateway._telegram_sessions_lock:
-            gateway._telegram_sessions["chat_1"] = "old_session"
+        gateway._telegram_state.set_active_relay("chat_1", [mock_sock])
+        gateway._session_manager.set("telegram", "chat_1", "old_session")
         gateway._clear_chat("chat_1")
-        self.assertNotIn("chat_1", gateway._telegram_active_relays)
+        self.assertIsNone(gateway._telegram_state.pop_active_relay("chat_1"))
 
     def test_clear_closes_socket(self):
         """_clear_chat should close the active relay websocket."""
         mock_sock = MagicMock()
-        gateway._telegram_active_relays["chat_1"] = [mock_sock]
-        with gateway._telegram_sessions_lock:
-            gateway._telegram_sessions["chat_1"] = "old_session"
+        gateway._telegram_state.set_active_relay("chat_1", [mock_sock])
+        gateway._session_manager.set("telegram", "chat_1", "old_session")
         gateway._clear_chat("chat_1")
         mock_sock.close.assert_called_once()
 
     def test_clear_removes_session(self):
-        """_clear_chat should remove the session from _telegram_sessions."""
-        with gateway._telegram_sessions_lock:
-            gateway._telegram_sessions["chat_1"] = "old_session"
+        """_clear_chat should remove the session from _session_manager."""
+        gateway._session_manager.set("telegram", "chat_1", "old_session")
         gateway._clear_chat("chat_1")
-        with gateway._telegram_sessions_lock:
-            self.assertNotIn("chat_1", gateway._telegram_sessions)
+        self.assertIsNone(gateway._session_manager.get("telegram", "chat_1"))
 
-    @patch("gateway._save_telegram_sessions")
-    def test_clear_saves_sessions(self, mock_save):
-        """_clear_chat should persist the session removal."""
-        with gateway._telegram_sessions_lock:
-            gateway._telegram_sessions["chat_1"] = "old_session"
-        gateway._clear_chat("chat_1")
-        mock_save.assert_called_once()
+    def test_clear_saves_sessions(self):
+        """_clear_chat should persist the session removal via _session_manager."""
+        gateway._session_manager.set("telegram", "chat_1", "old_session")
+        with patch.object(gateway._session_manager, '_save') as mock_save:
+            gateway._clear_chat("chat_1")
+            mock_save.assert_called()
 
 
 # ── cancelled flag on relay ───────────────────────────────────────────────────
@@ -911,9 +903,12 @@ class TestPrewarmCoordination(unittest.TestCase):
     of creating a duplicate session."""
 
     def setUp(self):
-        with gateway._telegram_sessions_lock:
-            gateway._telegram_sessions.clear()
-        gateway._prewarm_events.clear()
+        gateway._session_manager._sessions.clear()
+        gateway._telegram_state._prewarm_events.clear()
+
+    def tearDown(self):
+        gateway._session_manager._sessions.clear()
+        gateway._telegram_state._prewarm_events.clear()
 
     @patch("gateway._create_goose_session", return_value="prewarmed_sid")
     @patch("gateway._save_telegram_sessions")
@@ -921,12 +916,11 @@ class TestPrewarmCoordination(unittest.TestCase):
         """If prewarm is in progress, _get_session_id should wait and use it."""
         # Simulate prewarm starting
         evt = threading.Event()
-        gateway._prewarm_events["chat_1"] = evt
+        gateway._telegram_state._prewarm_events["chat_1"] = evt
 
         def finish_prewarm():
             time.sleep(0.1)
-            with gateway._telegram_sessions_lock:
-                gateway._telegram_sessions["chat_1"] = "prewarmed_sid"
+            gateway._session_manager.set("telegram", "chat_1", "prewarmed_sid")
             evt.set()
 
         threading.Thread(target=finish_prewarm, daemon=True).start()
@@ -1214,6 +1208,77 @@ class TestChannelState(unittest.TestCase):
     def test_kill_relay_nonexistent_returns_none(self):
         cs = gateway.ChannelState()
         assert cs.kill_relay("nonexistent") is None
+
+
+# ── /clear scoping (INFRA-04) ────────────────────────────────────────────────
+
+class TestClearChatScoped(unittest.TestCase):
+    """INFRA-04: /clear should only remove the requesting user's session."""
+
+    def setUp(self):
+        gateway._session_manager._sessions.clear()
+        gateway._telegram_state._active_relays.clear()
+
+    def tearDown(self):
+        gateway._session_manager._sessions.clear()
+
+    def test_clear_only_removes_requesting_user(self):
+        """After user A clears, user B's session should still exist."""
+        gateway._session_manager.set("telegram", "chat_A", "session_A")
+        gateway._session_manager.set("telegram", "chat_B", "session_B")
+        gateway._clear_chat("chat_A")
+        self.assertIsNone(gateway._session_manager.get("telegram", "chat_A"))
+        self.assertEqual(gateway._session_manager.get("telegram", "chat_B"), "session_B")
+
+    def test_clear_preserves_other_channels(self):
+        """Clearing a telegram session should not affect other channels."""
+        gateway._session_manager.set("telegram", "chat_1", "tg_session")
+        gateway._session_manager.set("discord", "user_1", "discord_session")
+        gateway._clear_chat("chat_1")
+        self.assertIsNone(gateway._session_manager.get("telegram", "chat_1"))
+        self.assertEqual(gateway._session_manager.get("discord", "user_1"), "discord_session")
+
+    def test_clear_returns_old_session(self):
+        """_clear_chat should return the removed session_id."""
+        gateway._session_manager.set("telegram", "chat_1", "old_sid")
+        result = gateway._clear_chat("chat_1")
+        self.assertEqual(result, "old_sid")
+
+    def test_clear_returns_none_if_no_session(self):
+        """_clear_chat on nonexistent chat returns None."""
+        result = gateway._clear_chat("nonexistent")
+        self.assertIsNone(result)
+
+
+# ── no telegram globals (INFRA-03) ──────────────────────────────────────────
+
+class TestNoTelegramGlobals(unittest.TestCase):
+    """INFRA-03: Telegram globals should no longer exist as module-level dicts."""
+
+    def test_no_telegram_sessions_dict(self):
+        """_telegram_sessions dict should not exist at module level."""
+        self.assertFalse(hasattr(gateway, '_telegram_sessions'),
+            "_telegram_sessions should be removed -- use _session_manager instead")
+
+    def test_no_telegram_active_relays_dict(self):
+        self.assertFalse(hasattr(gateway, '_telegram_active_relays'),
+            "_telegram_active_relays should be removed -- use _telegram_state instead")
+
+    def test_no_telegram_chat_locks_dict(self):
+        self.assertFalse(hasattr(gateway, '_telegram_chat_locks'),
+            "_telegram_chat_locks should be removed -- use _telegram_state instead")
+
+    def test_session_manager_exists(self):
+        self.assertTrue(hasattr(gateway, '_session_manager'))
+        self.assertIsInstance(gateway._session_manager, gateway.SessionManager)
+
+    def test_telegram_state_exists(self):
+        self.assertTrue(hasattr(gateway, '_telegram_state'))
+        self.assertIsInstance(gateway._telegram_state, gateway.ChannelState)
+
+    def test_command_router_exists(self):
+        self.assertTrue(hasattr(gateway, '_command_router'))
+        self.assertIsInstance(gateway._command_router, gateway.CommandRouter)
 
 
 if __name__ == "__main__":

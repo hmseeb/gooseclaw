@@ -2522,11 +2522,21 @@ class TestBotPollLoop(unittest.TestCase):
 class TestBotStartStop(unittest.TestCase):
     """Tests for BotInstance.start() and stop() lifecycle."""
 
+    def _make_bot(self):
+        """Create a bot with _poll_loop mocked out so no real network calls happen."""
+        bot = gateway.BotInstance("test", "tok")
+        # replace _poll_loop with a simple loop that exits when running=False
+        def _fake_poll_loop():
+            while bot.running:
+                time.sleep(0.01)
+        bot._poll_loop = _fake_poll_loop
+        return bot
+
     @patch("gateway.urllib.request.urlopen")
     @patch.object(gateway._session_manager, "load")
     @patch("gateway.register_notification_handler")
     def test_start_sets_running(self, mock_reg, mock_load, mock_url):
-        bot = gateway.BotInstance("test", "tok")
+        bot = self._make_bot()
         bot.start()
         self.assertTrue(bot.running)
         bot.stop()
@@ -2535,7 +2545,7 @@ class TestBotStartStop(unittest.TestCase):
     @patch.object(gateway._session_manager, "load")
     @patch("gateway.register_notification_handler")
     def test_start_generates_pair_code(self, mock_reg, mock_load, mock_url):
-        bot = gateway.BotInstance("test", "tok")
+        bot = self._make_bot()
         bot.start()
         self.assertIsNotNone(bot.pair_code)
         bot.stop()
@@ -2544,7 +2554,7 @@ class TestBotStartStop(unittest.TestCase):
     @patch("gateway.register_notification_handler")
     def test_start_loads_sessions(self, mock_reg, mock_url):
         with patch.object(gateway._session_manager, "load") as mock_load:
-            bot = gateway.BotInstance("test", "tok")
+            bot = self._make_bot()
             bot.start()
             mock_load.assert_called_with(bot.channel_key)
             bot.stop()
@@ -2553,7 +2563,7 @@ class TestBotStartStop(unittest.TestCase):
     @patch.object(gateway._session_manager, "load")
     def test_start_registers_notification(self, mock_load, mock_url):
         with patch("gateway.register_notification_handler") as mock_reg:
-            bot = gateway.BotInstance("test", "tok")
+            bot = self._make_bot()
             bot.start()
             mock_reg.assert_called_once()
             call_args = mock_reg.call_args
@@ -2564,7 +2574,7 @@ class TestBotStartStop(unittest.TestCase):
     @patch.object(gateway._session_manager, "load")
     @patch("gateway.register_notification_handler")
     def test_stop_sets_running_false(self, mock_reg, mock_load, mock_url):
-        bot = gateway.BotInstance("test", "tok")
+        bot = self._make_bot()
         bot.start()
         self.assertTrue(bot.running)
         bot.stop()
@@ -2574,7 +2584,7 @@ class TestBotStartStop(unittest.TestCase):
     @patch.object(gateway._session_manager, "load")
     @patch("gateway.register_notification_handler")
     def test_start_twice_noop(self, mock_reg, mock_load, mock_url):
-        bot = gateway.BotInstance("test", "tok")
+        bot = self._make_bot()
         bot.start()
         thread1 = bot._thread
         bot.start()
@@ -2600,6 +2610,9 @@ class TestBotNotification(unittest.TestCase):
     def test_default_bot_registers_as_telegram(self, mock_load, mock_url):
         """Default bot registers notification handler as 'telegram'."""
         bot = gateway.BotInstance("default", "tok", channel_key="telegram")
+        def _fake():
+            while bot.running: time.sleep(0.01)
+        bot._poll_loop = _fake
         with patch("gateway.register_notification_handler") as mock_reg:
             bot.start()
             mock_reg.assert_called_once()
@@ -2611,6 +2624,9 @@ class TestBotNotification(unittest.TestCase):
     def test_named_bot_registers_as_telegram_name(self, mock_load, mock_url):
         """Named bot registers notification handler as 'telegram:name'."""
         bot = gateway.BotInstance("research", "tok")
+        def _fake():
+            while bot.running: time.sleep(0.01)
+        bot._poll_loop = _fake
         with patch("gateway.register_notification_handler") as mock_reg:
             bot.start()
             mock_reg.assert_called_once()

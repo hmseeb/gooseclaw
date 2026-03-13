@@ -282,6 +282,312 @@ class BotInstance:
     def get_user_lock(self, user_id):
         return self.state.get_user_lock(user_id)
 
+    def start(self):
+        """Start this bot: load sessions, register notifications, generate pair code, start poll thread."""
+        if self.running:
+            return
+        _session_manager.load(self.channel_key)
+        register_notification_handler(self.channel_key, self._make_notify_handler())
+        self.generate_pair_code()
+        self._register_commands()
+        self.running = True
+        self._thread = threading.Thread(target=self._poll_loop, daemon=True)
+        self._thread.start()
+        print(f"[telegram:{self.name}] started")
+
+    def stop(self):
+        """Stop this bot's poll loop and wait for thread to finish."""
+        self.running = False
+        if self._thread:
+            self._thread.join(timeout=5)
+            self._thread = None
+
+    def _register_commands(self):
+        """Register slash commands with Telegram API for autocomplete."""
+        try:
+            commands = [
+                {"command": "stop", "description": "Cancel the current response"},
+                {"command": "clear", "description": "Wipe conversation and start fresh"},
+                {"command": "compact", "description": "Summarize history to save tokens"},
+                {"command": "help", "description": "Show available commands"},
+            ]
+            payload = json.dumps({"commands": commands}).encode()
+            req = urllib.request.Request(
+                f"https://api.telegram.org/bot{self.token}/setMyCommands",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            urllib.request.urlopen(req, timeout=10)
+            print(f"[telegram:{self.name}] registered slash commands for autocomplete")
+        except Exception as e:
+            print(f"[telegram:{self.name}] warn: could not register commands: {e}")
+
+    def _make_notify_handler(self):
+        """Return a notification handler closure that uses this bot's token and platform."""
+        bot_token = self.token
+        channel_key = self.channel_key
+
+        def handler(text):
+            chat_ids = get_paired_chat_ids(platform=channel_key)
+            if not chat_ids:
+                return {"sent": False, "error": f"no paired users for {channel_key}"}
+            ok_all = True
+            for cid in chat_ids:
+                ok, err = send_telegram_message(bot_token, cid, text)
+                if not ok:
+                    ok_all = False
+            return {"sent": ok_all, "error": "" if ok_all else "some deliveries failed"}
+
+        return handler
+
+    def _check_pairing(self, chat_id, text):
+        """Check if text matches this bot's pair code. Returns True if pairing succeeded.
+
+        Consumes the code on match (sets pair_code to None).
+        """
+        with self.pair_lock:
+            current_code = self.pair_code
+
+        if current_code and text.upper() == current_code.upper():
+            with self.pair_lock:
+                self.pair_code = None
+            return True
+        return False
+
+    def _do_message_relay(self, chat_id, text, bot_token):
+        """Relay a user message to goose web. Uses self.state and self.channel_key.
+
+        Extracted from the poll loop to make the relay path unit-testable.
+        """
+        _memory_touch(chat_id)
+        _chat_lock = self.state.get_user_lock(chat_id)
+        if not _chat_lock.acquire(timeout=2):
+            send_telegram_message(bot_token, chat_id, "Still thinking... send /stop to cancel.")
+            return
+        try:
+            _send_typing_action(bot_token, chat_id)
+            session_id = _get_session_id(chat_id, channel=self.channel_key)
+            _cancelled = threading.Event()
+            _sock_ref = [None, _cancelled]
+
+            self.state.set_active_relay(chat_id, _sock_ref)
+
+            _tg_setup = load_setup()
+            _tg_verbosity = get_verbosity_for_channel(_tg_setup, self.channel_key) if _tg_setup else "balanced"
+
+            # typing indicator loop
+            typing_stop = threading.Event()
+
+            def _typing_loop():
+                while not typing_stop.is_set():
+                    _send_typing_action(bot_token, chat_id)
+                    typing_stop.wait(4)
+
+            typing_thread = threading.Thread(target=_typing_loop, daemon=True)
+            typing_thread.start()
+
+            try:
+                if _tg_verbosity == "quiet":
+                    response_text, error = _relay_to_goose_web(
+                        text, session_id, chat_id=chat_id, channel=self.channel_key,
+                        sock_ref=_sock_ref,
+                    )
+                    if _cancelled.is_set():
+                        pass
+                    elif error:
+                        send_telegram_message(bot_token, chat_id, f"Error: {error}")
+                    else:
+                        send_telegram_message(bot_token, chat_id, response_text)
+                else:
+                    # streaming: edit-in-place
+                    _edit_state = {"msg_id": None, "accumulated": "", "overflow": []}
+
+                    def _tg_flush_edit(chunk, _st=_edit_state):
+                        if _cancelled.is_set():
+                            return
+                        _st["accumulated"] += chunk
+                        txt = _st["accumulated"]
+                        if _st["msg_id"] is None:
+                            mid, err = _send_telegram_msg_with_id(bot_token, chat_id, txt)
+                            if mid:
+                                _st["msg_id"] = mid
+                            else:
+                                print(f"[telegram:{self.name}] edit-stream: initial send failed: {err}")
+                        elif len(txt) > 3800:
+                            _st["overflow"].append(_st["msg_id"])
+                            _st["accumulated"] = chunk
+                            _st["msg_id"] = None
+                            mid, err = _send_telegram_msg_with_id(bot_token, chat_id, chunk)
+                            if mid:
+                                _st["msg_id"] = mid
+                        else:
+                            _edit_telegram_message(bot_token, chat_id, _st["msg_id"], txt)
+
+                    response_text, error = _relay_to_goose_web(
+                        text, session_id, chat_id=chat_id, channel=self.channel_key,
+                        flush_cb=_tg_flush_edit, verbosity=_tg_verbosity,
+                        sock_ref=_sock_ref, flush_interval=2.0,
+                    )
+                    if _cancelled.is_set():
+                        pass
+                    elif _edit_state["msg_id"] and response_text and not error:
+                        final_text = _edit_state["accumulated"] or response_text
+                        if final_text:
+                            _edit_telegram_message(bot_token, chat_id, _edit_state["msg_id"], final_text)
+                    elif error:
+                        send_telegram_message(bot_token, chat_id, f"Error: {error}")
+                    elif not _edit_state["msg_id"] and response_text:
+                        send_telegram_message(bot_token, chat_id, response_text)
+            finally:
+                typing_stop.set()
+                typing_thread.join(timeout=2)
+        except Exception as exc:
+            print(f"[telegram:{self.name}] relay exception for chat {chat_id}: {exc}")
+            if not _cancelled.is_set():
+                try:
+                    send_telegram_message(bot_token, chat_id, f"Error: {exc}")
+                except Exception:
+                    pass
+        finally:
+            self.state.pop_active_relay(chat_id)
+            _chat_lock.release()
+
+    def _poll_loop(self):
+        """Long-poll Telegram for updates and relay messages to goose web.
+
+        Runs in a daemon thread. Uses self.channel_key, self.state, self.pair_code
+        instead of module-level globals.
+        """
+        offset = 0
+        print(f"[telegram:{self.name}] polling loop started")
+
+        while self.running:
+            try:
+                url = (
+                    f"https://api.telegram.org/bot{self.token}/getUpdates"
+                    f"?offset={offset}&timeout=30&allowed_updates=[\"message\"]"
+                )
+                req = urllib.request.Request(url)
+                with urllib.request.urlopen(req, timeout=40) as resp:
+                    data = json.loads(resp.read())
+
+                if not data.get("ok"):
+                    print(f"[telegram:{self.name}] getUpdates not ok: {data}")
+                    time.sleep(5)
+                    continue
+
+                for update in data.get("result", []):
+                    offset = update["update_id"] + 1
+                    msg = update.get("message")
+                    if not msg:
+                        continue
+
+                    chat_id = str(msg.get("chat", {}).get("id", ""))
+                    text = msg.get("text", "").strip()
+                    if not chat_id or not text:
+                        continue
+
+                    paired_ids = get_paired_chat_ids(platform=self.channel_key)
+
+                    if chat_id in paired_ids:
+                        # handle local slash commands before relaying
+                        lower = text.lower()
+
+                        if _command_router.is_command(lower):
+                            ctx = {
+                                "channel": self.channel_key,
+                                "user_id": chat_id,
+                                "bot_token": self.token,
+                                "send_fn": lambda t, _bt=self.token, _cid=chat_id: send_telegram_message(_bt, _cid, t),
+                            }
+                            if not _command_router.dispatch(text, ctx):
+                                send_telegram_message(self.token, chat_id,
+                                    f"Unknown command: {text.split()[0]}\nSend /help for available commands.")
+                            continue
+
+                        # catch unknown slash commands
+                        if lower.startswith("/"):
+                            send_telegram_message(
+                                self.token, chat_id,
+                                f"Unknown command: {text.split()[0]}\nSend /help for available commands."
+                            )
+                            continue
+
+                        # relay to goose web (runs in a background thread)
+                        threading.Thread(
+                            target=self._do_message_relay,
+                            kwargs={"chat_id": chat_id, "text": text, "bot_token": self.token},
+                            daemon=True,
+                        ).start()
+                    else:
+                        # unpaired user -- check if this is a pairing code
+                        if self._check_pairing(chat_id, text):
+                            _add_pairing_to_config(chat_id, platform=self.channel_key)
+                            send_telegram_message(
+                                self.token, chat_id,
+                                "Paired successfully! You can now send messages to goose through this chat."
+                            )
+                            print(f"[telegram:{self.name}] chat {chat_id} paired")
+
+                            # auto-send first message after pairing
+                            try:
+                                soul_path = os.path.join(IDENTITY_DIR, "soul.md")
+                                needs_onboarding = False
+                                try:
+                                    with open(soul_path, "r") as _sf:
+                                        needs_onboarding = "ONBOARDING_NEEDED" in _sf.read()
+                                except FileNotFoundError:
+                                    needs_onboarding = True
+                                kick_msg = (
+                                    "I just paired via Telegram. Start the onboarding flow."
+                                    if needs_onboarding else
+                                    "I just paired a new device via Telegram. Say hi."
+                                )
+                                sid = _get_session_id(chat_id, channel=self.channel_key)
+                                if sid:
+                                    def _kick_greeting(msg=kick_msg, s=sid, c=chat_id, bt=self.token, ck=self.channel_key):
+                                        try:
+                                            with self.state.get_user_lock(c):
+                                                txt, err = _relay_to_goose_web(
+                                                    msg, s, chat_id=str(c), channel=ck,
+                                                )
+                                                if err:
+                                                    print(f"[telegram:{self.name}] kick greeting error: {err}")
+                                                    send_telegram_message(bt, c, f"Error: {err}")
+                                                elif txt:
+                                                    send_telegram_message(bt, c, txt)
+                                        except Exception as exc:
+                                            print(f"[telegram:{self.name}] kick greeting exception: {exc}")
+                                    threading.Thread(target=_kick_greeting, daemon=True).start()
+                            except Exception as exc:
+                                print(f"[telegram:{self.name}] kick greeting setup failed: {exc}")
+                        else:
+                            send_telegram_message(
+                                self.token, chat_id,
+                                "You are not paired with this goose instance. "
+                                "Please enter a valid pairing code from the web dashboard."
+                            )
+
+            except urllib.error.HTTPError as e:
+                if e.code == 409:
+                    print(f"[telegram:{self.name}] conflict (409), backing off 10s")
+                    time.sleep(10)
+                elif e.code == 401:
+                    print(f"[telegram:{self.name}] FATAL: invalid bot token (401). Stopping poll loop.")
+                    self.running = False
+                    return
+                else:
+                    print(f"[telegram:{self.name}] HTTP error {e.code}, retrying in 5s")
+                    time.sleep(5)
+            except urllib.error.URLError as e:
+                print(f"[telegram:{self.name}] network error: {e.reason}, retrying in 5s")
+                time.sleep(5)
+            except Exception as e:
+                print(f"[telegram:{self.name}] poll error: {e}, retrying in 5s")
+                time.sleep(5)
+
+        print(f"[telegram:{self.name}] polling loop stopped")
+
 
 class BotManager:
     """Manages multiple BotInstance lifecycle."""
@@ -649,15 +955,18 @@ def get_bot_token():
     return ""
 
 
-def get_paired_chat_ids():
-    """Read paired telegram chat IDs from goose config.yaml."""
+def get_paired_chat_ids(platform="telegram"):
+    """Read paired chat IDs from goose config.yaml, filtered by platform.
+
+    platform: the platform tag to filter by (e.g. "telegram", "telegram:research").
+    """
     chat_ids = []
     if not os.path.exists(GOOSE_CONFIG_PATH):
         return chat_ids
     try:
         with open(GOOSE_CONFIG_PATH) as f:
             content = f.read()
-        # lightweight yaml parse: find gateway_pairings entries with platform: telegram
+        # lightweight yaml parse: find gateway_pairings entries matching platform
         # goose config uses simple yaml, so we can parse with basic string matching
         in_pairings = False
         current_entry = {}
@@ -670,7 +979,7 @@ def get_paired_chat_ids():
                 if line and not line[0].isspace() and not stripped.startswith("-"):
                     break  # left the pairings block
                 if stripped.startswith("- platform:"):
-                    if current_entry.get("platform") == "telegram" and current_entry.get("user_id"):
+                    if current_entry.get("platform") == platform and current_entry.get("user_id"):
                         chat_ids.append(current_entry["user_id"])
                     current_entry = {"platform": stripped.split(":", 1)[1].strip()}
                 elif stripped.startswith("user_id:"):
@@ -679,7 +988,7 @@ def get_paired_chat_ids():
                 elif stripped.startswith("state:") and "paired" in stripped:
                     current_entry["paired"] = True
         # catch last entry
-        if current_entry.get("platform") == "telegram" and current_entry.get("user_id"):
+        if current_entry.get("platform") == platform and current_entry.get("user_id"):
             chat_ids.append(current_entry["user_id"])
     except Exception as e:
         print(f"[gateway] warn: could not read pairings: {e}")
@@ -3582,15 +3891,17 @@ def _restart_goose_and_prewarm(chat_id):
     _prewarm_session(chat_id)
 
 
-def _get_session_id(chat_id):
-    """Get or create a session_id for a telegram chat_id.
+def _get_session_id(chat_id, channel="telegram"):
+    """Get or create a session_id for a chat_id on a given channel.
 
     For new chats, calls POST /agent/start on goose web to get a real session_id.
     For existing chats, returns the stored session_id.
     If a prewarm is in progress, waits for it instead of creating a duplicate.
+
+    channel: the channel key for session lookup (e.g. "telegram", "telegram:research").
     """
     chat_key = str(chat_id)
-    sid = _session_manager.get("telegram", chat_key)
+    sid = _session_manager.get(channel, chat_key)
     if sid:
         return sid
 
@@ -3598,7 +3909,7 @@ def _get_session_id(chat_id):
     evt = _telegram_state._prewarm_events.get(chat_key)
     if evt:
         evt.wait(timeout=15)
-        sid = _session_manager.get("telegram", chat_key)
+        sid = _session_manager.get(channel, chat_key)
         if sid:
             return sid
 
@@ -3607,10 +3918,10 @@ def _get_session_id(chat_id):
     if not sid:
         # fallback to random UUID if goose web is unavailable
         sid = str(uuid.uuid4())
-        print(f"[telegram] warn: could not start agent, using random session {sid}")
+        print(f"[{channel}] warn: could not start agent, using random session {sid}")
 
-    _session_manager.set("telegram", chat_key, sid)
-    print(f"[telegram] new session {sid} for chat {chat_key}")
+    _session_manager.set(channel, chat_key, sid)
+    print(f"[{channel}] new session {sid} for chat {chat_key}")
     return sid
 
 
@@ -4587,8 +4898,11 @@ def _do_ws_relay_streaming(user_text, session_id, flush_cb, verbosity="balanced"
 
 # ── pairing helpers (self-contained, no Rust subprocess) ────────────────────
 
-def _add_pairing_to_config(chat_id):
-    """Add a telegram pairing entry to goose config.yaml (gateway_pairings section)."""
+def _add_pairing_to_config(chat_id, platform="telegram"):
+    """Add a pairing entry to goose config.yaml (gateway_pairings section).
+
+    platform: the platform tag to write (e.g. "telegram", "telegram:research").
+    """
     config_path = GOOSE_CONFIG_PATH
     chat_str = str(chat_id)
     try:
@@ -4599,11 +4913,11 @@ def _add_pairing_to_config(chat_id):
 
         # check if already paired
         if chat_str in content:
-            # crude check — good enough since chat IDs are unique numeric strings
+            # crude check -- good enough since chat IDs are unique numeric strings
             return
 
         pairing_entry = (
-            f"  - platform: telegram\n"
+            f"  - platform: {platform}\n"
             f"    user_id: '{chat_str}'\n"
             f"    state: paired\n"
         )
@@ -4617,9 +4931,9 @@ def _add_pairing_to_config(chat_id):
         with open(tmp, "w") as f:
             f.write(content)
         os.replace(tmp, config_path)
-        print(f"[telegram] paired chat_id {chat_str}")
+        print(f"[{platform}] paired chat_id {chat_str}")
     except Exception as e:
-        print(f"[telegram] warn: could not write pairing: {e}")
+        print(f"[{platform}] warn: could not write pairing: {e}")
 
 
 def _generate_and_store_pair_code():

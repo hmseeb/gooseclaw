@@ -611,7 +611,10 @@ class BotManager:
         with self._lock:
             bot = self._bots.pop(name, None)
         if bot:
-            bot.running = False
+            bot.stop()
+            _session_manager.clear_channel(bot.channel_key)
+            unregister_notification_handler(bot.channel_key)
+            print(f"[bot-mgr] removed bot '{name}' (channel_key={bot.channel_key})")
 
     def stop_all(self):
         with self._lock:
@@ -699,6 +702,13 @@ def register_notification_handler(name, handler_fn):
                 return
         _notification_handlers.append({"name": name, "handler": handler_fn})
     print(f"[notify] registered handler: {name}")
+
+
+def unregister_notification_handler(name):
+    """Remove a notification handler by name. No-op if not found."""
+    with _notification_handlers_lock:
+        _notification_handlers[:] = [h for h in _notification_handlers if h["name"] != name]
+    print(f"[notify] unregistered handler: {name}")
 
 
 # ── channel plugin system state ───────────────────────────────────────────────
@@ -5506,6 +5516,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.handle_set_verbosity()
         elif path == "/api/setup/agent-config":
             self.handle_agent_config()
+        elif path == "/api/bots":
+            self.handle_add_bot()
         else:
             self.proxy_to_goose()
 
@@ -5527,6 +5539,11 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             job_id = path[len("/api/jobs/"):]
             if job_id:
                 self.handle_delete_job(job_id)
+                return
+        elif path.startswith("/api/bots/"):
+            bot_name = path[len("/api/bots/"):]
+            if bot_name:
+                self.handle_remove_bot(bot_name)
                 return
         self.proxy_to_goose()
 
@@ -6257,6 +6274,101 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                 return
         code = bot.generate_pair_code()
         self.send_json(200, {"code": code, "bot": bot_name, "message": f"send this code to {bot_name} bot"})
+
+    # ── bot lifecycle endpoints ──
+
+    def handle_add_bot(self):
+        """POST /api/bots -- hot-add a new Telegram bot."""
+        if _is_first_boot():
+            self.send_json(403, {"error": "agent not configured yet"})
+            return
+        if not self._check_local_or_auth():
+            return
+        body = self._read_body()
+        try:
+            data = json.loads(body)
+        except (json.JSONDecodeError, ValueError):
+            self.send_json(400, {"error": "invalid JSON"})
+            return
+
+        name = data.get("name", "").strip() if isinstance(data.get("name"), str) else ""
+        token = data.get("token", "").strip() if isinstance(data.get("token"), str) else ""
+
+        if not name:
+            self.send_json(400, {"error": "name is required"})
+            return
+        if not token:
+            self.send_json(400, {"error": "token is required"})
+            return
+        if ":" not in token:
+            self.send_json(400, {"error": "token must be in format digits:alphanumeric"})
+            return
+
+        # check duplicate
+        if _bot_manager.get_bot(name):
+            self.send_json(409, {"error": "bot already exists"})
+            return
+
+        channel_key = "telegram" if name == "default" else f"telegram:{name}"
+        try:
+            bot = _bot_manager.add_bot(name, token, channel_key)
+            bot.start()
+        except ValueError as e:
+            self.send_json(409, {"error": str(e)})
+            return
+        except Exception as e:
+            self.send_json(500, {"error": f"failed to start bot: {e}"})
+            return
+
+        # persist to setup.json
+        try:
+            config = load_setup() or {}
+            if not isinstance(config.get("bots"), list):
+                config["bots"] = []
+            bot_entry = {"name": name, "token": token}
+            # include optional provider/model if provided
+            if data.get("provider"):
+                bot_entry["provider"] = data["provider"]
+            if data.get("model"):
+                bot_entry["model"] = data["model"]
+            config["bots"].append(bot_entry)
+            save_setup(config)
+        except Exception as e:
+            print(f"[bot-mgr] warn: could not persist bot '{name}' to setup.json: {e}")
+
+        self.send_json(201, {"name": name, "channel_key": bot.channel_key, "status": "running"})
+
+    def handle_remove_bot(self, name):
+        """DELETE /api/bots/<name> -- hot-remove a Telegram bot."""
+        if _is_first_boot():
+            self.send_json(403, {"error": "agent not configured yet"})
+            return
+        if not self._check_local_or_auth():
+            return
+
+        bot = _bot_manager.get_bot(name)
+        if not bot:
+            self.send_json(404, {"error": "bot not found"})
+            return
+
+        if name == "default":
+            print("[bot-mgr] warn: removing default bot")
+
+        _bot_manager.remove_bot(name)
+
+        # persist removal to setup.json
+        try:
+            config = load_setup() or {}
+            if isinstance(config.get("bots"), list):
+                config["bots"] = [b for b in config["bots"] if b.get("name") != name]
+            else:
+                # legacy single-token config
+                config["telegram_bot_token"] = ""
+            save_setup(config)
+        except Exception as e:
+            print(f"[bot-mgr] warn: could not persist removal of '{name}' from setup.json: {e}")
+
+        self.send_json(200, {"removed": name})
 
     # ── job endpoints ──
 

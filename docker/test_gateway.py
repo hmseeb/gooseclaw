@@ -3183,6 +3183,8 @@ class TestBotLifecycleAPI(unittest.TestCase):
         handler = self._make_handler()
         handler.client_address = ("1.2.3.4", 12345)
         handler._read_body = MagicMock(return_value=json.dumps({"name": "x", "token": "1:X"}).encode())
+        # Wire real _check_local_or_auth so auth guard actually runs
+        handler._check_local_or_auth = lambda: gateway.GatewayHandler._check_local_or_auth(handler)
 
         gateway.GatewayHandler.handle_add_bot(handler)
 
@@ -3195,6 +3197,8 @@ class TestBotLifecycleAPI(unittest.TestCase):
         """DELETE from non-localhost without auth returns 401."""
         handler = self._make_handler(path="/api/bots/x", method="DELETE")
         handler.client_address = ("1.2.3.4", 12345)
+        # Wire real _check_local_or_auth so auth guard actually runs
+        handler._check_local_or_auth = lambda: gateway.GatewayHandler._check_local_or_auth(handler)
 
         gateway.GatewayHandler.handle_remove_bot(handler, "x")
 

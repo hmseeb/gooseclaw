@@ -6058,12 +6058,21 @@ def start_goose_web():
         env["GOOSE_SERVER__SECRET_KEY"] = _INTERNAL_GOOSE_TOKEN
         env["GOOSE_DISABLE_KEYRING"] = "1"
 
+        # ensure provider config is in env (belt-and-suspenders with apply_config)
+        setup = load_setup()
+        if setup:
+            pt = setup.get("provider_type", "")
+            if pt and "GOOSE_PROVIDER" not in env:
+                env["GOOSE_PROVIDER"] = pt
+            md = setup.get("model", "")
+            if md and "GOOSE_MODEL" not in env:
+                env["GOOSE_MODEL"] = md
+
         print(f"[gateway] starting goosed agent on 127.0.0.1:{GOOSE_WEB_PORT}")
         print(f"[gateway] cmd: goosed agent (TLS=false, port={GOOSE_WEB_PORT})")
-        # diagnostic: check critical env vars for claude-code provider
-        has_oauth = bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"))
-        goose_mode = os.environ.get("GOOSE_MODE", "NOT SET")
-        print(f"[gateway] env: CLAUDE_CODE_OAUTH_TOKEN={'set' if has_oauth else 'MISSING'} GOOSE_MODE={goose_mode}")
+        print(f"[gateway] env: GOOSE_PROVIDER={env.get('GOOSE_PROVIDER', 'NOT SET')} "
+              f"GOOSE_MODEL={env.get('GOOSE_MODEL', 'NOT SET')} "
+              f"GOOSE_MODE={env.get('GOOSE_MODE', 'NOT SET')}")
         goose_process = subprocess.Popen(cmd, stdout=sys.stdout, stderr=subprocess.PIPE, env=env)
         _write_pid("goosed", goose_process.pid)
 

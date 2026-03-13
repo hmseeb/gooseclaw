@@ -6,3 +6,4 @@
 #   pip3 install --no-cache-dir --break-system-packages -r requirements.txt
 
 PyYAML==6.0.2
+websocket-client==1.8.0

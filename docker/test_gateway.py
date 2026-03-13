@@ -5925,5 +5925,468 @@ class TestNotifyMedia(unittest.TestCase):
         self.assertTrue(result.get("sent"))
 
 
+# ── Discord channel plugin tests ───────────────────────────────────────────────
+# These test docker/discord_channel.py -- a v2 channel plugin loaded by _load_channel.
+
+# Ensure docker/ dir is importable
+if os.path.dirname(__file__) not in sys.path:
+    sys.path.insert(0, os.path.dirname(__file__))
+
+
+class TestDiscordOutboundAdapter(unittest.TestCase):
+    """Tests for DiscordOutboundAdapter send methods and capabilities."""
+
+    def _make_adapter(self):
+        import discord_channel
+        return discord_channel.DiscordOutboundAdapter("test-bot-token", "123456789")
+
+    def test_capabilities(self):
+        adapter = self._make_adapter()
+        caps = adapter.capabilities()
+        self.assertTrue(caps.supports_images)
+        self.assertTrue(caps.supports_files)
+        self.assertFalse(caps.supports_voice)
+        self.assertEqual(caps.max_text_length, 2000)
+
+    @patch("urllib.request.urlopen")
+    def test_send_text(self, mock_urlopen):
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b'{"id":"1"}'
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
+        adapter = self._make_adapter()
+        result = adapter.send_text("hello")
+
+        self.assertTrue(result["sent"])
+        # Verify the request
+        call_args = mock_urlopen.call_args
+        req = call_args[0][0]
+        self.assertIn("discord.com/api/v10/channels/123456789/messages", req.full_url)
+        body = json.loads(req.data)
+        self.assertEqual(body["content"], "hello")
+        self.assertEqual(req.get_header("Authorization"), "Bot test-bot-token")
+
+    @patch("urllib.request.urlopen")
+    def test_send_image(self, mock_urlopen):
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b'{"id":"1"}'
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
+        adapter = self._make_adapter()
+        result = adapter.send_image(b"\xff\xd8", caption="test", mime_type="image/jpeg")
+
+        self.assertTrue(result["sent"])
+        call_args = mock_urlopen.call_args
+        req = call_args[0][0]
+        # Should be multipart, containing files[0] and payload_json
+        body = req.data
+        self.assertIn(b"files[0]", body)
+        self.assertIn(b"payload_json", body)
+        self.assertIn(b"image/jpeg", body)
+
+    @patch("urllib.request.urlopen")
+    def test_send_file(self, mock_urlopen):
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b'{"id":"1"}'
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
+        adapter = self._make_adapter()
+        result = adapter.send_file(b"\x00", filename="doc.pdf", mime_type="application/pdf")
+
+        self.assertTrue(result["sent"])
+        call_args = mock_urlopen.call_args
+        req = call_args[0][0]
+        body = req.data
+        self.assertIn(b"files[0]", body)
+        self.assertIn(b"payload_json", body)
+        self.assertIn(b"doc.pdf", body)
+
+    @patch("urllib.request.urlopen")
+    def test_send_text_truncates_at_2000(self, mock_urlopen):
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b'{"id":"1"}'
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
+        adapter = self._make_adapter()
+        adapter.send_text("x" * 3000)
+
+        call_args = mock_urlopen.call_args
+        req = call_args[0][0]
+        body = json.loads(req.data)
+        self.assertEqual(len(body["content"]), 2000)
+
+    @patch("urllib.request.urlopen")
+    def test_send_error_handled(self, mock_urlopen):
+        mock_urlopen.side_effect = Exception("network error")
+
+        adapter = self._make_adapter()
+        result = adapter.send_text("hello")
+
+        self.assertFalse(result["sent"])
+        self.assertIn("network error", result["error"])
+
+
+class TestDiscordInboundMedia(unittest.TestCase):
+    """Tests for _extract_discord_media."""
+
+    @patch("urllib.request.urlopen")
+    def test_image_attachment(self, mock_urlopen):
+        import discord_channel
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b"\x89PNG"
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
+        msg = {"attachments": [{"url": "https://cdn.discord.com/img.png",
+                                 "content_type": "image/png", "filename": "img.png"}]}
+        media = discord_channel._extract_discord_media(msg)
+        self.assertEqual(len(media), 1)
+        self.assertEqual(media[0].kind, "image")
+        self.assertEqual(media[0].mime_type, "image/png")
+
+    @patch("urllib.request.urlopen")
+    def test_document_attachment(self, mock_urlopen):
+        import discord_channel
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b"%PDF"
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
+        msg = {"attachments": [{"url": "https://cdn.discord.com/doc.pdf",
+                                 "content_type": "application/pdf", "filename": "doc.pdf"}]}
+        media = discord_channel._extract_discord_media(msg)
+        self.assertEqual(len(media), 1)
+        self.assertEqual(media[0].kind, "document")
+
+    def test_no_attachments(self):
+        import discord_channel
+        msg = {"attachments": []}
+        media = discord_channel._extract_discord_media(msg)
+        self.assertEqual(len(media), 0)
+
+    @patch("urllib.request.urlopen")
+    def test_multiple_attachments(self, mock_urlopen):
+        import discord_channel
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b"\x00"
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
+        msg = {"attachments": [
+            {"url": "https://cdn.discord.com/a.png", "content_type": "image/png", "filename": "a.png"},
+            {"url": "https://cdn.discord.com/b.pdf", "content_type": "application/pdf", "filename": "b.pdf"},
+        ]}
+        media = discord_channel._extract_discord_media(msg)
+        self.assertEqual(len(media), 2)
+
+
+class TestDiscordPoll(unittest.TestCase):
+    """Tests for poll_discord Gateway WebSocket connection."""
+
+    @patch("discord_channel._get_gateway_url", return_value="wss://gateway.discord.gg")
+    @patch("discord_channel.websocket")
+    @patch("discord_channel._extract_discord_media", return_value=[])
+    def test_identifies_with_intents(self, mock_extract, mock_ws_mod, mock_gw_url):
+        import discord_channel
+
+        ws_instance = MagicMock()
+        mock_ws_mod.WebSocket.return_value = ws_instance
+
+        # Hello, then Identify response, then stop
+        call_count = [0]
+        def fake_recv():
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return json.dumps({"op": 10, "d": {"heartbeat_interval": 45000}})
+            # Return something that triggers loop exit
+            raise Exception("test-stop")
+
+        ws_instance.recv.side_effect = fake_recv
+
+        stop_event = threading.Event()
+        relay = MagicMock()
+        creds = {"DISCORD_BOT_TOKEN": "tok", "DISCORD_CHANNEL_ID": "999"}
+
+        # Run poll in thread, stop quickly
+        def run():
+            discord_channel.poll_discord(relay, stop_event, creds)
+        t = threading.Thread(target=run, daemon=True)
+        t.start()
+        time.sleep(0.3)
+        stop_event.set()
+        t.join(timeout=2)
+
+        # Check Identify was sent with correct intents
+        sends = [call for call in ws_instance.send.call_args_list]
+        identify_sent = False
+        GUILD_MESSAGES = 1 << 9
+        MESSAGE_CONTENT = 1 << 15
+        for call in sends:
+            data = json.loads(call[0][0])
+            if data.get("op") == 2:
+                identify_sent = True
+                self.assertEqual(data["d"]["intents"], GUILD_MESSAGES | MESSAGE_CONTENT)
+                break
+        self.assertTrue(identify_sent, "Identify (op 2) was not sent")
+
+    @patch("discord_channel._get_gateway_url", return_value="wss://gateway.discord.gg")
+    @patch("discord_channel.websocket")
+    @patch("discord_channel._extract_discord_media", return_value=[])
+    def test_dispatches_message_create(self, mock_extract, mock_ws_mod, mock_gw_url):
+        import discord_channel
+
+        ws_instance = MagicMock()
+        mock_ws_mod.WebSocket.return_value = ws_instance
+
+        call_count = [0]
+        def fake_recv():
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return json.dumps({"op": 10, "d": {"heartbeat_interval": 45000}})
+            if call_count[0] == 2:
+                return json.dumps({
+                    "op": 0, "t": "MESSAGE_CREATE", "s": 1,
+                    "d": {
+                        "author": {"id": "user1", "username": "testuser", "bot": False},
+                        "content": "hello bot",
+                        "channel_id": "999",
+                        "attachments": [],
+                    }
+                })
+            raise Exception("test-stop")
+
+        ws_instance.recv.side_effect = fake_recv
+
+        stop_event = threading.Event()
+        relay = MagicMock()
+        creds = {"DISCORD_BOT_TOKEN": "tok", "DISCORD_CHANNEL_ID": "999"}
+
+        # Temporarily set module-level adapter for relay call
+        old_adapter = discord_channel.adapter
+        discord_channel.adapter = discord_channel.DiscordOutboundAdapter("tok", "999")
+
+        t = threading.Thread(target=lambda: discord_channel.poll_discord(relay, stop_event, creds), daemon=True)
+        t.start()
+        time.sleep(0.5)
+        stop_event.set()
+        t.join(timeout=2)
+
+        discord_channel.adapter = old_adapter
+
+        # Relay should have been called with an InboundMessage
+        self.assertTrue(relay.called, "relay was not called for MESSAGE_CREATE")
+        inbound = relay.call_args[0][0]
+        self.assertEqual(inbound.user_id, "user1")
+        self.assertEqual(inbound.text, "hello bot")
+        self.assertEqual(inbound.channel, "discord")
+
+    @patch("discord_channel._get_gateway_url", return_value="wss://gateway.discord.gg")
+    @patch("discord_channel.websocket")
+    @patch("discord_channel._extract_discord_media", return_value=[])
+    def test_ignores_bot_messages(self, mock_extract, mock_ws_mod, mock_gw_url):
+        import discord_channel
+
+        ws_instance = MagicMock()
+        mock_ws_mod.WebSocket.return_value = ws_instance
+
+        call_count = [0]
+        def fake_recv():
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return json.dumps({"op": 10, "d": {"heartbeat_interval": 45000}})
+            if call_count[0] == 2:
+                return json.dumps({
+                    "op": 0, "t": "MESSAGE_CREATE", "s": 1,
+                    "d": {
+                        "author": {"id": "bot1", "username": "somebot", "bot": True},
+                        "content": "I am a bot",
+                        "channel_id": "999",
+                        "attachments": [],
+                    }
+                })
+            raise Exception("test-stop")
+
+        ws_instance.recv.side_effect = fake_recv
+
+        stop_event = threading.Event()
+        relay = MagicMock()
+        creds = {"DISCORD_BOT_TOKEN": "tok", "DISCORD_CHANNEL_ID": "999"}
+
+        t = threading.Thread(target=lambda: discord_channel.poll_discord(relay, stop_event, creds), daemon=True)
+        t.start()
+        time.sleep(0.5)
+        stop_event.set()
+        t.join(timeout=2)
+
+        self.assertFalse(relay.called, "relay should NOT be called for bot messages")
+
+    @patch("discord_channel._get_gateway_url", return_value="wss://gateway.discord.gg")
+    @patch("discord_channel.websocket")
+    def test_heartbeat_sent(self, mock_ws_mod, mock_gw_url):
+        import discord_channel
+
+        ws_instance = MagicMock()
+        mock_ws_mod.WebSocket.return_value = ws_instance
+
+        call_count = [0]
+        def fake_recv():
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return json.dumps({"op": 10, "d": {"heartbeat_interval": 100}})
+            # Keep alive for a bit to let heartbeat fire
+            time.sleep(0.3)
+            raise Exception("test-stop")
+
+        ws_instance.recv.side_effect = fake_recv
+
+        stop_event = threading.Event()
+        relay = MagicMock()
+        creds = {"DISCORD_BOT_TOKEN": "tok", "DISCORD_CHANNEL_ID": "999"}
+
+        t = threading.Thread(target=lambda: discord_channel.poll_discord(relay, stop_event, creds), daemon=True)
+        t.start()
+        time.sleep(0.6)
+        stop_event.set()
+        t.join(timeout=2)
+
+        # Check that at least one heartbeat (op 1) was sent
+        heartbeat_sent = False
+        for call in ws_instance.send.call_args_list:
+            data = json.loads(call[0][0])
+            if data.get("op") == 1:
+                heartbeat_sent = True
+                break
+        self.assertTrue(heartbeat_sent, "Heartbeat (op 1) was not sent")
+
+
+class TestDiscordPluginLoad(unittest.TestCase):
+    """Tests for v2 plugin loading via _load_channel."""
+
+    @patch("gateway._resolve_channel_creds")
+    def test_plugin_loads_without_gateway_changes(self, mock_creds):
+        """A v2 plugin with adapter field should be used directly (not wrapped)."""
+        mock_creds.return_value = {"DISCORD_BOT_TOKEN": "tok", "DISCORD_CHANNEL_ID": "999"}
+
+        # Create a temp plugin file with a minimal v2 CHANNEL dict
+        import tempfile
+        plugin_code = '''
+import sys, os
+sys.path.insert(0, os.path.dirname(__file__))
+import gateway
+
+class TestAdapter(gateway.OutboundAdapter):
+    def send_text(self, text):
+        return {"sent": True, "error": ""}
+    def capabilities(self):
+        return gateway.ChannelCapabilities(supports_images=True, max_text_length=2000)
+
+_adapter = TestAdapter()
+CHANNEL = {
+    "name": "test_discord_load",
+    "version": 2,
+    "send": _adapter.send_text,
+    "adapter": _adapter,
+    "credentials": ["DISCORD_BOT_TOKEN", "DISCORD_CHANNEL_ID"],
+    "setup": lambda creds: {"ok": True},
+}
+'''
+        with tempfile.NamedTemporaryFile(suffix="_channel.py", mode="w", delete=False, dir=os.path.dirname(__file__)) as f:
+            f.write(plugin_code)
+            tmp_path = f.name
+
+        try:
+            # Save and restore _loaded_channels
+            saved = dict(gateway._loaded_channels)
+            saved_handlers = list(gateway._notification_handlers)
+
+            result = gateway._load_channel(tmp_path)
+            self.assertTrue(result, "_load_channel should return True for valid v2 plugin")
+
+            # Adapter should NOT be LegacyOutboundAdapter
+            loaded = gateway._loaded_channels.get("test_discord_load")
+            self.assertIsNotNone(loaded)
+            self.assertNotIsInstance(loaded["adapter"], gateway.LegacyOutboundAdapter)
+            self.assertIsInstance(loaded["adapter"], gateway.OutboundAdapter)
+
+            # Cleanup
+            gateway._loaded_channels.clear()
+            gateway._loaded_channels.update(saved)
+            gateway._notification_handlers.clear()
+            gateway._notification_handlers.extend(saved_handlers)
+            if "test_discord_load" in gateway._channel_stop_events:
+                gateway._channel_stop_events["test_discord_load"].set()
+                del gateway._channel_stop_events["test_discord_load"]
+        finally:
+            os.unlink(tmp_path)
+
+    @patch("gateway._resolve_channel_creds")
+    def test_v2_plugin_media_routes(self, mock_creds):
+        """V2 adapter stored in _loaded_channels should be the real adapter, not legacy."""
+        mock_creds.return_value = {"DISCORD_BOT_TOKEN": "tok", "DISCORD_CHANNEL_ID": "999"}
+
+        import tempfile
+        plugin_code = '''
+import sys, os
+sys.path.insert(0, os.path.dirname(__file__))
+import gateway
+
+class MediaAdapter(gateway.OutboundAdapter):
+    def send_text(self, text):
+        return {"sent": True, "error": ""}
+    def send_image(self, data, caption="", **kwargs):
+        return {"sent": True, "error": "", "type": "image"}
+    def capabilities(self):
+        return gateway.ChannelCapabilities(supports_images=True, supports_files=True)
+
+_adapter = MediaAdapter()
+CHANNEL = {
+    "name": "test_discord_media",
+    "version": 2,
+    "send": _adapter.send_text,
+    "adapter": _adapter,
+    "credentials": ["DISCORD_BOT_TOKEN", "DISCORD_CHANNEL_ID"],
+    "setup": lambda creds: {"ok": True},
+}
+'''
+        with tempfile.NamedTemporaryFile(suffix="_channel.py", mode="w", delete=False, dir=os.path.dirname(__file__)) as f:
+            f.write(plugin_code)
+            tmp_path = f.name
+
+        try:
+            saved = dict(gateway._loaded_channels)
+            saved_handlers = list(gateway._notification_handlers)
+
+            gateway._load_channel(tmp_path)
+
+            loaded = gateway._loaded_channels.get("test_discord_media")
+            self.assertIsNotNone(loaded)
+            adapter = loaded["adapter"]
+            # V2 adapter should have real send_image
+            result = adapter.send_image(b"\x89PNG", caption="test")
+            self.assertTrue(result["sent"])
+            self.assertEqual(result.get("type"), "image")
+
+            gateway._loaded_channels.clear()
+            gateway._loaded_channels.update(saved)
+            gateway._notification_handlers.clear()
+            gateway._notification_handlers.extend(saved_handlers)
+            if "test_discord_media" in gateway._channel_stop_events:
+                gateway._channel_stop_events["test_discord_media"].set()
+                del gateway._channel_stop_events["test_discord_media"]
+        finally:
+            os.unlink(tmp_path)
+
+
 if __name__ == "__main__":
     unittest.main()

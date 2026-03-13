@@ -10,9 +10,9 @@ See: .planning/PROJECT.md (updated 2026-03-13)
 ## Current Position
 
 Phase: 9 of 10 (Multi-Bot Core)
-Plan: 2 of 3 in current phase
+Plan: 3 of 3 in current phase
 Status: In Progress
-Last activity: 2026-03-13 -- Completed 09-01 BotInstance + BotManager classes with config resolution
+Last activity: 2026-03-13 -- Completed 09-02 Poll loop refactor into BotInstance._poll_loop with per-bot lifecycle
 
 Progress: [=========-] 85% (8.3/10 phases complete)
 
@@ -40,6 +40,7 @@ Progress: [=========-] 85% (8.3/10 phases complete)
 | Phase 07 P03 | 5min | 2 tasks | 2 files |
 | Phase 08 P01 | 3min | 2 tasks | 3 files |
 | Phase 09 P01 | 4min | 2 tasks | 2 files |
+| Phase 09 P02 | 6min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -67,6 +68,8 @@ Recent decisions affecting current work:
 - [Phase 09]: BotInstance uses channel_key "telegram:<name>" by default, "telegram" for default bot (zero migration)
 - [Phase 09]: BotManager returns existing bot on duplicate name (idempotent), raises ValueError on duplicate token
 - [Phase 09]: _resolve_bot_configs falls back: bots array > telegram_bot_token > TELEGRAM_BOT_TOKEN env > empty
+- [Phase 09]: _do_message_relay and _check_pairing extracted as testable BotInstance methods from poll loop closures
+- [Phase 09]: get_paired_chat_ids, _add_pairing_to_config, _get_session_id all parameterized with backward-compatible defaults
 
 ### Pending Todos
 
@@ -90,5 +93,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-03-13
-Stopped at: Completed 09-01-PLAN.md (BotInstance + BotManager classes with config resolution)
+Stopped at: Completed 09-02-PLAN.md (Poll loop refactor into BotInstance._poll_loop with per-bot lifecycle)
 Resume file: None

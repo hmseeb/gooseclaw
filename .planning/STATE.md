@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-03-13)
 Phase: 15 of 15 (complete)
 Plan: 1 of 1 (done)
 Status: Phase 15 complete, Discord channel plugin with full media support proves v2 contract
-Last activity: 2026-03-13 -- Phase 15 Plan 01 executed: Discord plugin with DiscordOutboundAdapter, Gateway WebSocket polling, multipart uploads. 463 tests passing. Zero gateway.py changes.
+Last activity: 2026-03-13 -- Quick task 7: password auth replacing auto-generated tokens. 472 tests passing.
 
 Progress v2.0: [==========] 100% (10/10 phases complete, shipped)
 Progress v3.0: [==========] 100% (5/5 phases complete)
@@ -137,6 +137,7 @@ Recent decisions affecting current work:
 | 4 | Memory writer dedup, section routing, learnings format | 2026-03-13 | a4e298a | (parallel agent) |
 | 5 | Media message reply (canned text for non-text input) | 2026-03-13 | a4e298a | (parallel agent) |
 | 6 | Extract onboarding flow to separate file | 2026-03-13 | 26b4ef2 | (parallel agent) |
+| 7 | Replace auto-generated auth token with user-set password | 2026-03-13 | 016c11f | [4-replace-auto-gen...](./quick/4-replace-auto-generated-auth-token-with-u/) |
 | 7 | Replace auto-generated auth token with password auth | 2026-03-13 | 016c11f | quick/4-.../ |
 
 ## Session Continuity

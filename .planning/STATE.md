@@ -11,10 +11,10 @@ See: .planning/PROJECT.md (updated 2026-03-13)
 
 Phase: 9 of 10 (Multi-Bot Core)
 Plan: 3 of 3 in current phase
-Status: In Progress
-Last activity: 2026-03-13 -- Completed 09-02 Poll loop refactor into BotInstance._poll_loop with per-bot lifecycle
+Status: Complete
+Last activity: 2026-03-13 -- Completed 09-03 Wire BotManager into apply_config, startup, shutdown, and API endpoints
 
-Progress: [=========-] 85% (8.3/10 phases complete)
+Progress: [=========] 90% (9/10 phases complete)
 
 ## Performance Metrics
 
@@ -41,6 +41,7 @@ Progress: [=========-] 85% (8.3/10 phases complete)
 | Phase 08 P01 | 3min | 2 tasks | 3 files |
 | Phase 09 P01 | 4min | 2 tasks | 2 files |
 | Phase 09 P02 | 6min | 2 tasks | 2 files |
+| Phase 09 P03 | 5min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -70,6 +71,10 @@ Recent decisions affecting current work:
 - [Phase 09]: _resolve_bot_configs falls back: bots array > telegram_bot_token > TELEGRAM_BOT_TOKEN env > empty
 - [Phase 09]: _do_message_relay and _check_pairing extracted as testable BotInstance methods from poll loop closures
 - [Phase 09]: get_paired_chat_ids, _add_pairing_to_config, _get_session_id all parameterized with backward-compatible defaults
+- [Phase 09]: Module-level _bot_manager wired into apply_config, shutdown, _is_goose_gateway_running, and API endpoints
+- [Phase 09]: start_telegram_gateway becomes thin wrapper around _bot_manager.add_bot("default", token)
+- [Phase 09]: handle_telegram_status returns "bots" array alongside backward-compat top-level fields
+- [Phase 09]: handle_telegram_pair accepts ?bot=name query param, defaults to "default"
 
 ### Pending Todos
 
@@ -93,5 +98,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-03-13
-Stopped at: Completed 09-02-PLAN.md (Poll loop refactor into BotInstance._poll_loop with per-bot lifecycle)
+Stopped at: Completed 09-03-PLAN.md (Wire BotManager into apply_config, startup, shutdown, and API endpoints)
 Resume file: None

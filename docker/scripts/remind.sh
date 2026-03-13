@@ -135,6 +135,7 @@ cmd_create() {
     local delay_seconds=""
     local fire_at=""
     local recurring_seconds=""
+    local notify_channel=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -153,6 +154,10 @@ cmd_create() {
                     delay_seconds="$recurring_seconds"
                 fi
                 ;;
+            --notify-channel)
+                shift
+                notify_channel="$1"
+                ;;
             *)
                 echo "error: unknown flag '$1'" >&2
                 exit 1
@@ -166,19 +171,22 @@ cmd_create() {
         exit 1
     fi
 
-    PAYLOAD=$(_TEXT="$text" _DELAY="$delay_seconds" _FIREAT="$fire_at" _RECUR="$recurring_seconds" python3 -c "
+    PAYLOAD=$(_TEXT="$text" _DELAY="$delay_seconds" _FIREAT="$fire_at" _RECUR="$recurring_seconds" _NOTIFY_CH="$notify_channel" python3 -c "
 import json, os
 text = os.environ['_TEXT']
 d = {'type': 'reminder', 'text': text, 'name': text[:80]}
 ds = os.environ.get('_DELAY', '')
 fa = os.environ.get('_FIREAT', '')
 rs = os.environ.get('_RECUR', '')
+nc = os.environ.get('_NOTIFY_CH', '')
 if ds:
     d['delay_seconds'] = int(ds)
 elif fa:
     d['fire_at'] = float(fa)
 if rs:
     d['recurring_seconds'] = int(rs)
+if nc:
+    d['notify_channel'] = nc
 print(json.dumps(d))
 ")
 
@@ -210,6 +218,7 @@ if [[ $# -eq 0 ]]; then
     echo "  remind \"message\" --in 5m         # fire in 5 minutes"
     echo "  remind \"message\" --at 09:00      # fire at next 09:00"
     echo "  remind \"message\" --every 1h      # recurring every hour"
+    echo "  remind \"message\" --in 5m --notify-channel telegram"
     echo "  remind list                       # list all jobs"
     echo "  remind cancel <id>                # cancel by ID (first 8 chars ok)"
     exit 0

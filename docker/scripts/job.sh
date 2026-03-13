@@ -64,6 +64,36 @@ print(int(target))
 "
 }
 
+_parse_until() {
+    # accepts: YYYY-MM-DD, YYYY-MM-DD HH:MM, or a duration like 7d/2w
+    local input="$1"
+    # try date format first
+    python3 -c "
+import time, sys, re
+s = '''$input'''.strip()
+# try YYYY-MM-DD HH:MM
+for fmt in ('%Y-%m-%d %H:%M', '%Y-%m-%d'):
+    try:
+        t = time.mktime(time.strptime(s, fmt))
+        if t <= time.time():
+            print('error: --until date must be in the future', file=sys.stderr)
+            sys.exit(1)
+        print(int(t))
+        sys.exit(0)
+    except ValueError:
+        pass
+# try duration: Nd or Nw
+m = re.match(r'^(\d+)([dwDW])$', s)
+if m:
+    n, unit = int(m.group(1)), m.group(2).lower()
+    secs = n * (86400 if unit == 'd' else 604800)
+    print(int(time.time() + secs))
+    sys.exit(0)
+print(f'error: could not parse --until \"{s}\". use YYYY-MM-DD, YYYY-MM-DD HH:MM, Nd, or Nw', file=sys.stderr)
+sys.exit(1)
+"
+}
+
 # ── commands ─────────────────────────────────────────────────────────────────
 
 cmd_list() {
@@ -178,6 +208,7 @@ cmd_create() {
     local cron_expr=""
     local model=""
     local provider=""
+    local expires_at=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -200,6 +231,10 @@ cmd_create() {
             --cron)
                 shift
                 cron_expr="$1"
+                ;;
+            --until)
+                shift
+                expires_at=$(_parse_until "$1")
                 ;;
             --model)
                 shift
@@ -241,7 +276,7 @@ cmd_create() {
         delay_seconds="$recurring_seconds"
     fi
 
-    PAYLOAD=$(_NAME="$name" _CMD="$command" _DELAY="$delay_seconds" _FIREAT="$fire_at" _RECUR="$recurring_seconds" _CRON="$cron_expr" _MODEL="$model" _PROVIDER="$provider" python3 -c "
+    PAYLOAD=$(_NAME="$name" _CMD="$command" _DELAY="$delay_seconds" _FIREAT="$fire_at" _RECUR="$recurring_seconds" _CRON="$cron_expr" _MODEL="$model" _PROVIDER="$provider" _EXPIRES="$expires_at" python3 -c "
 import json, os
 d = {
     'type': 'script',
@@ -254,6 +289,7 @@ rs = os.environ.get('_RECUR', '')
 cr = os.environ.get('_CRON', '')
 ml = os.environ.get('_MODEL', '')
 pv = os.environ.get('_PROVIDER', '')
+ex = os.environ.get('_EXPIRES', '')
 if ds:
     d['delay_seconds'] = int(ds)
 elif fa:
@@ -266,6 +302,8 @@ if ml:
     d['model'] = ml
 if pv:
     d['provider'] = pv
+if ex:
+    d['expires_at'] = float(ex)
 print(json.dumps(d))
 ")
 
@@ -303,6 +341,7 @@ if [[ $# -eq 0 ]]; then
     echo "  job create \"name\" --run \"command\" --cron \"0 9 * * 1-5\"  # cron schedule"
     echo "  job create \"name\" --run \"command\" --in 5m       # one-shot in 5 minutes"
     echo "  job create \"name\" --run \"command\" --at 09:00    # one-shot at time"
+    echo "  job create \"name\" --run \"cmd\" --every 1d --until 2026-03-30  # auto-expires"
     echo "  job create \"name\" --run \"cmd\" --every 1d --provider openrouter --model mistral-7b"
     echo "  job list                                         # list active jobs"
     echo "  job cancel <id>                                  # cancel by ID (first 8 chars ok)"

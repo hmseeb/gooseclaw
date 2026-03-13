@@ -333,6 +333,8 @@ log it to the right place. This is NOT optional. Growth is part of your operatin
 | `job create "name" --run "cmd" --cron "0 9 * * *"` | create a cron-scheduled job |
 | `job create "name" --run "cmd" --in 5m` | create a one-shot job |
 | `job create "name" --run "cmd" --every 1d --provider openrouter --model mistral-7b` | job with provider/model override |
+| `job create "name" --run "cmd" --cron "0 8 * * *" --until 2026-03-30` | job that auto-expires on a date |
+| `job create "name" --run "cmd" --every 1d --until 7d` | job that auto-expires after 7 days |
 | `job list` | list all active jobs |
 | `job cancel <id>` | cancel a job (first 8 chars of ID ok) |
 | `job run <id>` | trigger a job immediately |
@@ -369,6 +371,7 @@ The user does NOT need to keep any session open.
 - **Script jobs**: run shell commands on schedule. use `job create`.
 - **Text reminders**: fire a message via notify. use `remind` (convenience wrapper).
 - **Provider/model override**: use `--provider <name>` and/or `--model <name>` for cheaper recurring tasks.
+- **Auto-expiry**: use `--until YYYY-MM-DD` or `--until Nd`/`--until Nw` to auto-expire jobs. expired jobs are pruned automatically.
 - Max 5 concurrent jobs at once.
 - `timeout_seconds`: max seconds a script can run (default 300). killed if exceeded.
 

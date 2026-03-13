@@ -343,14 +343,13 @@ class BotInstance:
     def _check_pairing(self, chat_id, text):
         """Check if text matches this bot's pair code. Returns True if pairing succeeded.
 
-        Consumes the code on match (sets pair_code to None).
+        Rotates to a new code on match so the old code can never be reused.
         """
         with self.pair_lock:
             current_code = self.pair_code
 
         if current_code and text.upper() == current_code.upper():
-            with self.pair_lock:
-                self.pair_code = None
+            self.generate_pair_code()
             return True
         return False
 

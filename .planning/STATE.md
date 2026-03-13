@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-03-13)
 ## Current Position
 
 Phase: 7 of 10 (Channel Plugin Parity)
-Plan: 2 of 3 in current phase
-Status: In Progress
-Last activity: 2026-03-13 -- Completed 07-02 Per-user concurrency locks + typing indicator callbacks
+Plan: 3 of 3 in current phase
+Status: Phase 7 Complete
+Last activity: 2026-03-13 -- Completed 07-03 Custom command registration + dynamic channel validation
 
-Progress: [======----] 60% (6/10 phases complete)
+Progress: [=======---] 70% (7/10 phases complete)
 
 ## Performance Metrics
 
@@ -37,6 +37,7 @@ Progress: [======----] 60% (6/10 phases complete)
 | Phase 06 P03 | 7min | 2 tasks | 2 files |
 | Phase 07 P01 | 3min | 2 tasks | 2 files |
 | Phase 07 P02 | 3min | 2 tasks | 2 files |
+| Phase 07 P03 | 5min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -59,6 +60,8 @@ Recent decisions affecting current work:
 - [Phase 07]: _handle_cmd_compact uses _session_manager.get(channel) instead of telegram-specific _get_session_id
 - [Phase 07]: ChannelRelay acquires per-user lock (timeout 2s/120s) before relay, sends busy message on contention
 - [Phase 07]: Typing indicator loop fires callback every 4s during relay, stops in finally block
+- [Phase 07]: Custom commands registered on global _command_router with conflict detection (built-in wins)
+- [Phase 07]: _get_valid_channels() replaces all hardcoded valid_channels tuples dynamically
 
 ### Pending Todos
 
@@ -82,5 +85,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-03-13
-Stopped at: Completed 07-02-PLAN.md (Per-user concurrency locks + typing indicator callbacks)
+Stopped at: Completed 07-03-PLAN.md (Custom command registration + dynamic channel validation) -- Phase 7 complete
 Resume file: None

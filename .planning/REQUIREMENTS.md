@@ -10,8 +10,8 @@
 - [x] **CHAN-01**: Channel plugins receive /help, /stop, /clear, /compact commands identical to telegram
 - [x] **CHAN-02**: Channel plugins have per-user relay locks preventing concurrent goose requests from same user
 - [x] **CHAN-03**: Channel plugins can cancel in-flight requests via /stop (active relay tracking + socket close)
-- [ ] **CHAN-04**: Channel plugins can register custom commands via CHANNEL dict `commands` field
-- [ ] **CHAN-05**: Notification bus validates channel names dynamically from loaded plugins, not hardcoded list
+- [x] **CHAN-04**: Channel plugins can register custom commands via CHANNEL dict `commands` field
+- [x] **CHAN-05**: Notification bus validates channel names dynamically from loaded plugins, not hardcoded list
 - [x] **CHAN-06**: Channel plugins can signal typing/activity indicators via optional `typing` callback in CHANNEL dict
 - [ ] **CHAN-07**: POST /api/notify accepts optional `channel` parameter for targeted delivery
 - [ ] **CHAN-08**: Cron scheduler passes `notify_channel` to notify_all when job specifies it
@@ -66,8 +66,8 @@
 | CHAN-01 | Phase 7 | Complete |
 | CHAN-02 | Phase 7 | Complete |
 | CHAN-03 | Phase 7 | Complete |
-| CHAN-04 | Phase 7 | Pending |
-| CHAN-05 | Phase 7 | Pending |
+| CHAN-04 | Phase 7 | Complete |
+| CHAN-05 | Phase 7 | Complete |
 | CHAN-06 | Phase 7 | Complete |
 | CHAN-07 | Phase 8 | Pending |
 | CHAN-08 | Phase 8 | Pending |

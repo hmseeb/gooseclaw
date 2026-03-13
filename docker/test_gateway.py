@@ -3498,8 +3498,9 @@ class TestBotLifecycleAPI(unittest.TestCase):
 
         gateway.GatewayHandler.handle_add_bot(handler)
 
-        # should have called send_response(401)
-        handler.send_response.assert_called_with(401)
+        # should have returned 401 for auth failure
+        self.assertIsNotNone(handler._json_response)
+        self.assertEqual(handler._json_response[0], 401)
 
     @patch("gateway._is_first_boot", return_value=False)
     @patch("gateway.check_auth", return_value=False)
@@ -3512,7 +3513,8 @@ class TestBotLifecycleAPI(unittest.TestCase):
 
         gateway.GatewayHandler.handle_remove_bot(handler, "x")
 
-        handler.send_response.assert_called_with(401)
+        self.assertIsNotNone(handler._json_response)
+        self.assertEqual(handler._json_response[0], 401)
 
 
 class TestUXPaperCuts(unittest.TestCase):
@@ -3574,7 +3576,7 @@ class TestUXPaperCuts(unittest.TestCase):
 
     @patch("gateway._is_first_boot", return_value=False)
     @patch("gateway.check_auth", return_value=True)
-    @patch("gateway.load_setup", return_value={"provider": "openai", "api_key": "sk-test"})
+    @patch("gateway.load_setup", return_value={"provider": "openai", "api_key": "sk-test", "web_auth_token_hash": "existinghash"})
     @patch("gateway.save_setup")
     @patch("gateway.apply_config")
     @patch("gateway.start_goose_web")
@@ -3605,7 +3607,7 @@ class TestUXPaperCuts(unittest.TestCase):
 
     @patch("gateway._is_first_boot", return_value=False)
     @patch("gateway.check_auth", return_value=True)
-    @patch("gateway.load_setup", return_value={"provider": "openai", "api_key": "sk-test"})
+    @patch("gateway.load_setup", return_value={"provider": "openai", "api_key": "sk-test", "web_auth_token_hash": "existinghash"})
     @patch("gateway.save_setup")
     @patch("gateway.apply_config")
     @patch("gateway.start_goose_web")
@@ -6386,6 +6388,244 @@ CHANNEL = {
                 del gateway._channel_stop_events["test_discord_media"]
         finally:
             os.unlink(tmp_path)
+
+
+# ── password auth ─────────────────────────────────────────────────────────
+
+class TestPasswordAuth(unittest.TestCase):
+    """Tests for password-based authentication (replacing auto-generated tokens)."""
+
+    def _make_handler(self, method="GET", path="/", body=None, cookie=None, client_ip="8.8.8.8"):
+        """Build a mock HTTP handler for auth testing."""
+        handler = MagicMock()
+        handler.path = path
+        handler.client_address = (client_ip, 12345)
+        handler.headers = {}
+        if cookie:
+            handler.headers["Cookie"] = cookie
+        handler.headers = MagicMock()
+        handler.headers.get = MagicMock(side_effect=lambda key, default="": {
+            "Cookie": cookie or "",
+            "Authorization": "",
+            "Content-Type": "application/json",
+            "Content-Length": str(len(body)) if body else "0",
+        }.get(key, default))
+        if body:
+            handler.rfile = MagicMock()
+            handler.rfile.read = MagicMock(return_value=body if isinstance(body, bytes) else body.encode())
+        handler._set_session_cookie = False
+        return handler
+
+    @patch("gateway.load_setup")
+    def test_login_endpoint_success(self, mock_setup):
+        """POST /api/auth/login with correct password returns 200 + Set-Cookie."""
+        pw_hash = gateway.hash_token("mypassword")
+        mock_setup.return_value = {"web_auth_token_hash": pw_hash}
+
+        handler = self._make_handler(
+            method="POST",
+            path="/api/auth/login",
+            body=json.dumps({"password": "mypassword"}).encode(),
+        )
+        handler._read_body = MagicMock(return_value=json.dumps({"password": "mypassword"}).encode())
+
+        # call the handler method directly
+        gateway.GatewayHandler.handle_auth_login(handler)
+
+        # check Set-Cookie was called
+        handler.send_header.assert_any_call(
+            "Set-Cookie",
+            unittest.mock.ANY,
+        )
+        # find the Set-Cookie call
+        cookie_calls = [c for c in handler.send_header.call_args_list if c[0][0] == "Set-Cookie"]
+        self.assertTrue(len(cookie_calls) > 0)
+        cookie_val = cookie_calls[0][0][1]
+        self.assertIn("gooseclaw_session=", cookie_val)
+        self.assertIn("HttpOnly", cookie_val)
+        self.assertIn("SameSite=Strict", cookie_val)
+        handler.send_response.assert_called_with(200)
+
+    @patch("gateway.load_setup")
+    def test_login_endpoint_wrong_password(self, mock_setup):
+        """POST /api/auth/login with wrong password returns 401."""
+        pw_hash = gateway.hash_token("mypassword")
+        mock_setup.return_value = {"web_auth_token_hash": pw_hash}
+
+        handler = self._make_handler(body=json.dumps({"password": "wrong"}).encode())
+        handler._read_body = MagicMock(return_value=json.dumps({"password": "wrong"}).encode())
+        handler._check_rate_limit = MagicMock(return_value=True)
+
+        sent_json = {}
+        def capture_json(status, data):
+            sent_json["status"] = status
+            sent_json["data"] = data
+        handler.send_json = capture_json
+
+        gateway.GatewayHandler.handle_auth_login(handler)
+        self.assertEqual(sent_json["status"], 401)
+        self.assertEqual(sent_json["data"]["error"], "Invalid password")
+
+    @patch("gateway.load_setup")
+    def test_login_endpoint_no_password_configured(self, mock_setup):
+        """POST /api/auth/login returns 400 on first boot (no password)."""
+        mock_setup.return_value = None
+
+        handler = self._make_handler(body=json.dumps({"password": "test"}).encode())
+        handler._read_body = MagicMock(return_value=json.dumps({"password": "test"}).encode())
+        handler._check_rate_limit = MagicMock(return_value=True)
+
+        sent_json = {}
+        def capture_json(status, data):
+            sent_json["status"] = status
+            sent_json["data"] = data
+        handler.send_json = capture_json
+
+        gateway.GatewayHandler.handle_auth_login(handler)
+        self.assertEqual(sent_json["status"], 400)
+        self.assertIn("No password configured", sent_json["data"]["error"])
+
+    @patch("gateway.save_setup")
+    @patch("gateway.apply_config")
+    @patch("gateway.validate_setup_config")
+    @patch("gateway.load_setup")
+    def test_save_requires_password_on_first_setup(self, mock_load, mock_validate, mock_apply, mock_save):
+        """handle_save without password on first setup returns 400 error."""
+        mock_load.return_value = None  # first boot
+        mock_validate.return_value = (True, [])
+
+        handler = self._make_handler(body=json.dumps({"provider_type": "anthropic"}).encode())
+        handler._read_body = MagicMock(return_value=json.dumps({"provider_type": "anthropic"}).encode())
+        handler._check_rate_limit = MagicMock(return_value=True)
+
+        sent_json = {}
+        def capture_json(status, data):
+            sent_json["status"] = status
+            sent_json["data"] = data
+        handler.send_json = capture_json
+
+        gateway.GatewayHandler.handle_save(handler)
+        self.assertEqual(sent_json["status"], 400)
+        self.assertIn("Password is required", sent_json["data"]["errors"])
+
+    @patch("gateway.start_memory_writer")
+    @patch("gateway.start_cron_scheduler")
+    @patch("gateway.start_job_engine")
+    @patch("gateway.start_session_watcher")
+    @patch("gateway.start_goose_web")
+    @patch("gateway.save_setup")
+    @patch("gateway.apply_config")
+    @patch("gateway.validate_setup_config")
+    @patch("gateway.load_setup")
+    def test_save_with_password_hashes_and_stores(self, mock_load, mock_validate, mock_apply,
+                                                   mock_save, mock_start, mock_session,
+                                                   mock_job, mock_cron, mock_mem):
+        """handle_save with password stores hash, no plaintext in saved config."""
+        mock_load.return_value = None  # first boot
+        mock_validate.return_value = (True, [])
+
+        config = {"provider_type": "anthropic", "web_auth_token": "mypassword123"}
+        handler = self._make_handler(body=json.dumps(config).encode())
+        handler._read_body = MagicMock(return_value=json.dumps(config).encode())
+        handler._check_rate_limit = MagicMock(return_value=True)
+
+        sent_json = {}
+        def capture_json(status, data):
+            sent_json["status"] = status
+            sent_json["data"] = data
+        handler.send_json = capture_json
+
+        gateway.GatewayHandler.handle_save(handler)
+        self.assertEqual(sent_json["status"], 200)
+        self.assertTrue(sent_json["data"]["success"])
+        # no auth_token in response
+        self.assertNotIn("auth_token", sent_json["data"])
+
+        # check saved config has hash, no plaintext
+        saved_config = mock_save.call_args[0][0]
+        self.assertIn("web_auth_token_hash", saved_config)
+        self.assertEqual(saved_config["web_auth_token_hash"], gateway.hash_token("mypassword123"))
+        self.assertNotIn("web_auth_token", saved_config)
+
+    @patch("gateway.save_setup")
+    @patch("gateway.apply_config")
+    @patch("gateway.validate_setup_config")
+    @patch("gateway.load_setup")
+    def test_no_auto_generated_token(self, mock_load, mock_validate, mock_apply, mock_save):
+        """handle_save does NOT generate token when password is blank on first setup."""
+        mock_load.return_value = None
+        mock_validate.return_value = (True, [])
+
+        config = {"provider_type": "anthropic", "web_auth_token": ""}
+        handler = self._make_handler(body=json.dumps(config).encode())
+        handler._read_body = MagicMock(return_value=json.dumps(config).encode())
+        handler._check_rate_limit = MagicMock(return_value=True)
+
+        sent_json = {}
+        def capture_json(status, data):
+            sent_json["status"] = status
+            sent_json["data"] = data
+        handler.send_json = capture_json
+
+        gateway.GatewayHandler.handle_save(handler)
+        # should fail, not auto-generate
+        self.assertEqual(sent_json["status"], 400)
+        self.assertIn("Password is required", sent_json["data"]["errors"])
+        mock_save.assert_not_called()
+
+    @patch("gateway.save_setup")
+    @patch("gateway.load_setup")
+    def test_recovery_returns_temporary_password(self, mock_load, mock_save):
+        """Recovery response has temporary_password field, not auth_token."""
+        mock_load.return_value = {"web_auth_token_hash": "oldhash"}
+        recovery_secret = "my-recovery-secret"
+
+        handler = self._make_handler(body=json.dumps({"secret": recovery_secret}).encode())
+        handler._read_body = MagicMock(return_value=json.dumps({"secret": recovery_secret}).encode())
+        handler._check_rate_limit = MagicMock(return_value=True)
+
+        sent_json = {}
+        def capture_json(status, data):
+            sent_json["status"] = status
+            sent_json["data"] = data
+        handler.send_json = capture_json
+
+        with patch.dict(os.environ, {"GOOSECLAW_RECOVERY_SECRET": recovery_secret}):
+            gateway.GatewayHandler.handle_auth_recover(handler)
+
+        self.assertEqual(sent_json["status"], 200)
+        self.assertTrue(sent_json["data"]["success"])
+        self.assertIn("temporary_password", sent_json["data"])
+        self.assertNotIn("auth_token", sent_json["data"])
+        self.assertIn("Password reset", sent_json["data"]["message"])
+
+    def test_login_page_served(self):
+        """GET /login returns 200 with HTML containing password input."""
+        handler = self._make_handler(method="GET", path="/login")
+        handler.wfile = MagicMock()
+        handler.send_response = MagicMock()
+        handler.send_header = MagicMock()
+        handler.end_headers = MagicMock()
+
+        gateway.GatewayHandler.handle_login_page(handler)
+
+        handler.send_response.assert_called_with(200)
+        # check that HTML was written
+        written = handler.wfile.write.call_args[0][0]
+        self.assertIn(b"password", written)
+        self.assertIn(b"GooseClaw", written)
+        self.assertIn(b"/api/auth/login", written)
+        self.assertIn(b"Lost your password", written)
+
+    @patch("gateway.load_setup")
+    def test_get_auth_token_no_env_var(self, mock_setup):
+        """get_auth_token does not check GOOSE_WEB_AUTH_TOKEN env var."""
+        mock_setup.return_value = None
+        with patch.dict(os.environ, {"GOOSE_WEB_AUTH_TOKEN": "should-be-ignored"}):
+            token, is_hashed = gateway.get_auth_token()
+        # env var should be ignored -- no setup = no auth
+        self.assertEqual(token, "")
+        self.assertFalse(is_hashed)
 
 
 if __name__ == "__main__":

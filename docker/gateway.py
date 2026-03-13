@@ -1811,13 +1811,9 @@ def _is_first_boot():
 def get_auth_token():
     """Get the active auth token. Returns (token_or_hash, is_hashed) tuple.
 
-    - env var GOOSE_WEB_AUTH_TOKEN -> (plaintext, False)
     - setup.json web_auth_token_hash (new format) -> (hash, True)
     - setup.json web_auth_token (legacy plaintext) -> (plaintext, False)
     """
-    token = os.environ.get("GOOSE_WEB_AUTH_TOKEN", "")
-    if token:
-        return token, False
     setup = load_setup()
     if setup:
         stored_hash = setup.get("web_auth_token_hash", "")
@@ -1867,6 +1863,150 @@ def check_auth(handler):
         except Exception:
             pass
     return False
+
+
+# ── login page HTML ─────────────────────────────────────────────────────────
+
+LOGIN_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GooseClaw Login</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --surface: #12121a;
+    --border: rgba(255,255,255,0.08);
+    --text: #e2e2e8;
+    --text-secondary: #8b8b9e;
+    --accent: #6c63ff;
+    --accent-hover: #7b73ff;
+    --error: #f87171;
+    --radius: 12px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Inter', -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .login-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 40px 36px;
+    width: 100%;
+    max-width: 380px;
+  }
+  .login-title {
+    font-size: 20px;
+    font-weight: 600;
+    margin-bottom: 24px;
+    text-align: center;
+  }
+  .login-field { margin-bottom: 16px; }
+  .login-field label {
+    display: block;
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 6px;
+  }
+  .login-field input {
+    width: 100%;
+    padding: 10px 14px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  .login-field input:focus { border-color: var(--accent); }
+  .login-btn {
+    width: 100%;
+    padding: 10px;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    margin-top: 8px;
+    transition: background 0.2s;
+  }
+  .login-btn:hover { background: var(--accent-hover); }
+  .login-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+  .login-error {
+    color: var(--error);
+    font-size: 13px;
+    margin-top: 12px;
+    text-align: center;
+    display: none;
+  }
+  .login-footer {
+    margin-top: 20px;
+    text-align: center;
+    font-size: 12px;
+  }
+  .login-footer a { color: var(--text-secondary); text-decoration: none; }
+  .login-footer a:hover { color: var(--text); }
+</style>
+</head>
+<body>
+<div class="login-card">
+  <div class="login-title">GooseClaw</div>
+  <form id="loginForm" onsubmit="return doLogin(event)">
+    <div class="login-field">
+      <label for="password">Password</label>
+      <input type="password" id="password" name="password" placeholder="enter your password" autofocus required>
+    </div>
+    <button type="submit" class="login-btn" id="loginBtn">Log In</button>
+    <div class="login-error" id="loginError"></div>
+  </form>
+  <div class="login-footer">
+    <a href="/setup?recover">Lost your password?</a>
+  </div>
+</div>
+<script>
+async function doLogin(e) {
+  e.preventDefault();
+  const btn = document.getElementById('loginBtn');
+  const errEl = document.getElementById('loginError');
+  const pw = document.getElementById('password').value;
+  if (!pw) return false;
+  btn.disabled = true;
+  errEl.style.display = 'none';
+  try {
+    const resp = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({password: pw}),
+    });
+    const data = await resp.json();
+    if (data.success) {
+      window.location.href = '/';
+    } else {
+      errEl.textContent = data.error || 'Login failed';
+      errEl.style.display = 'block';
+    }
+  } catch(ex) {
+    errEl.textContent = 'Could not reach server';
+    errEl.style.display = 'block';
+  }
+  btn.disabled = false;
+  return false;
+}
+</script>
+</body>
+</html>"""
 
 
 # ── provider validation ─────────────────────────────────────────────────────
@@ -5990,6 +6130,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.handle_list_jobs()
         elif path == "/api/channels":
             self.handle_list_channels()
+        elif path.rstrip("/") == "/login":
+            self.handle_login_page()
         elif path.rstrip("/") == "/admin":
             # backward compat: redirect /admin to /
             self.send_response(302)
@@ -5999,6 +6141,10 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             if not is_configured():
                 self.send_response(302)
                 self.send_header("Location", "/setup")
+                self.end_headers()
+            elif not check_auth(self):
+                self.send_response(302)
+                self.send_header("Location", "/login")
                 self.end_headers()
             else:
                 self.handle_admin_page()
@@ -6034,6 +6180,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.handle_notify()
         elif path == "/api/telegram/pair":
             self.handle_telegram_pair()
+        elif path == "/api/auth/login":
+            self.handle_auth_login()
         elif path == "/api/auth/recover":
             self.handle_auth_recover()
         elif path == "/api/jobs":
@@ -6178,12 +6326,9 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         query = urllib.parse.urlparse(self.path).query
         is_recovery = "recover" in urllib.parse.parse_qs(query)
         if load_setup() and not is_recovery and not check_auth(self):
-            body = b"Authentication required. Lost your token? Visit /setup?recover"
-            self.send_response(401)
-            self.send_header("WWW-Authenticate", 'Basic realm="gooseclaw setup"')
-            self.send_header("Content-Length", str(len(body)))
+            self.send_response(302)
+            self.send_header("Location", "/login")
             self.end_headers()
-            self.wfile.write(body)
             return
         try:
             with open(SETUP_HTML, "rb") as f:
@@ -6349,16 +6494,23 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json(400, {"success": False, "errors": errors})
                 return
 
-            # auto-generate auth token if not provided
-            plaintext_token = config.get("web_auth_token", "")
-            if not plaintext_token and not os.environ.get("GOOSE_WEB_AUTH_TOKEN"):
-                plaintext_token = secrets.token_urlsafe(24)
+            # password handling: require on first setup, optional on reconfigure
+            plaintext_password = config.get("web_auth_token", "")
+            existing_setup = load_setup()
+            has_existing_hash = bool(existing_setup and existing_setup.get("web_auth_token_hash"))
+            if not plaintext_password and not has_existing_hash:
+                # first setup with no password = error
+                self.send_json(400, {"success": False, "errors": ["Password is required"]})
+                return
 
-            # hash the token before storage -- plaintext never hits disk
-            if plaintext_token:
-                config["web_auth_token_hash"] = hash_token(plaintext_token)
-                # remove plaintext from config dict before saving
-                config.pop("web_auth_token", None)
+            # hash the password before storage -- plaintext never hits disk
+            if plaintext_password:
+                config["web_auth_token_hash"] = hash_token(plaintext_password)
+            elif has_existing_hash:
+                # keep existing hash during reconfigure
+                config["web_auth_token_hash"] = existing_setup["web_auth_token_hash"]
+            # remove plaintext from config dict before saving
+            config.pop("web_auth_token", None)
 
             save_setup(config)
             apply_config(config)
@@ -6374,9 +6526,6 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             threading.Thread(target=_restart, daemon=True).start()
 
             resp = {"success": True, "message": "saved. agent is restarting..."}
-            if plaintext_token:
-                # one-time display to user -- not stored in setup.json
-                resp["auth_token"] = plaintext_token
             # include pairing code if a telegram bot is configured
             tg_token = config.get("telegram_bot_token", "")
             if tg_token:
@@ -6717,9 +6866,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         client_ip = self.client_address[0] if self.client_address else ""
         is_local = client_ip in ("127.0.0.1", "::1", "localhost")
         if not is_local and not check_auth(self):
-            self.send_response(401)
-            self.send_header("WWW-Authenticate", 'Basic realm="gooseclaw"')
-            self.end_headers()
+            self.send_json(401, {"error": "Authentication required"})
             return
         body = self._read_body()
         try:
@@ -6792,9 +6939,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(403, {"error": "agent not configured yet"})
             return
         if not check_auth(self):
-            self.send_response(401)
-            self.send_header("WWW-Authenticate", 'Basic realm="gooseclaw"')
-            self.end_headers()
+            self.send_json(401, {"error": "Authentication required"})
             return
 
         # determine which bot to pair
@@ -6919,9 +7064,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         if is_local:
             return True
         if not check_auth(self):
-            self.send_response(401)
-            self.send_header("WWW-Authenticate", 'Basic realm="gooseclaw"')
-            self.end_headers()
+            self.send_json(401, {"error": "Authentication required"})
             return False
         return True
 
@@ -7194,10 +7337,76 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         names = _reload_channels()
         self.send_json(200, {"reloaded": True, "channels": names, "count": len(names)})
 
+    # ── login page + login endpoint ──
+
+    def handle_login_page(self):
+        """GET /login — serve custom HTML login page."""
+        body = LOGIN_HTML.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-cache")
+        for header, value in SECURITY_HEADERS.items():
+            self.send_header(header, value)
+        csp = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+            "font-src https://fonts.gstatic.com; "
+            "img-src 'self' data:; "
+            "connect-src 'self'; "
+            "frame-ancestors 'none'"
+        )
+        self.send_header("Content-Security-Policy", csp)
+        self.end_headers()
+        self.wfile.write(body)
+
+    def handle_auth_login(self):
+        """POST /api/auth/login — password-based login, sets session cookie."""
+        if not self._check_rate_limit(auth_limiter):
+            return
+        stored, is_hashed = get_auth_token()
+        if not stored:
+            self.send_json(400, {"error": "No password configured yet"})
+            return
+        body = self._read_body()
+        try:
+            data = json.loads(body)
+            password = data.get("password", "")
+            if not password:
+                self.send_json(400, {"error": "Password is required"})
+                return
+            # verify password
+            ok = False
+            if is_hashed:
+                ok = verify_token(password, stored)
+            else:
+                ok = (password == stored)
+            if not ok:
+                self.send_json(401, {"error": "Invalid password"})
+                return
+            # success: set session cookie
+            cookie_val = _make_session_cookie(stored)
+            secure_flag = "; Secure" if os.environ.get("RAILWAY_ENVIRONMENT") else ""
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header(
+                "Set-Cookie",
+                f"gooseclaw_session={cookie_val}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000{secure_flag}",
+            )
+            resp_body = json.dumps({"success": True}).encode()
+            self.send_header("Content-Length", str(len(resp_body)))
+            self.end_headers()
+            self.wfile.write(resp_body)
+        except json.JSONDecodeError:
+            self.send_json(400, {"error": "invalid JSON"})
+        except Exception as e:
+            self._internal_error(e, "handle_auth_login")
+
     # ── auth recovery endpoint ──
 
     def handle_auth_recover(self):
-        """POST /api/auth/recover — reset auth token using recovery secret."""
+        """POST /api/auth/recover — reset password using recovery secret."""
         if not self._check_rate_limit(auth_limiter):
             return
         recovery_secret = os.environ.get("GOOSECLAW_RECOVERY_SECRET", "")
@@ -7214,7 +7423,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             if not secrets.compare_digest(provided, recovery_secret):
                 self.send_json(403, {"error": "invalid recovery secret"})
                 return
-            # generate new auth token
+            # generate temporary password for recovery
             new_token = secrets.token_urlsafe(24)
             new_hash = hash_token(new_token)
             # update setup.json
@@ -7227,8 +7436,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             save_setup(setup)
             self.send_json(200, {
                 "success": True,
-                "auth_token": new_token,
-                "message": "Auth token reset. Save this token — it won't be shown again."
+                "temporary_password": new_token,
+                "message": "Password reset. Use this temporary password to log in, then change it in settings."
             })
         except json.JSONDecodeError:
             self.send_json(400, {"error": "invalid JSON"})

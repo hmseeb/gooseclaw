@@ -137,9 +137,10 @@ Recent decisions affecting current work:
 | 4 | Memory writer dedup, section routing, learnings format | 2026-03-13 | a4e298a | (parallel agent) |
 | 5 | Media message reply (canned text for non-text input) | 2026-03-13 | a4e298a | (parallel agent) |
 | 6 | Extract onboarding flow to separate file | 2026-03-13 | 26b4ef2 | (parallel agent) |
+| 7 | Replace auto-generated auth token with password auth | 2026-03-13 | 016c11f | quick/4-.../ |
 
 ## Session Continuity
 
 Last session: 2026-03-13
-Stopped at: Completed 15-01-PLAN.md (Discord channel plugin). 463 tests passing. v3.0 Rich Media & Channel Flexibility milestone complete.
+Stopped at: Completed quick task 4 (password auth). 472 tests passing. Password login page, cookie sessions, no more auto-generated tokens.
 Resume file: None

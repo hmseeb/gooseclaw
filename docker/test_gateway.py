@@ -5497,5 +5497,217 @@ class TestRelayProtocolUpgrade(unittest.TestCase):
                          "\n".join(f"  line {n}: {l}" for n, l in bad_lines))
 
 
+# ── _build_multipart ───────────────────────────────────────────────────────
+
+class TestBuildMultipart(unittest.TestCase):
+    """Tests for _build_multipart() multipart/form-data construction."""
+
+    def test_text_fields_only(self):
+        body, ct = gateway._build_multipart({"chat_id": "123"}, [])
+        self.assertIn(b"chat_id", body)
+        self.assertIn(b"123", body)
+        self.assertTrue(ct.startswith("multipart/form-data; boundary="))
+
+    def test_single_file(self):
+        files = [("photo", "img.jpg", "image/jpeg", b"\xff\xd8")]
+        body, ct = gateway._build_multipart({"chat_id": "123"}, files)
+        self.assertIn(b"\xff\xd8", body)
+        self.assertIn(b"img.jpg", body)
+        self.assertIn(b"Content-Disposition", body)
+
+    def test_multiple_fields_and_file(self):
+        fields = {"chat_id": "123", "caption": "hello"}
+        files = [("photo", "img.jpg", "image/jpeg", b"\xff\xd8")]
+        body, ct = gateway._build_multipart(fields, files)
+        self.assertIn(b"chat_id", body)
+        self.assertIn(b"caption", body)
+        self.assertIn(b"hello", body)
+        self.assertIn(b"\xff\xd8", body)
+
+    def test_boundary_uniqueness(self):
+        _, ct1 = gateway._build_multipart({}, [])
+        _, ct2 = gateway._build_multipart({}, [])
+        b1 = ct1.split("boundary=")[1]
+        b2 = ct2.split("boundary=")[1]
+        self.assertNotEqual(b1, b2)
+
+
+# ── _ext_from_mime ─────────────────────────────────────────────────────────
+
+class TestExtFromMime(unittest.TestCase):
+    """Tests for _ext_from_mime() MIME to extension mapping."""
+
+    def test_jpeg(self):
+        self.assertEqual(gateway._ext_from_mime("image/jpeg"), ".jpg")
+
+    def test_png(self):
+        self.assertEqual(gateway._ext_from_mime("image/png"), ".png")
+
+    def test_ogg(self):
+        self.assertEqual(gateway._ext_from_mime("audio/ogg"), ".ogg")
+
+    def test_unknown_falls_back(self):
+        result = gateway._ext_from_mime("application/x-custom")
+        self.assertTrue(len(result) > 0, "should return a non-empty extension")
+
+    def test_webp(self):
+        self.assertEqual(gateway._ext_from_mime("image/webp"), ".webp")
+
+
+# ── _route_media_blocks ───────────────────────────────────────────────────
+
+class TestRouteMediaBlocks(unittest.TestCase):
+    """Tests for _route_media_blocks() dispatching media to adapter."""
+
+    def _make_adapter(self):
+        adapter = MagicMock()
+        adapter.send_image = MagicMock(return_value={"sent": True, "error": ""})
+        adapter.send_file = MagicMock(return_value={"sent": True, "error": ""})
+        return adapter
+
+    def test_image_block_calls_send_image(self):
+        import base64 as b64
+        adapter = self._make_adapter()
+        small_img = b64.b64encode(b"\x89PNG\r\n").decode()
+        blocks = [{"type": "image", "data": small_img, "mimeType": "image/png"}]
+        gateway._route_media_blocks(blocks, adapter)
+        adapter.send_image.assert_called_once()
+        call_args = adapter.send_image.call_args
+        self.assertEqual(call_args[0][0], b"\x89PNG\r\n")
+
+    def test_large_image_falls_back_to_send_file(self):
+        import base64 as b64
+        adapter = self._make_adapter()
+        big_data = b"\x00" * (10_000_001)
+        big_b64 = b64.b64encode(big_data).decode()
+        blocks = [{"type": "image", "data": big_b64, "mimeType": "image/png"}]
+        gateway._route_media_blocks(blocks, adapter)
+        adapter.send_file.assert_called_once()
+        adapter.send_image.assert_not_called()
+
+    def test_empty_data_skipped(self):
+        adapter = self._make_adapter()
+        blocks = [{"type": "image", "data": "", "mimeType": "image/png"}]
+        gateway._route_media_blocks(blocks, adapter)
+        adapter.send_image.assert_not_called()
+        adapter.send_file.assert_not_called()
+
+    def test_unknown_type_skipped(self):
+        adapter = self._make_adapter()
+        blocks = [{"type": "video", "data": "abc", "mimeType": "video/mp4"}]
+        gateway._route_media_blocks(blocks, adapter)
+        adapter.send_image.assert_not_called()
+        adapter.send_file.assert_not_called()
+
+    def test_multiple_blocks(self):
+        import base64 as b64
+        adapter = self._make_adapter()
+        small_img = b64.b64encode(b"\x89PNG").decode()
+        blocks = [
+            {"type": "image", "data": small_img, "mimeType": "image/png"},
+            {"type": "image", "data": small_img, "mimeType": "image/png"},
+        ]
+        gateway._route_media_blocks(blocks, adapter)
+        self.assertEqual(adapter.send_image.call_count, 2)
+
+
+# ── TelegramOutboundAdapter ──────────────────────────────────────────────
+
+class TestTelegramOutboundAdapter(unittest.TestCase):
+    """Tests for TelegramOutboundAdapter media sending."""
+
+    def _make_adapter(self):
+        return gateway.TelegramOutboundAdapter("tok123", "chat456")
+
+    def test_capabilities(self):
+        a = self._make_adapter()
+        caps = a.capabilities()
+        self.assertTrue(caps.supports_images)
+        self.assertTrue(caps.supports_voice)
+        self.assertTrue(caps.supports_files)
+
+    @patch("gateway.send_telegram_message", return_value=(True, ""))
+    def test_send_text(self, mock_send):
+        a = self._make_adapter()
+        result = a.send_text("hello")
+        mock_send.assert_called_once_with("tok123", "chat456", "hello")
+        self.assertTrue(result["sent"])
+
+    @patch("gateway.urllib.request.urlopen")
+    def test_send_image(self, mock_urlopen):
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b'{"ok": true}'
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
+        a = self._make_adapter()
+        result = a.send_image(b"\xff\xd8", mime_type="image/jpeg")
+        self.assertTrue(result["sent"])
+        call_args = mock_urlopen.call_args
+        req = call_args[0][0]
+        self.assertIn("sendPhoto", req.full_url)
+
+    @patch("gateway.urllib.request.urlopen")
+    def test_send_voice(self, mock_urlopen):
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b'{"ok": true}'
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
+        a = self._make_adapter()
+        result = a.send_voice(b"\x00", mime_type="audio/ogg")
+        self.assertTrue(result["sent"])
+        call_args = mock_urlopen.call_args
+        req = call_args[0][0]
+        self.assertIn("sendVoice", req.full_url)
+
+    @patch("gateway.urllib.request.urlopen")
+    def test_send_file(self, mock_urlopen):
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b'{"ok": true}'
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
+        a = self._make_adapter()
+        result = a.send_file(b"\x00", filename="doc.pdf", mime_type="application/pdf")
+        self.assertTrue(result["sent"])
+        call_args = mock_urlopen.call_args
+        req = call_args[0][0]
+        self.assertIn("sendDocument", req.full_url)
+
+    @patch("gateway.urllib.request.urlopen", side_effect=Exception("network fail"))
+    def test_send_image_error_handled(self, mock_urlopen):
+        a = self._make_adapter()
+        result = a.send_image(b"\xff\xd8", mime_type="image/jpeg")
+        self.assertFalse(result["sent"])
+        self.assertIn("network fail", result["error"])
+
+    @patch("gateway.urllib.request.urlopen")
+    def test_caption_truncated(self, mock_urlopen):
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b'{"ok": true}'
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
+        a = self._make_adapter()
+        long_caption = "x" * 2000
+        a.send_image(b"\xff", caption=long_caption, mime_type="image/png")
+        call_args = mock_urlopen.call_args
+        req = call_args[0][0]
+        # body should have caption truncated to 1024
+        body = req.data
+        # find caption in multipart body -- it should be <= 1024 chars
+        # the body contains the caption value between boundary markers
+        self.assertIn(b"caption", body)
+        # the full 2000-char caption should NOT appear
+        self.assertNotIn(long_caption.encode(), body)
+        # but a 1024-char version should
+        self.assertIn(("x" * 1024).encode(), body)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1068,5 +1068,153 @@ class TestCommandRouter(unittest.TestCase):
             handlers[cmd].assert_called_with(ctx)
 
 
+# ── SessionManager ──────────────────────────────────────────────────────────
+
+class TestSessionManager(unittest.TestCase):
+    """Tests for SessionManager composite-key session store."""
+
+    def test_get_set_composite_key(self):
+        sm = gateway.SessionManager()
+        sm.set("telegram", "chat_1", "sid_abc")
+        assert sm.get("telegram", "chat_1") == "sid_abc"
+
+    def test_get_missing_returns_none(self):
+        sm = gateway.SessionManager()
+        assert sm.get("telegram", "nonexistent") is None
+
+    def test_pop_removes_and_returns(self):
+        sm = gateway.SessionManager()
+        sm.set("telegram", "chat_1", "sid_abc")
+        result = sm.pop("telegram", "chat_1")
+        assert result == "sid_abc"
+        assert sm.get("telegram", "chat_1") is None
+
+    def test_pop_missing_returns_none(self):
+        sm = gateway.SessionManager()
+        assert sm.pop("telegram", "nonexistent") is None
+
+    def test_clear_channel_only_removes_that_channel(self):
+        sm = gateway.SessionManager()
+        sm.set("telegram", "chat_1", "sid_1")
+        sm.set("telegram", "chat_2", "sid_2")
+        sm.set("discord", "user_1", "sid_3")
+        sm.clear_channel("telegram")
+        assert sm.get("telegram", "chat_1") is None
+        assert sm.get("telegram", "chat_2") is None
+        assert sm.get("discord", "user_1") == "sid_3"
+
+    def test_get_all_for_channel(self):
+        sm = gateway.SessionManager()
+        sm.set("telegram", "chat_1", "sid_1")
+        sm.set("telegram", "chat_2", "sid_2")
+        sm.set("discord", "user_1", "sid_3")
+        result = sm.get_all_for_channel("telegram")
+        assert result == {"chat_1": "sid_1", "chat_2": "sid_2"}
+
+    def test_different_channels_same_user_id(self):
+        sm = gateway.SessionManager()
+        sm.set("telegram", "user_1", "tg_sid")
+        sm.set("discord", "user_1", "dc_sid")
+        assert sm.get("telegram", "user_1") == "tg_sid"
+        assert sm.get("discord", "user_1") == "dc_sid"
+
+
+class TestSessionManagerPersistence(unittest.TestCase):
+    """Tests for SessionManager disk persistence."""
+
+    def setUp(self):
+        self.persist_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.persist_dir, ignore_errors=True)
+
+    def test_save_creates_file(self):
+        sm = gateway.SessionManager(persist_dir=self.persist_dir)
+        sm.set("telegram", "chat_1", "sid_abc")
+        fpath = os.path.join(self.persist_dir, "sessions_telegram.json")
+        assert os.path.exists(fpath)
+
+    def test_load_restores_sessions(self):
+        sm1 = gateway.SessionManager(persist_dir=self.persist_dir)
+        sm1.set("telegram", "chat_1", "sid_abc")
+        sm1.set("telegram", "chat_2", "sid_def")
+        # create new SM with same persist_dir
+        sm2 = gateway.SessionManager(persist_dir=self.persist_dir)
+        sm2.load("telegram")
+        assert sm2.get("telegram", "chat_1") == "sid_abc"
+        assert sm2.get("telegram", "chat_2") == "sid_def"
+
+    def test_save_uses_atomic_write(self):
+        sm = gateway.SessionManager(persist_dir=self.persist_dir)
+        with patch("os.replace") as mock_replace:
+            sm.set("telegram", "chat_1", "sid_abc")
+            mock_replace.assert_called_once()
+
+
+class TestSessionManagerThreadSafety(unittest.TestCase):
+    """Tests for SessionManager thread safety."""
+
+    def test_concurrent_sets(self):
+        sm = gateway.SessionManager()
+        errors = []
+
+        def set_session(i):
+            try:
+                sm.set("telegram", f"user_{i}", f"sid_{i}")
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=set_session, args=(i,)) for i in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert len(errors) == 0
+        for i in range(10):
+            assert sm.get("telegram", f"user_{i}") == f"sid_{i}"
+
+
+# ── ChannelState ────────────────────────────────────────────────────────────
+
+class TestChannelState(unittest.TestCase):
+    """Tests for ChannelState per-channel concurrency primitives."""
+
+    def test_get_user_lock_creates_on_demand(self):
+        cs = gateway.ChannelState()
+        lock1 = cs.get_user_lock("user_1")
+        lock2 = cs.get_user_lock("user_1")
+        assert lock1 is lock2
+        assert isinstance(lock1, type(threading.Lock()))
+
+    def test_different_users_get_different_locks(self):
+        cs = gateway.ChannelState()
+        lock1 = cs.get_user_lock("user_1")
+        lock2 = cs.get_user_lock("user_2")
+        assert lock1 is not lock2
+
+    def test_set_and_pop_active_relay(self):
+        cs = gateway.ChannelState()
+        sock_ref = [MagicMock(), threading.Event()]
+        cs.set_active_relay("user_1", sock_ref)
+        result = cs.pop_active_relay("user_1")
+        assert result is sock_ref
+        assert cs.pop_active_relay("user_1") is None
+
+    def test_kill_relay_closes_socket_and_sets_cancelled(self):
+        cs = gateway.ChannelState()
+        mock_sock = MagicMock()
+        cancel_event = threading.Event()
+        cs.set_active_relay("user_1", [mock_sock, cancel_event])
+        result = cs.kill_relay("user_1")
+        assert result is not None
+        mock_sock.close.assert_called_once()
+        assert cancel_event.is_set()
+
+    def test_kill_relay_nonexistent_returns_none(self):
+        cs = gateway.ChannelState()
+        assert cs.kill_relay("nonexistent") is None
+
+
 if __name__ == "__main__":
     unittest.main()

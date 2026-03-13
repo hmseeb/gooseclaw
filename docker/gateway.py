@@ -1950,6 +1950,44 @@ def check_auth(handler):
     return False
 
 
+# ── safe setup redaction ────────────────────────────────────────────────────
+
+_REDACTED = "***REDACTED***"
+
+_SENSITIVE_KEYS = (
+    "api_key",
+    "password_hash",
+    "web_auth_token_hash",
+    "claude_setup_token",
+    "azure_key",
+    "telegram_bot_token",
+    "litellm_host",
+)
+
+
+def get_safe_setup():
+    """Return a redacted copy of setup config, safe for API responses."""
+    setup = load_setup()
+    if setup is None:
+        return None
+    safe = {**setup}
+    for key in _SENSITIVE_KEYS:
+        if key in safe:
+            safe[key] = _REDACTED
+    # redact saved_keys (provider credentials)
+    if "saved_keys" in safe and isinstance(safe["saved_keys"], dict):
+        redacted_keys = {}
+        for provider_id, val in safe["saved_keys"].items():
+            if isinstance(val, str):
+                redacted_keys[provider_id] = _REDACTED
+            elif isinstance(val, dict):
+                redacted_keys[provider_id] = {k: _REDACTED for k in val}
+            else:
+                redacted_keys[provider_id] = val
+        safe["saved_keys"] = redacted_keys
+    return safe
+
+
 # ── login page HTML ─────────────────────────────────────────────────────────
 
 LOGIN_HTML = """<!DOCTYPE html>

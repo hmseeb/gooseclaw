@@ -965,5 +965,108 @@ class TestUnknownSlashCommand(unittest.TestCase):
             self.assertFalse(gateway.is_known_command(msg), f"'{msg}' should not be a command")
 
 
+# ── CommandRouter ─────────────────────────────────────────────────────────────
+
+class TestCommandRouter(unittest.TestCase):
+    """Tests for CommandRouter register/dispatch/is_command/get_help_text."""
+
+    def _make_router(self):
+        return gateway.CommandRouter()
+
+    def test_register_and_dispatch(self):
+        """Register 'help' handler, dispatch '/help', handler called with ctx."""
+        router = self._make_router()
+        handler = MagicMock()
+        router.register("help", handler, "show help")
+        ctx = {"channel": "telegram", "user_id": "123"}
+        result = router.dispatch("/help", ctx)
+        self.assertTrue(result)
+        handler.assert_called_once_with(ctx)
+
+    def test_dispatch_unknown_returns_false(self):
+        """Dispatching an unregistered command returns False."""
+        router = self._make_router()
+        handler = MagicMock()
+        router.register("help", handler)
+        ctx = {"channel": "telegram", "user_id": "123"}
+        result = router.dispatch("/unknown", ctx)
+        self.assertFalse(result)
+        handler.assert_not_called()
+
+    def test_is_command_registered(self):
+        """is_command returns True for registered commands."""
+        router = self._make_router()
+        router.register("help", MagicMock())
+        self.assertTrue(router.is_command("/help"))
+
+    def test_is_command_unregistered(self):
+        """is_command returns False for unregistered commands."""
+        router = self._make_router()
+        self.assertFalse(router.is_command("/foo"))
+
+    def test_is_command_not_slash(self):
+        """is_command returns False for non-slash text."""
+        router = self._make_router()
+        router.register("help", MagicMock())
+        self.assertFalse(router.is_command("hello"))
+
+    def test_is_command_empty(self):
+        """is_command returns False for empty string and None."""
+        router = self._make_router()
+        self.assertFalse(router.is_command(""))
+        self.assertFalse(router.is_command(None))
+
+    def test_dispatch_case_insensitive(self):
+        """Dispatch is case-insensitive: /HELP matches registered 'help'."""
+        router = self._make_router()
+        handler = MagicMock()
+        router.register("help", handler)
+        ctx = {"channel": "telegram", "user_id": "123"}
+        result = router.dispatch("/HELP", ctx)
+        self.assertTrue(result)
+        handler.assert_called_once_with(ctx)
+
+    def test_dispatch_non_slash_returns_false(self):
+        """Dispatching non-slash text returns False."""
+        router = self._make_router()
+        router.register("help", MagicMock())
+        ctx = {"channel": "telegram", "user_id": "123"}
+        result = router.dispatch("hello", ctx)
+        self.assertFalse(result)
+
+    def test_dispatch_none_returns_false(self):
+        """Dispatching None returns False."""
+        router = self._make_router()
+        ctx = {"channel": "telegram", "user_id": "123"}
+        result = router.dispatch(None, ctx)
+        self.assertFalse(result)
+
+    def test_get_help_text(self):
+        """get_help_text returns formatted help with descriptions."""
+        router = self._make_router()
+        router.register("help", MagicMock(), "show help")
+        router.register("stop", MagicMock(), "cancel response")
+        help_text = router.get_help_text()
+        self.assertIn("/help", help_text)
+        self.assertIn("show help", help_text)
+        self.assertIn("/stop", help_text)
+        self.assertIn("cancel response", help_text)
+
+    def test_multiple_commands(self):
+        """Multiple commands all dispatch and is_command correctly."""
+        router = self._make_router()
+        handlers = {}
+        for cmd in ["help", "stop", "clear", "compact"]:
+            h = MagicMock()
+            handlers[cmd] = h
+            router.register(cmd, h, f"{cmd} desc")
+        ctx = {"channel": "telegram", "user_id": "123"}
+        for cmd in ["help", "stop", "clear", "compact"]:
+            self.assertTrue(router.is_command(f"/{cmd}"))
+            result = router.dispatch(f"/{cmd}", ctx)
+            self.assertTrue(result)
+            handlers[cmd].assert_called_with(ctx)
+
+
 if __name__ == "__main__":
     unittest.main()

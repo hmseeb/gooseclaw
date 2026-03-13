@@ -2912,47 +2912,96 @@ def _resolve_channel_creds(name, cred_keys):
 
 
 class ChannelRelay:
-    """Relay function wrapper for channel plugins. Manages per-channel sessions."""
+    """Relay function wrapper for channel plugins. Manages per-channel sessions,
+    command interception, and active relay tracking for /stop cancellation."""
 
     def __init__(self, channel_name):
         self._name = channel_name
+        self._state = ChannelState()
         # Load any persisted sessions for this channel
         _session_manager.load(channel_name)
 
     def __call__(self, user_id, text, send_fn=None):
         """Relay a message from channel user to goose web. Returns response text.
 
+        If text is a slash command, intercepts and dispatches via _command_router.
         If send_fn is provided, streams response chunks via send_fn(text) based
         on the channel's verbosity setting. Backward compatible: plugins that
         don't pass send_fn get the original single-response behavior.
         """
         user_key = str(user_id)
-        session_id = _session_manager.get(self._name, user_key)
 
+        # Command interception (CHAN-01)
+        if text and text.strip().startswith("/"):
+            ctx = {
+                "channel": self._name,
+                "user_id": user_key,
+                "send_fn": send_fn or (lambda t: None),
+                "channel_state": self._state,
+            }
+            if _command_router.is_command(text):
+                _command_router.dispatch(text, ctx)
+                return ""
+            # unknown command
+            if send_fn:
+                send_fn(f"Unknown command: {text.split()[0]}\nSend /help for available commands.")
+            return ""
+
+        # Session management
+        session_id = _session_manager.get(self._name, user_key)
         if not session_id:
             session_id = f"{self._name}_{user_key}_{time.strftime('%Y%m%d_%H%M%S')}"
             _session_manager.set(self._name, user_key, session_id)
 
-        # determine streaming params
-        setup = load_setup()
-        verbosity = get_verbosity_for_channel(setup, self._name) if setup else "balanced"
-        use_streaming = send_fn and verbosity != "quiet"
+        # Active relay tracking (CHAN-03)
+        cancelled = threading.Event()
+        sock_ref = [None, cancelled]
+        self._state.set_active_relay(user_key, sock_ref)
 
-        if use_streaming:
-            relay_fn = lambda txt, sid: _do_ws_relay_streaming(txt, sid, send_fn, verbosity)
-        else:
-            relay_fn = _do_ws_relay
+        try:
+            # determine streaming params
+            setup = load_setup()
+            verbosity = get_verbosity_for_channel(setup, self._name) if setup else "balanced"
+            use_streaming = send_fn and verbosity != "quiet"
 
-        response_text, error = relay_fn(text, session_id)
-        if error:
-            # try new session on failure
-            session_id = f"{self._name}_{user_key}_{time.strftime('%Y%m%d_%H%M%S')}"
-            _session_manager.set(self._name, user_key, session_id)
-            response_text, error = relay_fn(text, session_id)
+            if use_streaming:
+                response_text, error = _relay_to_goose_web(
+                    text, session_id, chat_id=user_key, channel=self._name,
+                    flush_cb=send_fn, verbosity=verbosity,
+                    sock_ref=sock_ref, flush_interval=2.0,
+                )
+            else:
+                response_text, error = _relay_to_goose_web(
+                    text, session_id, chat_id=user_key, channel=self._name,
+                    sock_ref=sock_ref,
+                )
 
-        if error:
-            return f"Error: {error}"
-        return response_text
+            if cancelled.is_set():
+                return ""
+
+            if error:
+                # retry with new session
+                session_id = f"{self._name}_{user_key}_{time.strftime('%Y%m%d_%H%M%S')}"
+                _session_manager.set(self._name, user_key, session_id)
+                if use_streaming:
+                    response_text, error = _relay_to_goose_web(
+                        text, session_id, chat_id=user_key, channel=self._name,
+                        flush_cb=send_fn, verbosity=verbosity,
+                        sock_ref=sock_ref, flush_interval=2.0,
+                    )
+                else:
+                    response_text, error = _relay_to_goose_web(
+                        text, session_id, chat_id=user_key, channel=self._name,
+                        sock_ref=sock_ref,
+                    )
+
+            if cancelled.is_set():
+                return ""
+            if error:
+                return f"Error: {error}"
+            return response_text
+        finally:
+            self._state.pop_active_relay(user_key)
 
     def reset_session(self, user_id):
         """Reset a user's session (for /clear command)."""
@@ -3434,12 +3483,14 @@ def _handle_cmd_help(ctx):
 def _handle_cmd_stop(ctx):
     """Handle /stop command."""
     chat_id = ctx["user_id"]
-    sock_ref = _telegram_state.pop_active_relay(chat_id)
+    state = ctx.get("channel_state", _telegram_state)
+    channel = ctx.get("channel", "telegram")
+    sock_ref = state.pop_active_relay(chat_id)
     if sock_ref and sock_ref[0]:
         try:
             if len(sock_ref) > 1 and hasattr(sock_ref[1], 'set'):
                 sock_ref[1].set()
-            sid = _session_manager.get("telegram", chat_id)
+            sid = _session_manager.get(channel, chat_id)
             if sid:
                 try:
                     _ws_send_text(sock_ref[0], json.dumps({
@@ -3452,7 +3503,7 @@ def _handle_cmd_stop(ctx):
         except Exception:
             pass
         ctx["send_fn"]("Stopped.")
-        print(f"[telegram] /stop killed relay for chat {chat_id}")
+        print(f"[{channel}] /stop killed relay for chat {chat_id}")
     else:
         ctx["send_fn"]("Nothing running.")
 
@@ -3460,27 +3511,40 @@ def _handle_cmd_stop(ctx):
 def _handle_cmd_clear(ctx):
     """Handle /clear command."""
     chat_id = ctx["user_id"]
-    old = _clear_chat(chat_id)
+    state = ctx.get("channel_state", _telegram_state)
+    channel = ctx.get("channel", "telegram")
+    chat_key = str(chat_id)
+
+    # kill active relay (same as /stop)
+    state.kill_relay(chat_key)
+
+    # remove only this user's session for the requesting channel
+    old = _session_manager.pop(channel, chat_key)
+
     ctx["send_fn"]("\U0001f504 Session cleared. Restarting engine, give it ~15s...")
     threading.Thread(
         target=_restart_goose_and_prewarm,
         args=(chat_id,),
         daemon=True,
     ).start()
-    print(f"[telegram] session cleared for chat {chat_id} (old: {old}), restarting goose web")
+    print(f"[{channel}] session cleared for chat {chat_id} (old: {old}), restarting goose web")
 
 
 def _handle_cmd_compact(ctx):
     """Handle /compact command."""
     chat_id = ctx["user_id"]
+    channel = ctx.get("channel", "telegram")
     bot_token = ctx.get("bot_token")
     if bot_token:
         _send_typing_action(bot_token, chat_id)
-    session_id = _get_session_id(chat_id)
+    session_id = _session_manager.get(channel, chat_id)
+    if not session_id:
+        ctx["send_fn"]("No active session. Send a message first.")
+        return
     response_text, error = _relay_to_goose_web(
         "Please summarize our conversation so far into key points, "
         "then we can continue from this summary. Be concise.",
-        session_id, chat_id=chat_id, channel="telegram"
+        session_id, chat_id=chat_id, channel=channel
     )
     if error:
         ctx["send_fn"](f"Error: {error}")

@@ -121,6 +121,7 @@ Recent decisions affecting current work:
 - /clear scoping: decide per-user session clear vs documented limitation
 - Test threading scenarios before extraction (relay+clear, relay+stop)
 - Auto-detect timezone from location in setup wizard (ui)
+- Queue consecutive messages instead of bouncing with "Still thinking" (general)
 
 ### Blockers/Concerns
 

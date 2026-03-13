@@ -57,11 +57,13 @@ Plans:
   3. A channel plugin user can cancel an in-flight request via /stop and the active WebSocket relay is closed
   4. A channel plugin can register custom commands via the `commands` field in its CHANNEL dict and users can invoke them
   5. Notification bus validates channel names from loaded plugins dynamically, not from a hardcoded list
-**Plans**: TBD
+  6. Channel plugins can signal typing/activity indicators via optional `typing` callback in CHANNEL dict
+**Plans:** 3 plans
 
 Plans:
-- [ ] 07-01: TBD
-- [ ] 07-02: TBD
+- [ ] 07-01-PLAN.md -- TDD: Generalize command handlers + ChannelRelay command interception and relay tracking (CHAN-01, CHAN-03)
+- [ ] 07-02-PLAN.md -- TDD: Per-user locks and typing indicators in ChannelRelay (CHAN-02, CHAN-06)
+- [ ] 07-03-PLAN.md -- TDD: Custom command registration and dynamic channel validation (CHAN-04, CHAN-05)
 
 ### Phase 8: Notification Channel Targeting
 **Goal**: The notification pipeline (API, cron, remind.sh) can deliver to specific channels instead of broadcasting to all
@@ -119,7 +121,7 @@ Phase 9 depends on Phase 6 (not Phase 7/8), so Phase 9 could start after Phase 6
 | 4. Advanced Multi-Model Settings | v1.0 | 1/1 | Complete | 2026-03-11 |
 | 5. Production Hardening | v1.0 | 6/6 | Complete | 2026-03-10 |
 | 6. Shared Infrastructure Extraction | v2.0 | 0/3 | Planned | - |
-| 7. Channel Plugin Parity | v2.0 | 0/? | Not started | - |
+| 7. Channel Plugin Parity | v2.0 | 0/3 | Planned | - |
 | 8. Notification Channel Targeting | v2.0 | 0/? | Not started | - |
 | 9. Multi-Bot Core | v2.0 | 0/? | Not started | - |
 | 10. Multi-Bot Lifecycle | v2.0 | 0/? | Not started | - |

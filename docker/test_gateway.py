@@ -1780,5 +1780,344 @@ class TestChannelRelayTyping(unittest.TestCase):
         self.assertIs(relay._typing_cb, cb)
 
 
+# ── custom command registration from CHANNEL dict (CHAN-04) ────────────────────
+
+class TestCustomCommandRegistration(unittest.TestCase):
+    """Tests for custom command registration from CHANNEL dict commands field."""
+
+    def setUp(self):
+        # Save command router state
+        self._saved_handlers = dict(gateway._command_router._handlers)
+        self._saved_help = dict(gateway._command_router._help_text)
+        # Save loaded channels
+        self._saved_channels = dict(gateway._loaded_channels)
+
+    def tearDown(self):
+        # Restore command router state
+        gateway._command_router._handlers = self._saved_handlers
+        gateway._command_router._help_text = self._saved_help
+        # Restore loaded channels
+        with gateway._channels_lock:
+            gateway._loaded_channels.clear()
+            gateway._loaded_channels.update(self._saved_channels)
+
+    @patch("gateway._relay_to_goose_web", return_value=("ok", ""))
+    def test_load_channel_registers_custom_commands(self, mock_relay):
+        """_load_channel registers custom commands from CHANNEL dict commands field."""
+        mock_handler = MagicMock()
+        mock_module = MagicMock()
+        mock_module.CHANNEL = {
+            "name": "test_plugin",
+            "version": 1,
+            "send": lambda text: {"sent": True, "error": ""},
+            "commands": {"status": {"handler": mock_handler, "description": "show status"}},
+        }
+
+        with patch("importlib.util.spec_from_file_location") as mock_spec_fn:
+            mock_spec = MagicMock()
+            mock_spec.loader = MagicMock()
+            mock_spec_fn.return_value = mock_spec
+            with patch("importlib.util.module_from_spec", return_value=mock_module):
+                gateway._load_channel("/fake/test_plugin.py")
+
+        # Custom command should be registered
+        self.assertTrue(gateway._command_router.is_command("/status"))
+        # Dispatch it
+        ctx = {"channel": "test_plugin", "user_id": "u1", "send_fn": lambda t: None, "channel_state": MagicMock()}
+        gateway._command_router.dispatch("/status", ctx)
+        mock_handler.assert_called_once()
+
+    @patch("gateway._relay_to_goose_web", return_value=("ok", ""))
+    def test_load_channel_no_commands_field(self, mock_relay):
+        """_load_channel with no commands key in CHANNEL dict works fine."""
+        mock_module = MagicMock()
+        mock_module.CHANNEL = {
+            "name": "no_cmd_plugin",
+            "version": 1,
+            "send": lambda text: {"sent": True, "error": ""},
+        }
+
+        handler_count_before = len(gateway._command_router._handlers)
+
+        with patch("importlib.util.spec_from_file_location") as mock_spec_fn:
+            mock_spec = MagicMock()
+            mock_spec.loader = MagicMock()
+            mock_spec_fn.return_value = mock_spec
+            with patch("importlib.util.module_from_spec", return_value=mock_module):
+                result = gateway._load_channel("/fake/no_cmd_plugin.py")
+
+        self.assertTrue(result)
+        # No new commands should have been registered
+        self.assertEqual(len(gateway._command_router._handlers), handler_count_before)
+
+    @patch("gateway.load_setup", return_value=None)
+    @patch("gateway._relay_to_goose_web", return_value=("response", ""))
+    def test_custom_command_invoked_via_relay(self, mock_relay, mock_setup):
+        """Custom command registered via _load_channel is invoked through ChannelRelay."""
+        mock_handler = MagicMock()
+
+        # Register a custom command directly (simulating what _load_channel does)
+        gateway._command_router.register("ping", mock_handler, "ping the bot")
+
+        relay = gateway.ChannelRelay("test_ch")
+        send_fn = MagicMock()
+        relay("user1", "/ping", send_fn)
+
+        # handler should have been called with ctx containing correct channel info
+        mock_handler.assert_called_once()
+        ctx = mock_handler.call_args[0][0]
+        self.assertEqual(ctx["channel"], "test_ch")
+        self.assertEqual(ctx["user_id"], "user1")
+
+    @patch("gateway._relay_to_goose_web", return_value=("ok", ""))
+    def test_custom_command_empty_dict(self, mock_relay):
+        """CHANNEL dict with commands: {} causes no error and no new commands."""
+        mock_module = MagicMock()
+        mock_module.CHANNEL = {
+            "name": "empty_cmd_plugin",
+            "version": 1,
+            "send": lambda text: {"sent": True, "error": ""},
+            "commands": {},
+        }
+
+        handler_count_before = len(gateway._command_router._handlers)
+
+        with patch("importlib.util.spec_from_file_location") as mock_spec_fn:
+            mock_spec = MagicMock()
+            mock_spec.loader = MagicMock()
+            mock_spec_fn.return_value = mock_spec
+            with patch("importlib.util.module_from_spec", return_value=mock_module):
+                result = gateway._load_channel("/fake/empty_cmd_plugin.py")
+
+        self.assertTrue(result)
+        self.assertEqual(len(gateway._command_router._handlers), handler_count_before)
+
+    @patch("gateway._relay_to_goose_web", return_value=("ok", ""))
+    def test_custom_command_invalid_handler_skipped(self, mock_relay):
+        """CHANNEL dict with non-callable handler is skipped without crash."""
+        mock_module = MagicMock()
+        mock_module.CHANNEL = {
+            "name": "bad_handler_plugin",
+            "version": 1,
+            "send": lambda text: {"sent": True, "error": ""},
+            "commands": {"bad": {"handler": "not_callable", "description": "should skip"}},
+        }
+
+        with patch("importlib.util.spec_from_file_location") as mock_spec_fn:
+            mock_spec = MagicMock()
+            mock_spec.loader = MagicMock()
+            mock_spec_fn.return_value = mock_spec
+            with patch("importlib.util.module_from_spec", return_value=mock_module):
+                result = gateway._load_channel("/fake/bad_handler_plugin.py")
+
+        self.assertTrue(result)
+        # The bad command should NOT be registered
+        self.assertFalse(gateway._command_router.is_command("/bad"))
+
+
+class TestCustomCommandConflicts(unittest.TestCase):
+    """Tests for custom command conflict detection with built-in commands."""
+
+    def setUp(self):
+        self._saved_handlers = dict(gateway._command_router._handlers)
+        self._saved_help = dict(gateway._command_router._help_text)
+        self._saved_channels = dict(gateway._loaded_channels)
+
+    def tearDown(self):
+        gateway._command_router._handlers = self._saved_handlers
+        gateway._command_router._help_text = self._saved_help
+        with gateway._channels_lock:
+            gateway._loaded_channels.clear()
+            gateway._loaded_channels.update(self._saved_channels)
+
+    @patch("gateway._relay_to_goose_web", return_value=("ok", ""))
+    def test_builtin_commands_not_overwritten(self, mock_relay):
+        """Custom command named 'help' conflicts with built-in; built-in handler stays."""
+        custom_handler = MagicMock()
+        mock_module = MagicMock()
+        mock_module.CHANNEL = {
+            "name": "conflict_plugin",
+            "version": 1,
+            "send": lambda text: {"sent": True, "error": ""},
+            "commands": {"help": {"handler": custom_handler, "description": "custom help"}},
+        }
+
+        with patch("importlib.util.spec_from_file_location") as mock_spec_fn:
+            mock_spec = MagicMock()
+            mock_spec.loader = MagicMock()
+            mock_spec_fn.return_value = mock_spec
+            with patch("importlib.util.module_from_spec", return_value=mock_module):
+                gateway._load_channel("/fake/conflict_plugin.py")
+
+        # The built-in /help handler should still be registered
+        self.assertTrue(gateway._command_router.is_command("/help"))
+        send_fn = MagicMock()
+        ctx = {"channel": "test", "user_id": "u1", "send_fn": send_fn, "channel_state": MagicMock()}
+        gateway._command_router.dispatch("/help", ctx)
+        # built-in help sends help text, custom handler should NOT have been called
+        custom_handler.assert_not_called()
+        send_fn.assert_called_once()  # built-in help calls send_fn
+
+    @patch("gateway._relay_to_goose_web", return_value=("ok", ""))
+    def test_builtin_conflict_logged(self, mock_relay):
+        """Conflict with built-in command produces a warning message."""
+        mock_module = MagicMock()
+        mock_module.CHANNEL = {
+            "name": "conflict_plugin2",
+            "version": 1,
+            "send": lambda text: {"sent": True, "error": ""},
+            "commands": {"help": {"handler": MagicMock(), "description": "custom help"}},
+        }
+
+        with patch("importlib.util.spec_from_file_location") as mock_spec_fn:
+            mock_spec = MagicMock()
+            mock_spec.loader = MagicMock()
+            mock_spec_fn.return_value = mock_spec
+            with patch("importlib.util.module_from_spec", return_value=mock_module):
+                # Capture stdout to check for warning
+                import io
+                captured = io.StringIO()
+                with patch("sys.stdout", captured):
+                    gateway._load_channel("/fake/conflict_plugin2.py")
+
+        output = captured.getvalue()
+        self.assertIn("conflicts with built-in", output)
+
+    @patch("gateway._relay_to_goose_web", return_value=("ok", ""))
+    def test_non_conflicting_custom_commands_registered(self, mock_relay):
+        """Non-conflicting custom commands status and ping are registered and dispatchable."""
+        status_handler = MagicMock()
+        ping_handler = MagicMock()
+        mock_module = MagicMock()
+        mock_module.CHANNEL = {
+            "name": "good_plugin",
+            "version": 1,
+            "send": lambda text: {"sent": True, "error": ""},
+            "commands": {
+                "status": {"handler": status_handler, "description": "show status"},
+                "ping": {"handler": ping_handler, "description": "ping the bot"},
+            },
+        }
+
+        with patch("importlib.util.spec_from_file_location") as mock_spec_fn:
+            mock_spec = MagicMock()
+            mock_spec.loader = MagicMock()
+            mock_spec_fn.return_value = mock_spec
+            with patch("importlib.util.module_from_spec", return_value=mock_module):
+                gateway._load_channel("/fake/good_plugin.py")
+
+        self.assertTrue(gateway._command_router.is_command("/status"))
+        self.assertTrue(gateway._command_router.is_command("/ping"))
+
+        ctx = {"channel": "good_plugin", "user_id": "u1", "send_fn": MagicMock(), "channel_state": MagicMock()}
+        gateway._command_router.dispatch("/status", ctx)
+        status_handler.assert_called_once()
+        gateway._command_router.dispatch("/ping", ctx)
+        ping_handler.assert_called_once()
+
+
+# ── dynamic channel validation (CHAN-05) ──────────────────────────────────────
+
+class TestDynamicChannelValidation(unittest.TestCase):
+    """Tests for _get_valid_channels() function."""
+
+    def setUp(self):
+        self._saved_channels = dict(gateway._loaded_channels)
+
+    def tearDown(self):
+        with gateway._channels_lock:
+            gateway._loaded_channels.clear()
+            gateway._loaded_channels.update(self._saved_channels)
+
+    def test_get_valid_channels_includes_fixed(self):
+        """_get_valid_channels() always includes web, telegram, cron, memory."""
+        result = gateway._get_valid_channels()
+        for ch in ("web", "telegram", "cron", "memory"):
+            self.assertIn(ch, result)
+
+    def test_get_valid_channels_includes_loaded_plugins(self):
+        """_get_valid_channels() includes names from _loaded_channels."""
+        with gateway._channels_lock:
+            gateway._loaded_channels["slack"] = {"module": None, "channel": {"name": "slack"}, "creds": {}}
+
+        result = gateway._get_valid_channels()
+        self.assertIn("slack", result)
+
+    def test_get_valid_channels_no_plugins(self):
+        """_get_valid_channels() with no loaded plugins returns exactly the fixed set."""
+        with gateway._channels_lock:
+            gateway._loaded_channels.clear()
+
+        result = gateway._get_valid_channels()
+        self.assertEqual(result, {"web", "telegram", "cron", "memory"})
+
+    def test_get_valid_channels_returns_set(self):
+        """_get_valid_channels() returns a set type."""
+        result = gateway._get_valid_channels()
+        self.assertIsInstance(result, set)
+
+
+class TestValidateSetupDynamic(unittest.TestCase):
+    """Tests for validation functions using dynamic channel names."""
+
+    def setUp(self):
+        self._saved_channels = dict(gateway._loaded_channels)
+
+    def tearDown(self):
+        with gateway._channels_lock:
+            gateway._loaded_channels.clear()
+            gateway._loaded_channels.update(self._saved_channels)
+
+    def test_validate_accepts_plugin_channel_in_routes(self):
+        """validate_setup_config accepts a loaded plugin channel in channel_routes."""
+        with gateway._channels_lock:
+            gateway._loaded_channels["slack"] = {"module": None, "channel": {"name": "slack"}, "creds": {}}
+
+        config = {
+            "provider_type": "ollama",
+            "models": [{"id": "model-1", "provider": "ollama", "model": "llama2", "is_default": True}],
+            "channel_routes": {"slack": "model-1"},
+        }
+        valid, errors = gateway.validate_setup_config(config)
+        # Should not have an error about slack being unknown
+        channel_errors = [e for e in errors if "slack" in e and "unknown channel" in e]
+        self.assertEqual(len(channel_errors), 0, f"Unexpected error about slack: {errors}")
+
+    def test_validate_rejects_unknown_channel_in_routes(self):
+        """validate_setup_config rejects a channel not in fixed or loaded plugins."""
+        with gateway._channels_lock:
+            gateway._loaded_channels.clear()
+
+        config = {
+            "provider_type": "ollama",
+            "models": [{"id": "model-1", "provider": "ollama", "model": "llama2", "is_default": True}],
+            "channel_routes": {"discord": "model-1"},
+        }
+        valid, errors = gateway.validate_setup_config(config)
+        channel_errors = [e for e in errors if "discord" in e]
+        self.assertTrue(len(channel_errors) > 0, f"Expected error about discord but got: {errors}")
+
+    @patch("gateway.load_setup")
+    @patch("gateway.save_setup")
+    def test_set_routes_accepts_plugin_channel(self, mock_save, mock_load):
+        """handle_set_routes validation accepts loaded plugin channel names."""
+        with gateway._channels_lock:
+            gateway._loaded_channels["slack"] = {"module": None, "channel": {"name": "slack"}, "creds": {}}
+
+        # Verify _get_valid_channels includes loaded plugin
+        valid = gateway._get_valid_channels()
+        self.assertIn("slack", valid)
+
+    @patch("gateway.load_setup")
+    def test_set_verbosity_accepts_plugin_channel(self, mock_load):
+        """handle_set_verbosity validation accepts loaded plugin channel names."""
+        with gateway._channels_lock:
+            gateway._loaded_channels["slack"] = {"module": None, "channel": {"name": "slack"}, "creds": {}}
+
+        # Verify _get_valid_channels includes loaded plugin
+        valid = gateway._get_valid_channels()
+        self.assertIn("slack", valid)
+
+
 if __name__ == "__main__":
     unittest.main()

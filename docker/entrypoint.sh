@@ -52,6 +52,7 @@ fi
 # preserve gateway state (pairings, configs, pending codes) across restarts
 # — goose writes these to config.yaml at runtime, and we'd lose them on regen
 GATEWAY_STATE_FILE=$(mktemp /tmp/gateway_state.XXXXXX.json)
+EXTENSIONS_STATE_FILE=$(mktemp /tmp/extensions_state.XXXXXX.json)
 if [ -f "$CONFIG_DIR/config.yaml" ]; then
     python3 -c "
 import yaml, json, sys
@@ -63,6 +64,10 @@ try:
     if state:
         with open('$GATEWAY_STATE_FILE', 'w') as out:
             json.dump(state, out)
+    # preserve user-customized extensions across reboots
+    if 'extensions' in data and data['extensions']:
+        with open('$EXTENSIONS_STATE_FILE', 'w') as out:
+            json.dump({'extensions': data['extensions']}, out)
 except Exception:
     pass
 " 2>/dev/null || true
@@ -298,10 +303,26 @@ else
     echo "[vault] no credentials stored yet"
 fi
 
-# ─── default MCP extensions (Context7 + Exa, no API keys needed) ─────────
+# ─── MCP extensions (preserve user customizations, defaults on first boot) ─
 
-echo "[mcp] configuring default extensions (Context7, Exa)..."
-cat >> "$CONFIG_DIR/config.yaml" << 'EXTENSIONS'
+if [ -s "$EXTENSIONS_STATE_FILE" ]; then
+    echo "[mcp] restoring user-customized extensions..."
+    python3 -c "
+import yaml, json, sys
+try:
+    with open('$EXTENSIONS_STATE_FILE') as f:
+        ext_state = json.load(f)
+    with open('$CONFIG_DIR/config.yaml') as f:
+        config = yaml.safe_load(f) or {}
+    config.update(ext_state)
+    with open('$CONFIG_DIR/config.yaml', 'w') as f:
+        yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+except Exception as e:
+    print(f'[mcp] WARN: could not restore extensions: {e}', file=sys.stderr)
+" 2>/dev/null || true
+else
+    echo "[mcp] first boot — writing default extensions (Context7, Exa)..."
+    cat >> "$CONFIG_DIR/config.yaml" << 'EXTENSIONS'
 extensions:
   developer:
     enabled: true
@@ -363,6 +384,8 @@ extensions:
     bundled: null
     available_tools: []
 EXTENSIONS
+fi
+rm -f "$EXTENSIONS_STATE_FILE"
 
 # restore preserved gateway state (pairings, sessions, pending codes)
 if [ -s "$GATEWAY_STATE_FILE" ]; then

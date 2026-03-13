@@ -5097,6 +5097,338 @@ class _StreamBuffer:
         self.flush()
 
 
+# ── REST relay helpers (Phase 13) ─────────────────────────────────────────────
+
+
+def _parse_sse_events(response):
+    """Yield parsed SSE events from an HTTP response with readline().
+
+    SSE format: lines starting with "data: " followed by JSON.
+    Events separated by blank lines. Invalid JSON is silently skipped.
+    """
+    while True:
+        line = response.readline()
+        if not line:
+            break  # connection closed or EOF
+        line = line.decode("utf-8", errors="replace").rstrip("\r\n")
+
+        if line.startswith("data: "):
+            data_str = line[6:]
+            try:
+                yield json.loads(data_str)
+            except (json.JSONDecodeError, ValueError):
+                continue
+
+
+def _build_content_blocks(user_text, inbound_msg=None):
+    """Build content block array for ChatRequest.
+
+    user_text: the user's text message (may be empty for media-only)
+    inbound_msg: optional InboundMessage with media attachments
+    Returns: list of content block dicts
+    """
+    blocks = []
+    if user_text and user_text.strip():
+        blocks.append({"type": "text", "text": user_text})
+
+    if inbound_msg and inbound_msg.has_media:
+        for mc in inbound_msg.media:
+            if isinstance(mc, MediaContent):
+                block = mc.to_content_block()
+                if block:
+                    blocks.append(block)
+
+    # fallback: if no blocks at all, send empty text
+    if not blocks:
+        blocks.append({"type": "text", "text": ""})
+
+    return blocks
+
+
+def _extract_response_content(content_array):
+    """Extract text and media from a Message content array.
+
+    Returns: (text_str, media_blocks_list)
+    text_str: concatenated text from all text blocks (newline-joined)
+    media_blocks_list: list of non-text content block dicts (image, etc.)
+    """
+    text_parts = []
+    media_blocks = []
+    for block in content_array:
+        btype = block.get("type", "")
+        if btype == "text":
+            text_parts.append(block.get("text", ""))
+        elif btype == "image":
+            media_blocks.append(block)
+        elif btype == "toolResponse":
+            # tool results may contain nested content with images
+            result = block.get("tool_result", {})
+            if isinstance(result, dict):
+                nested = result.get("value", {}).get("content", [])
+                if isinstance(nested, list):
+                    for item in nested:
+                        if isinstance(item, dict):
+                            if item.get("type") == "text":
+                                text_parts.append(item.get("text", ""))
+                            elif item.get("type") == "image":
+                                media_blocks.append(item)
+        # thinking, reasoning, systemNotification: skip for user output
+    return "\n".join(text_parts), media_blocks
+
+
+def _do_rest_relay(user_text, session_id, content_blocks=None, sock_ref=None):
+    """POST to goosed /reply, parse SSE response.
+
+    Returns (response_text, error_string, media_blocks).
+    On success error_string is empty and media_blocks contains any image blocks.
+    """
+    t0 = time.time()
+    blocks = content_blocks or [{"type": "text", "text": user_text}]
+
+    chat_request = json.dumps({
+        "session_id": session_id,
+        "user_message": {
+            "role": "user",
+            "created": int(time.time()),
+            "content": blocks,
+            "metadata": {"userVisible": True, "agentVisible": True},
+        }
+    }).encode("utf-8")
+
+    auth_value = base64.b64encode(f"user:{_INTERNAL_GOOSE_TOKEN}".encode()).decode()
+
+    conn = None
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=300)
+        if sock_ref is not None:
+            sock_ref[0] = conn  # for external cancellation
+
+        conn.request("POST", "/reply", body=chat_request, headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Basic {auth_value}",
+            "Accept": "text/event-stream",
+        })
+
+        resp = conn.getresponse()
+        if resp.status != 200:
+            body = resp.read().decode("utf-8", errors="replace")
+            conn.close()
+            return "", f"goosed /reply returned {resp.status}: {body[:200]}", []
+
+        text_parts = []
+        media_blocks = []
+
+        for event in _parse_sse_events(resp):
+            etype = event.get("type", "")
+
+            if etype == "Message":
+                msg = event.get("message", {})
+                content = msg.get("content", [])
+                t, m = _extract_response_content(content)
+                if t:
+                    text_parts.append(t)
+                media_blocks.extend(m)
+
+            elif etype == "Error":
+                err_msg = event.get("error", "Unknown error")
+                conn.close()
+                return "", f"Goose error: {err_msg}", []
+
+            elif etype == "Finish":
+                break
+
+        conn.close()
+        full_text = "\n".join(text_parts).strip()
+        elapsed = time.time() - t0
+        print(f"[rest-relay] done in {elapsed:.1f}s ({len(full_text)} chars) session={session_id}")
+        return full_text, "", media_blocks
+
+    except socket.timeout:
+        elapsed = time.time() - t0
+        print(f"[rest-relay] TIMEOUT after {elapsed:.1f}s session={session_id}")
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        return "", "Goose took too long to respond (timeout). Try again.", []
+
+    except ConnectionError as e:
+        print(f"[rest-relay] connection error after {time.time() - t0:.1f}s: {e}")
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        return "", f"Connection error: {e}", []
+
+    except Exception as e:
+        print(f"[rest-relay] error after {time.time() - t0:.1f}s: {e}")
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        return "", f"Error communicating with goose: {e}", []
+
+
+def _do_rest_relay_streaming(user_text, session_id, flush_cb, verbosity="balanced",
+                             content_blocks=None, sock_ref=None, flush_interval=4.0):
+    """POST to goosed /reply, stream response via flush_cb.
+
+    Like _do_rest_relay but delivers text incrementally through flush_cb and
+    emits tool/thinking status based on verbosity level.
+    Returns (full_text, error_string, media_blocks).
+    """
+    t0 = time.time()
+    blocks = content_blocks or [{"type": "text", "text": user_text}]
+    print(f"[rest-relay-stream] start session={session_id} verbosity={verbosity} text={user_text[:50]!r}")
+
+    chat_request = json.dumps({
+        "session_id": session_id,
+        "user_message": {
+            "role": "user",
+            "created": int(time.time()),
+            "content": blocks,
+            "metadata": {"userVisible": True, "agentVisible": True},
+        }
+    }).encode("utf-8")
+
+    auth_value = base64.b64encode(f"user:{_INTERNAL_GOOSE_TOKEN}".encode()).decode()
+
+    buf = _StreamBuffer(flush_cb, interval=flush_interval)
+    collected = []
+    media_blocks = []
+    conn = None
+
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", GOOSE_WEB_PORT, timeout=300)
+        if sock_ref is not None:
+            sock_ref[0] = conn
+
+        conn.request("POST", "/reply", body=chat_request, headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Basic {auth_value}",
+            "Accept": "text/event-stream",
+        })
+
+        resp = conn.getresponse()
+        if resp.status != 200:
+            body = resp.read().decode("utf-8", errors="replace")
+            conn.close()
+            return "", f"goosed /reply returned {resp.status}: {body[:200]}", []
+
+        for event in _parse_sse_events(resp):
+            etype = event.get("type", "")
+
+            if etype == "Message":
+                msg = event.get("message", {})
+                content = msg.get("content", [])
+                for block in content:
+                    btype = block.get("type", "")
+
+                    if btype == "text":
+                        text = block.get("text", "")
+                        if text:
+                            collected.append(text)
+                            buf.append(text)
+
+                    elif btype == "image":
+                        media_blocks.append(block)
+
+                    elif btype == "toolRequest":
+                        # flush pending text before tool status
+                        buf.flush()
+                        tool_call = block.get("tool_call", {})
+                        tool_name = tool_call.get("name", "tool")
+                        if verbosity == "verbose":
+                            args = tool_call.get("arguments", {})
+                            if isinstance(args, dict):
+                                parts = [f'{k}="{v}"' for k, v in list(args.items())[:3]]
+                                args_str = ", ".join(parts)
+                            else:
+                                args_str = _truncate(str(args), 100) if args else ""
+                            status = f"[Using {tool_name}({args_str})]" if args_str else f"[Using {tool_name}]"
+                        else:
+                            status = f"[Using {tool_name}...]"
+                        try:
+                            flush_cb(status)
+                        except Exception as e:
+                            print(f"[rest-relay-stream] tool status error: {e}")
+
+                    elif btype == "thinking":
+                        if verbosity == "verbose":
+                            thinking_text = block.get("thinking", "")
+                            if thinking_text:
+                                buf.flush()
+                                truncated = _truncate(thinking_text, 500)
+                                try:
+                                    flush_cb(f"_{truncated}_")
+                                except Exception as e:
+                                    print(f"[rest-relay-stream] thinking error: {e}")
+
+                    elif btype == "toolResponse":
+                        # extract nested text/images from tool results
+                        result = block.get("tool_result", {})
+                        if isinstance(result, dict):
+                            nested = result.get("value", {}).get("content", [])
+                            if isinstance(nested, list):
+                                for item in nested:
+                                    if isinstance(item, dict):
+                                        if item.get("type") == "image":
+                                            media_blocks.append(item)
+
+            elif etype == "Error":
+                buf.flush()
+                err_msg = event.get("error", "Unknown error")
+                print(f"[rest-relay-stream] error event after {time.time() - t0:.1f}s: {err_msg}")
+                conn.close()
+                return "".join(collected).strip(), f"Goose error: {err_msg}", media_blocks
+
+            elif etype == "Finish":
+                break
+
+        buf.flush_final()
+        conn.close()
+        full_text = "".join(collected).strip()
+        elapsed = time.time() - t0
+        print(f"[rest-relay-stream] done in {elapsed:.1f}s ({len(full_text)} chars) session={session_id}")
+        if not full_text:
+            return "", _diagnose_empty_response(), media_blocks
+        return full_text, "", media_blocks
+
+    except socket.timeout:
+        elapsed = time.time() - t0
+        print(f"[rest-relay-stream] TIMEOUT after {elapsed:.1f}s session={session_id}")
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        partial = "".join(collected).strip() if collected else ""
+        if partial:
+            return partial, "", media_blocks
+        return "", "Goose took too long to respond (timeout). Try again.", media_blocks
+
+    except ConnectionError as e:
+        print(f"[rest-relay-stream] connection error after {time.time() - t0:.1f}s: {e}")
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        return "", f"Connection error: {e}", media_blocks
+
+    except Exception as e:
+        print(f"[rest-relay-stream] error after {time.time() - t0:.1f}s: {e}")
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        return "", f"Error communicating with goose: {e}", media_blocks
+
+
 def _do_ws_relay_streaming(user_text, session_id, flush_cb, verbosity="balanced", sock_ref=None, flush_interval=4.0):
     """Connect to goose web via WebSocket, stream response chunks via flush_cb.
 

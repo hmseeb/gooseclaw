@@ -59,32 +59,32 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| CHAN-01 | — | Pending |
-| CHAN-02 | — | Pending |
-| CHAN-03 | — | Pending |
-| CHAN-04 | — | Pending |
-| CHAN-05 | — | Pending |
-| CHAN-06 | — | Pending |
-| CHAN-07 | — | Pending |
-| CHAN-08 | — | Pending |
-| CHAN-09 | — | Pending |
-| BOT-01 | — | Pending |
-| BOT-02 | — | Pending |
-| BOT-03 | — | Pending |
-| BOT-04 | — | Pending |
-| BOT-05 | — | Pending |
-| BOT-06 | — | Pending |
-| BOT-07 | — | Pending |
-| INFRA-01 | — | Pending |
-| INFRA-02 | — | Pending |
-| INFRA-03 | — | Pending |
-| INFRA-04 | — | Pending |
+| INFRA-01 | Phase 6 | Pending |
+| INFRA-02 | Phase 6 | Pending |
+| INFRA-03 | Phase 6 | Pending |
+| INFRA-04 | Phase 6 | Pending |
+| CHAN-01 | Phase 7 | Pending |
+| CHAN-02 | Phase 7 | Pending |
+| CHAN-03 | Phase 7 | Pending |
+| CHAN-04 | Phase 7 | Pending |
+| CHAN-05 | Phase 7 | Pending |
+| CHAN-06 | Phase 7 | Pending |
+| CHAN-07 | Phase 8 | Pending |
+| CHAN-08 | Phase 8 | Pending |
+| CHAN-09 | Phase 8 | Pending |
+| BOT-01 | Phase 9 | Pending |
+| BOT-02 | Phase 9 | Pending |
+| BOT-03 | Phase 9 | Pending |
+| BOT-04 | Phase 9 | Pending |
+| BOT-07 | Phase 9 | Pending |
+| BOT-05 | Phase 10 | Pending |
+| BOT-06 | Phase 10 | Pending |
 
 **Coverage:**
 - v2.0 requirements: 20 total
-- Mapped to phases: 0
-- Unmapped: 20
+- Mapped to phases: 20
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-13*
-*Last updated: 2026-03-13 after initial definition*
+*Last updated: 2026-03-13 after roadmap creation*

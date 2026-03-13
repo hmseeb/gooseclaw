@@ -5,23 +5,33 @@
 See: .planning/PROJECT.md (updated 2026-03-13)
 
 **Core value:** A user with zero DevOps knowledge can deploy and configure GooseClaw correctly on the first try
-**Current focus:** Milestone v2.0 — Multi-Channel & Multi-Bot
+**Current focus:** Phase 6 - Shared Infrastructure Extraction
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-03-13 — Milestone v2.0 started
+Phase: 6 of 10 (Shared Infrastructure Extraction)
+Plan: 0 of ? in current phase
+Status: Ready to plan
+Last activity: 2026-03-13 -- Roadmap created for v2.0 milestone
 
-Progress: [----------] 0%
+Progress: [=====-----] 50% (5/10 phases complete)
 
 ## Performance Metrics
 
 **Velocity (v1.0):**
-- Total plans completed: 4
+- Total plans completed: 14
 - Average duration: ~6 min
-- Total execution time: ~0.45 hours
+- Total execution time: ~1.4 hours
+
+**By Phase (v1.0):**
+
+| Phase | Plans | Status |
+|-------|-------|--------|
+| 1. Provider UI | 2 | Complete |
+| 2. Validation | 3 | Complete |
+| 3. Gateway | 2 | Complete |
+| 4. Advanced | 1 | Complete |
+| 5. Hardening | 6 | Complete |
 
 ## Accumulated Context
 
@@ -30,38 +40,33 @@ Progress: [----------] 0%
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
-- Channel plugins are second-class citizens: no command routing, no per-user locks, no cancellation
-- Telegram is hardcoded as first-class with dedicated session management and commands
-- Single goose web process shared across all channels/bots
-- notify_all() now supports optional channel targeting
-- Jobs support notify_channel and expires_at fields
-- /clear restarts entire goose web process to kill claude subprocess
+- Single goose web process shared across all channels/bots (constraint)
+- /clear currently restarts entire goose web -- needs scoping decision in Phase 6
+- 17 threading.Lock() instances with no ordering hierarchy -- lock audit needed
+- 132 Telegram-specific references need refactoring into shared abstractions
+- notify_all() already accepts channel param, but /api/notify and cron don't use it (CHAN-07/08 partially done)
 
 ### Pending Todos
 
-- Channel parity: extract shared command/session layer from telegram-specific code
-- Multi-bot: architect multi-bot session and provider isolation
-
-### Roadmap Evolution
-
-- v1.0 phases 1-5 complete (setup wizard)
-- v2.0 milestone started: multi-channel parity + multi-bot support
+- Lock audit: map all 17 locks and their acquisition paths before Phase 6 refactor
+- /clear scoping: decide per-user session clear vs documented limitation
+- Test threading scenarios before extraction (relay+clear, relay+stop)
 
 ### Blockers/Concerns
 
-- goose web is experimental and may crash — v1.0 phase 3 addressed resilience
-- Python stdlib only constraint limits gateway.py options
-- Single goose web process means all sessions share one provider — multi-bot needs architectural solution
+- /clear restarts goose web, nuking ALL sessions -- must scope before multi-bot ships
+- Session model state is in-memory only, lost on goose web restart
+- Python stdlib only constraint limits concurrency primitives
 
 ### Quick Tasks Completed
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
-| 1 | Setup wizard settings dashboard with config editing, env var priority fix, and provider key persistence | 2026-03-10 | 720048c | [1-setup-wizard-settings-dashboard-with-con](./quick/1-setup-wizard-settings-dashboard-with-con/) |
-| 2 | Add expires_at field to job engine for auto-expiring jobs | 2026-03-13 | ff87edd | [2-add-expires-at-field-to-job-engine-for-a](./quick/2-add-expires-at-field-to-job-engine-for-a/) |
+| 1 | Setup wizard settings dashboard | 2026-03-10 | 720048c | quick/1-.../ |
+| 2 | Add expires_at to job engine | 2026-03-13 | ff87edd | quick/2-.../ |
 
 ## Session Continuity
 
 Last session: 2026-03-13
-Stopped at: Starting milestone v2.0 — defining requirements
+Stopped at: v2.0 roadmap created, ready to plan Phase 6
 Resume file: None

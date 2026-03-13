@@ -1,16 +1,14 @@
-# Roadmap: GooseClaw Setup Wizard v2
+# Roadmap: GooseClaw
 
-## Overview
+## Milestones
 
-Transform the existing GooseClaw setup wizard from a 7-provider basic setup into a polished 15+ provider onboarding experience with bulletproof validation, resilient gateway management, and advanced multi-model support. This is a brownfield project -- all phases modify existing files (setup.html, gateway.py, entrypoint.sh), not build from scratch. Four phases deliver: expanded provider UI, backend validation plumbing, gateway resilience with live feedback, and advanced settings for power users.
+- [x] **v1.0 Setup Wizard** - Phases 1-5 (shipped 2026-03-11)
+- [ ] **v2.0 Multi-Channel & Multi-Bot** - Phases 6-10 (in progress)
 
 ## Phases
 
-**Phase Numbering:**
-- Integer phases (1, 2, 3): Planned milestone work
-- Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
-
-Decimal phases appear between their surrounding integers in numeric order.
+<details>
+<summary>v1.0 Setup Wizard (Phases 1-5) - SHIPPED 2026-03-11</summary>
 
 - [x] **Phase 1: Provider UI Expansion** - Redesign wizard with 15+ providers in categories, model selection, and full setup flow steps (completed 2026-03-10)
 - [x] **Phase 2: Validation and Env Plumbing** - Every provider validates credentials, maps env vars correctly, rehydrates on restart, and pre-fills on reconfigure (completed 2026-03-10)
@@ -18,106 +16,109 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 4: Advanced Multi-Model Settings** - Lead/worker multi-model configuration for power users (completed 2026-03-11)
 - [x] **Phase 5: Production Hardening** - Security, reliability, and deployment quality across gateway, entrypoint, and Dockerfile (completed 2026-03-10)
 
+</details>
+
+### v2.0 Multi-Channel & Multi-Bot
+
+**Milestone Goal:** Make channel plugins first-class citizens with full parity to Telegram, and support multiple Telegram bots with independent provider/model configs on a single gateway.
+
+- [ ] **Phase 6: Shared Infrastructure Extraction** - Extract SessionManager and CommandRouter from Telegram-specific code into shared abstractions
+- [ ] **Phase 7: Channel Plugin Parity** - Wire channel plugins to shared infrastructure for commands, locks, cancellation, and typing indicators
+- [ ] **Phase 8: Notification Channel Targeting** - Complete /api/notify and cron scheduler support for per-channel delivery
+- [ ] **Phase 9: Multi-Bot Core** - Multiple Telegram bots on one gateway with independent sessions, provider routing, and backward-compatible config
+- [ ] **Phase 10: Multi-Bot Lifecycle** - Hot-add and hot-remove bots via API without container restart
+
 ## Phase Details
 
-### Phase 1: Provider UI Expansion
-**Goal**: User sees a complete, organized wizard with all 15+ providers, smart model selection, and a clear multi-step setup flow
-**Depends on**: Nothing (first phase)
-**Requirements**: PROV-01, PROV-02, PROV-03, MODL-01, MODL-02, MODL-03, MODL-04, UX-01, UX-02, UX-03, UX-04, UX-05, TG-01
+### Phase 6: Shared Infrastructure Extraction
+**Goal**: Telegram's session management, command routing, and concurrency primitives are extracted into reusable shared components with zero behavior change
+**Depends on**: Phase 5 (v1.0 complete)
+**Requirements**: INFRA-01, INFRA-02, INFRA-03, INFRA-04
 **Success Criteria** (what must be TRUE):
-  1. User sees 15+ providers organized into Cloud API, Subscription, Local, and Custom categories on step 0
-  2. Each provider card displays its name, description, pricing hint, and a clickable "get API key" link
-  3. After selecting a provider, user sees model selection with a sensible default pre-filled and a suggestions dropdown
-  4. User progresses through provider -> credentials -> model -> optional settings -> confirmation summary, with all five steps visible
-  5. Telegram step shows BotFather instructions for creating a bot
-**Plans:** 2/2 plans complete
+  1. SessionManager class exists with composite key (channel:user_id) and all Telegram sessions are managed through it
+  2. CommandRouter class dispatches /help, /stop, /clear, /compact and Telegram's command handling delegates to it
+  3. Telegram globals (_telegram_sessions, _telegram_active_relays, _telegram_chat_locks) no longer exist as module-level dicts -- they live as per-instance state
+  4. /clear clears only the requesting channel's sessions, not all sessions across all channels (or this limitation is documented with a scoping decision)
+  5. All existing Telegram behavior passes existing tests -- zero functional regression
+**Plans**: TBD
 
 Plans:
-- [x] 01-01-PLAN.md -- Provider data registry, categorized card grid, and dynamic credential fields for all 15+ providers
-- [ ] 01-02-PLAN.md -- Expand to 5-step flow with model selection, BotFather instructions, and confirmation summary
+- [ ] 06-01: TBD
+- [ ] 06-02: TBD
 
-### Phase 2: Validation and Env Plumbing
-**Goal**: Every provider configuration is validated before save, persisted correctly, and restored on container restart without data loss
-**Depends on**: Phase 1
-**Requirements**: PROV-04, PROV-05, PROV-06, CRED-01, CRED-02, CRED-03, CRED-04, CRED-05, ENV-01, ENV-02, ENV-03, ENV-04, UX-07, TG-02
+### Phase 7: Channel Plugin Parity
+**Goal**: Channel plugins have identical capabilities to Telegram for commands, per-user concurrency safety, cancellation, and activity indicators
+**Depends on**: Phase 6
+**Requirements**: CHAN-01, CHAN-02, CHAN-03, CHAN-04, CHAN-05, CHAN-06
 **Success Criteria** (what must be TRUE):
-  1. User cannot save config with empty or malformed API key -- save button is gated behind validation
-  2. Each provider's validation test shows specific success/failure messages (not generic "invalid key")
-  3. Claude-code provider shows clear manual instructions since remote validation is impossible
-  4. After container restart, all previously configured env vars are restored and goose starts with correct provider/model
-  5. When reconfiguring, form fields are pre-filled with existing values (API keys masked)
-**Plans:** 3/3 plans complete
+  1. A channel plugin user can send /help, /stop, /clear, /compact and get the same behavior as Telegram users
+  2. Two messages from the same user on a channel plugin are serialized (second waits for first relay to complete)
+  3. A channel plugin user can cancel an in-flight request via /stop and the active WebSocket relay is closed
+  4. A channel plugin can register custom commands via the `commands` field in its CHANNEL dict and users can invoke them
+  5. Notification bus validates channel names from loaded plugins dynamically, not from a hardcoded list
+**Plans**: TBD
 
 Plans:
-- [x] 02-01-PLAN.md -- Sync env var mapping and rehydration across gateway.py and entrypoint.sh for all 23 providers (completed 2026-03-10)
-- [x] 02-02-PLAN.md -- Frontend validation gating, per-provider format checks, and form pre-fill on reconfigure (completed 2026-03-10)
-- [x] 02-03-PLAN.md -- Harden dispatch_validation credential extraction and end-to-end verification (completed 2026-03-10)
+- [ ] 07-01: TBD
+- [ ] 07-02: TBD
 
-### Phase 3: Gateway Resilience and Live Feedback
-**Goal**: goose web crashes are handled automatically, users see real-time status and actual errors, and locked-out users can recover access
-**Depends on**: Phase 2
-**Requirements**: GATE-01, GATE-02, GATE-03, GATE-04, GATE-05, UX-06, TG-03, AUTH-01, AUTH-02
+### Phase 8: Notification Channel Targeting
+**Goal**: The notification pipeline (API, cron, remind.sh) can deliver to specific channels instead of broadcasting to all
+**Depends on**: Phase 7
+**Requirements**: CHAN-07, CHAN-08, CHAN-09
 **Success Criteria** (what must be TRUE):
-  1. If goose web crashes, it auto-restarts with exponential backoff -- user sees it recover without manual intervention
-  2. After clicking save, user sees real-time startup status (checking config -> starting goose -> ready/error) instead of "refresh in a few seconds"
-  3. When goose web fails to start, the actual error message from stderr is shown in the browser UI
-  4. Telegram pairing code is displayed in the web UI after setup completes (not buried in logs)
-  5. A user who lost their auth token can regain access without SSH into the container
-**Plans:** 2/2 plans complete
+  1. POST /api/notify with a `channel` parameter delivers only to that channel, not all channels
+  2. A cron job with `notify_channel` set delivers its output to only that channel
+  3. remind.sh accepts --notify-channel flag and the reminder is delivered to the specified channel only
+**Plans**: TBD
 
 Plans:
-- [ ] 03-01-PLAN.md -- Backend: goose web stderr capture, startup status state machine API, auth recovery endpoint
-- [ ] 03-02-PLAN.md -- Frontend: real-time startup status polling, error display, auth recovery UI
+- [ ] 08-01: TBD
 
-### Phase 4: Advanced Multi-Model Settings
-**Goal**: Power users can configure lead/worker multi-model setups without leaving the wizard
-**Depends on**: Phase 2
-**Requirements**: ADV-01, ADV-02, ADV-03
+### Phase 9: Multi-Bot Core
+**Goal**: Users can run multiple Telegram bots on a single GooseClaw gateway, each with its own sessions, provider, and model
+**Depends on**: Phase 6
+**Requirements**: BOT-01, BOT-02, BOT-03, BOT-04, BOT-07
 **Success Criteria** (what must be TRUE):
-  1. An "Advanced" toggle on the settings step reveals lead/worker multi-model configuration fields
-  2. User can set a separate lead provider, lead model, and turn count
-  3. Advanced settings are correctly written to config.yaml (GOOSE_LEAD_PROVIDER, GOOSE_LEAD_MODEL, GOOSE_LEAD_TURN_COUNT)
-**Plans:** 1/1 plans complete
+  1. User can configure multiple bots in setup.json with distinct names, tokens, and optional provider/model overrides
+  2. Each bot runs its own poll loop and maintains independent session stores and pair codes
+  3. Per-user session locks and active relay tracking are scoped per-bot (one bot's lock does not block another bot's users)
+  4. Each bot routes to its own LLM provider/model via extended channel_routes keyed by bot name
+  5. Existing single-bot `telegram_bot_token` config continues to work as the default bot with no migration required
+**Plans**: TBD
 
 Plans:
-- [x] 04-01-PLAN.md -- Advanced multi-model UI toggle, lead provider/model/turn count fields, backend persistence, and entrypoint rehydration (completed 2026-03-11)
+- [ ] 09-01: TBD
+- [ ] 09-02: TBD
 
-### Phase 5: Production Hardening
-**Goal**: GooseClaw production endpoints are hardened against common attack vectors, gateway processes recover from failures automatically, and the Docker image builds efficiently
-**Depends on**: Phase 4
-**Requirements**: SEC-01, SEC-02, SEC-03, SEC-04, SEC-05, SEC-06, SEC-07, REL-01, REL-02, REL-03, REL-04, REL-05, REL-06, REL-07, QUA-01, QUA-02, QUA-03, QUA-04, QUA-05, QUA-06, QUA-07, QUA-08, QUA-09, POL-01, POL-02, POL-03, POL-06, POL-07, POL-08, POL-09
+### Phase 10: Multi-Bot Lifecycle
+**Goal**: Operators can dynamically add and remove bots without restarting the container
+**Depends on**: Phase 9
+**Requirements**: BOT-05, BOT-06
 **Success Criteria** (what must be TRUE):
-  1. No API endpoint accepts requests from arbitrary cross-origin websites (CORS locked down)
-  2. Rate limiting prevents DoS and brute-force attacks on all endpoints
-  3. First-boot window is locked (only setup endpoints accessible before configuration)
-  4. API keys are never returned in API responses (boolean indicators only)
-  5. Auth tokens stored as hashes, not plaintext
-  6. entrypoint.sh has no eval injection vectors
-  7. goose web auto-restarts on crash with exponential backoff
-  8. Config writes are atomic (no corruption on power loss)
-  9. All responses include security headers (CSP, X-Frame-Options, etc.)
-  10. Structured request logging with timestamps and duration
-**Plans:** 6/6 plans complete
+  1. User can add a new bot via API call and it begins polling immediately without container restart
+  2. User can remove a bot via API call and its poll loop stops, sessions are cleaned up, without affecting other bots
+  3. Adding or removing a bot does not interrupt active conversations on other bots
+**Plans**: TBD
 
 Plans:
-- [ ] 05-01-PLAN.md -- CORS lockdown, first-boot API lockdown, credential masking, notify auth
-- [ ] 05-02-PLAN.md -- Dockerfile optimization, .dockerignore, labels, healthcheck
-- [x] 05-03-PLAN.md -- Eval injection fix in entrypoint.sh, auth token hashing (completed 2026-03-11)
-- [ ] 05-04-PLAN.md -- Rate limiting, config schema validation, deep health check
-- [ ] 05-05-PLAN.md -- Crash recovery, thread safety, graceful shutdown, atomic writes, timeouts
-- [ ] 05-06-PLAN.md -- Security headers, structured logging, error sanitization, version endpoint
+- [ ] 10-01: TBD
 
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
-(Phase 4 depends on Phase 2, not Phase 3, so it could run in parallel with Phase 3 if desired)
-(Phase 5 depends on Phase 4 for roadmap ordering, but technically only modifies gateway.py/entrypoint.sh/Dockerfile)
+Phases execute in numeric order: 6 -> 7 -> 8 -> 9 -> 10
+Phase 9 depends on Phase 6 (not Phase 7/8), so Phase 9 could start after Phase 6 if needed.
 
-| Phase | Plans Complete | Status | Completed |
-|-------|----------------|--------|-----------|
-| 1. Provider UI Expansion | 2/2 | Complete   | 2026-03-10 |
-| 2. Validation and Env Plumbing | 3/3 | Complete   | 2026-03-10 |
-| 3. Gateway Resilience and Live Feedback | 2/2 | Complete   | 2026-03-10 |
-| 4. Advanced Multi-Model Settings | 1/1 | Complete   | 2026-03-11 |
-| 5. Production Hardening | 6/6 | Complete   | 2026-03-10 |
+| Phase | Milestone | Plans Complete | Status | Completed |
+|-------|-----------|----------------|--------|-----------|
+| 1. Provider UI Expansion | v1.0 | 2/2 | Complete | 2026-03-10 |
+| 2. Validation and Env Plumbing | v1.0 | 3/3 | Complete | 2026-03-10 |
+| 3. Gateway Resilience and Live Feedback | v1.0 | 2/2 | Complete | 2026-03-10 |
+| 4. Advanced Multi-Model Settings | v1.0 | 1/1 | Complete | 2026-03-11 |
+| 5. Production Hardening | v1.0 | 6/6 | Complete | 2026-03-10 |
+| 6. Shared Infrastructure Extraction | v2.0 | 0/? | Not started | - |
+| 7. Channel Plugin Parity | v2.0 | 0/? | Not started | - |
+| 8. Notification Channel Targeting | v2.0 | 0/? | Not started | - |
+| 9. Multi-Bot Core | v2.0 | 0/? | Not started | - |
+| 10. Multi-Bot Lifecycle | v2.0 | 0/? | Not started | - |

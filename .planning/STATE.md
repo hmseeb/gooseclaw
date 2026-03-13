@@ -120,6 +120,7 @@ Recent decisions affecting current work:
 - Lock audit: map all 17 locks and their acquisition paths before Phase 6 refactor
 - /clear scoping: decide per-user session clear vs documented limitation
 - Test threading scenarios before extraction (relay+clear, relay+stop)
+- Auto-detect timezone from location in setup wizard (ui)
 
 ### Blockers/Concerns
 
@@ -139,7 +140,7 @@ Recent decisions affecting current work:
 | 6 | Extract onboarding flow to separate file | 2026-03-13 | 26b4ef2 | (parallel agent) |
 | 7 | Replace auto-generated auth token with user-set password | 2026-03-13 | 016c11f | [4-replace-auto-gen...](./quick/4-replace-auto-generated-auth-token-with-u/) |
 | 7 | Replace auto-generated auth token with password auth | 2026-03-13 | 016c11f | quick/4-.../ |
-| 8 | Add /status command showing context window, provider, session info | 2026-03-14 | pending | [5-add-status...](./quick/5-add-status-command-showing-context-windo/) |
+| 8 | Add /status command showing context window, provider, session info | 2026-03-14 | 1dfacbe | [5-add-status...](./quick/5-add-status-command-showing-context-windo/) |
 
 ## Session Continuity
 

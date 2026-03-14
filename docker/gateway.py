@@ -232,6 +232,25 @@ class ChannelState:
         self._user_locks_lock = threading.Lock()
         self._prewarm_events = {}      # user_id -> Event
         self._greeting_events = {}     # user_id -> Event (set when kick_greeting done)
+        self._queued_messages = {}     # user_id -> list of queued message texts
+        self._queue_lock = threading.Lock()
+
+    def queue_message(self, user_id, text):
+        """Queue a message for processing after the current relay completes."""
+        uid = str(user_id)
+        with self._queue_lock:
+            if uid not in self._queued_messages:
+                self._queued_messages[uid] = []
+            self._queued_messages[uid].append(text)
+
+    def pop_queued_message(self, user_id):
+        """Pop the next queued message for a user, or None if empty."""
+        uid = str(user_id)
+        with self._queue_lock:
+            msgs = self._queued_messages.get(uid)
+            if msgs:
+                return msgs.pop(0)
+            return None
 
     def get_user_lock(self, user_id):
         uid = str(user_id)
@@ -5733,9 +5752,9 @@ def _do_rest_relay_streaming(user_text, session_id, flush_cb, verbosity="balance
                     elif btype == "toolRequest":
                         # flush pending text before tool status
                         buf.flush()
-                        tool_call = block.get("tool_call", {})
-                        tool_name = tool_call.get("name", "tool")
                         if verbosity == "verbose":
+                            tool_call = block.get("tool_call", {})
+                            tool_name = tool_call.get("name", "tool")
                             args = tool_call.get("arguments", {})
                             if isinstance(args, dict):
                                 parts = [f'{k}="{v}"' for k, v in list(args.items())[:3]]
@@ -5743,12 +5762,10 @@ def _do_rest_relay_streaming(user_text, session_id, flush_cb, verbosity="balance
                             else:
                                 args_str = _truncate(str(args), 100) if args else ""
                             status = f"[Using {tool_name}({args_str})]" if args_str else f"[Using {tool_name}]"
-                        else:
-                            status = f"[Using {tool_name}...]"
-                        try:
-                            flush_cb(status)
-                        except Exception as e:
-                            print(f"[rest-relay-stream] tool status error: {e}")
+                            try:
+                                flush_cb(status)
+                            except Exception as e:
+                                print(f"[rest-relay-stream] tool status error: {e}")
 
                     elif btype == "thinking":
                         if verbosity == "verbose":

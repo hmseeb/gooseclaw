@@ -124,6 +124,7 @@ Recent decisions affecting current work:
 - Queue consecutive messages instead of bouncing with "Still thinking" (general)
 - Hide internal file references and tool usage from user-facing LLM output (general)
 - Support file attachments and multi-image messages in channels (general)
+- Add typing indicator support to OutboundAdapter for all channels (general)
 
 ### Blockers/Concerns
 

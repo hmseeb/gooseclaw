@@ -1972,8 +1972,7 @@ class TestChannelRelayLocks(unittest.TestCase):
         # Should get busy message
         send_fn.assert_called_once()
         msg = send_fn.call_args[0][0]
-        self.assertIn("Still thinking", msg)
-        self.assertIn("/stop", msg)
+        self.assertIn("get to this next", msg)
         # Should return empty string, not relay response
         self.assertEqual(result, "")
         # Relay should NOT have been called
@@ -5222,7 +5221,7 @@ class TestRestRelay(unittest.TestCase):
         resp.read = MagicMock(return_value=b"error body")
         return resp
 
-    @patch("gateway.http.client.HTTPConnection")
+    @patch("gateway._goosed_conn")
     def test_successful_text_relay(self, mock_conn_cls):
         conn = MagicMock()
         mock_conn_cls.return_value = conn
@@ -5238,7 +5237,7 @@ class TestRestRelay(unittest.TestCase):
         self.assertEqual(err, "")
         self.assertEqual(media, [])
 
-    @patch("gateway.http.client.HTTPConnection")
+    @patch("gateway._goosed_conn")
     def test_multimodal_response(self, mock_conn_cls):
         conn = MagicMock()
         mock_conn_cls.return_value = conn
@@ -5256,7 +5255,7 @@ class TestRestRelay(unittest.TestCase):
         self.assertEqual(text, "check this")
         self.assertEqual(len(media), 1)
 
-    @patch("gateway.http.client.HTTPConnection")
+    @patch("gateway._goosed_conn")
     def test_error_response(self, mock_conn_cls):
         conn = MagicMock()
         mock_conn_cls.return_value = conn
@@ -5270,7 +5269,7 @@ class TestRestRelay(unittest.TestCase):
         self.assertEqual(text, "")
         self.assertIn("model overloaded", err)
 
-    @patch("gateway.http.client.HTTPConnection")
+    @patch("gateway._goosed_conn")
     def test_http_error_status(self, mock_conn_cls):
         conn = MagicMock()
         mock_conn_cls.return_value = conn
@@ -5280,7 +5279,7 @@ class TestRestRelay(unittest.TestCase):
         self.assertEqual(text, "")
         self.assertIn("500", err)
 
-    @patch("gateway.http.client.HTTPConnection")
+    @patch("gateway._goosed_conn")
     def test_connection_stores_in_sock_ref(self, mock_conn_cls):
         conn = MagicMock()
         mock_conn_cls.return_value = conn
@@ -5292,7 +5291,7 @@ class TestRestRelay(unittest.TestCase):
         gateway._do_rest_relay("hi", "sess1", sock_ref=sock_ref)
         self.assertIs(sock_ref[0], conn)
 
-    @patch("gateway.http.client.HTTPConnection")
+    @patch("gateway._goosed_conn")
     def test_timeout_handling(self, mock_conn_cls):
         conn = MagicMock()
         mock_conn_cls.return_value = conn
@@ -5321,7 +5320,7 @@ class TestRestRelayStreaming(unittest.TestCase):
         resp.read = MagicMock(return_value=b"error body")
         return resp
 
-    @patch("gateway.http.client.HTTPConnection")
+    @patch("gateway._goosed_conn")
     def test_text_chunks_flushed(self, mock_conn_cls):
         conn = MagicMock()
         mock_conn_cls.return_value = conn
@@ -5344,7 +5343,7 @@ class TestRestRelayStreaming(unittest.TestCase):
         self.assertIn("chunk two", text)
         self.assertEqual(err, "")
 
-    @patch("gateway.http.client.HTTPConnection")
+    @patch("gateway._goosed_conn")
     def test_tool_request_emits_status(self, mock_conn_cls):
         conn = MagicMock()
         mock_conn_cls.return_value = conn
@@ -5363,13 +5362,13 @@ class TestRestRelayStreaming(unittest.TestCase):
             flushed.append(text)
 
         text, err, media = gateway._do_rest_relay_streaming(
-            "run something", "sess1", flush_cb=flush_cb
+            "run something", "sess1", flush_cb=flush_cb, verbosity="verbose"
         )
         # should have emitted a tool status like "[Using bash...]"
         tool_msgs = [f for f in flushed if "bash" in f.lower() or "Using" in f]
         self.assertTrue(len(tool_msgs) > 0, f"Expected tool status in flushed: {flushed}")
 
-    @patch("gateway.http.client.HTTPConnection")
+    @patch("gateway._goosed_conn")
     def test_error_stops_streaming(self, mock_conn_cls):
         conn = MagicMock()
         mock_conn_cls.return_value = conn

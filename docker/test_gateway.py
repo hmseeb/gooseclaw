@@ -1233,7 +1233,7 @@ class TestUnknownSlashCommand(unittest.TestCase):
 
     def test_is_known_command_recognized(self):
         """Known commands should be recognized."""
-        for cmd in ["/help", "/stop", "/clear", "/compact"]:
+        for cmd in ["/help", "/stop", "/clear", "/restart", "/compact", "/status"]:
             self.assertTrue(gateway.is_known_command(cmd), f"{cmd} should be known")
 
     def test_is_known_command_unknown(self):
@@ -1703,11 +1703,15 @@ class TestGeneralizedCommandHandlers(unittest.TestCase):
             "send_fn": send_fn,
             "channel_state": state,
         }
-        with patch("gateway._restart_goose_and_prewarm") as mock_restart:
+        with patch("gateway.threading.Thread") as mock_thread:
             gateway._handle_cmd_restart(ctx)
 
-        # restart was triggered
-        mock_restart.assert_not_called()  # called via Thread, not directly
+        # restart was triggered via daemon thread
+        mock_thread.assert_called_once()
+        call_kwargs = mock_thread.call_args
+        self.assertEqual(call_kwargs[1]["target"], gateway._restart_goose_and_prewarm)
+        self.assertTrue(call_kwargs[1]["daemon"])
+        mock_thread.return_value.start.assert_called_once()
         # relay was killed
         self.assertIsNone(state.pop_active_relay("user1"))
         # send_fn called with a message about restarting

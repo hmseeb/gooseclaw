@@ -5476,6 +5476,26 @@ def _handle_cmd_clear(ctx):
     print(f"[{channel}] session cleared for chat {chat_id} (old: {old}), restarting goose web")
 
 
+def _handle_cmd_restart(ctx):
+    """Handle /restart command -- restart engine without clearing session."""
+    chat_id = ctx["user_id"]
+    state = ctx.get("channel_state", _telegram_state)
+    channel = ctx.get("channel", "telegram")
+    chat_key = str(chat_id)
+
+    # kill active relay (same as /stop)
+    state.kill_relay(chat_key)
+
+    # NOTE: intentionally NOT popping the session -- that's /clear's job
+    ctx["send_fn"]("\U0001f504 Restarting engine, give me ~10 seconds...")
+    threading.Thread(
+        target=_restart_goose_and_prewarm,
+        args=(chat_id,),
+        daemon=True,
+    ).start()
+    print(f"[{channel}] engine restart requested by chat {chat_id} (session preserved)")
+
+
 def _handle_cmd_compact(ctx):
     """Handle /compact command."""
     chat_id = ctx["user_id"]
@@ -5625,6 +5645,7 @@ def _handle_cmd_status(ctx):
 _command_router.register("help", _handle_cmd_help, "this message")
 _command_router.register("stop", _handle_cmd_stop, "cancel the current response")
 _command_router.register("clear", _handle_cmd_clear, "wipe conversation and start fresh")
+_command_router.register("restart", _handle_cmd_restart, "restart the engine without clearing history")
 _command_router.register("compact", _handle_cmd_compact, "summarize history to save tokens")
 _command_router.register("status", _handle_cmd_status, "show session and provider info")
 

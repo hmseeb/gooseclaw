@@ -38,7 +38,7 @@ RESPONSE=$(curl -s -X POST "$GATEWAY_URL" \
 SENT=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('sent', False))" 2>/dev/null || echo "False")
 
 if [[ "$SENT" == "True" ]]; then
-    echo "[notify] delivered"
+    exit 0
 else
     echo "[notify] failed: $RESPONSE" >&2
     exit 1

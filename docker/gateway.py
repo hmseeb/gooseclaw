@@ -3846,6 +3846,7 @@ class ChannelCapabilities:
         self.supports_files = kwargs.get("supports_files", False)
         self.supports_buttons = kwargs.get("supports_buttons", False)
         self.supports_streaming = kwargs.get("supports_streaming", False)
+        self.typing = kwargs.get("typing", True)
         self.max_file_size = kwargs.get("max_file_size", 0)
         self.max_text_length = kwargs.get("max_text_length", 0)
 
@@ -3874,6 +3875,11 @@ class OutboundAdapter:
     def send_file(self, data, filename="", **kwargs):
         fallback = f"[File: {filename}]" if filename else "[file]"
         return self.send_text(fallback)
+
+    def send_typing(self, chat_id, **kwargs):
+        """Send a typing indicator for the given chat/user. No-op by default.
+        Override in subclasses to provide channel-specific typing feedback."""
+        return None
 
     def send_buttons(self, text, buttons):
         lines = [text, ""]
@@ -3920,6 +3926,10 @@ class TelegramOutboundAdapter(OutboundAdapter):
     def send_file(self, file_bytes, filename="file", mime_type="application/octet-stream"):
         return self._send_media("sendDocument", "document", file_bytes,
                                 filename, mime_type, "")
+
+    def send_typing(self, chat_id, **kwargs):
+        """Send typing indicator via Telegram Bot API."""
+        _send_typing_action(self.bot_token, chat_id)
 
     def _send_media(self, method, field, data, filename, mime_type, caption):
         """Internal: upload media to Telegram via multipart/form-data."""
@@ -4031,10 +4041,11 @@ class ChannelRelay:
     """Relay function wrapper for channel plugins. Manages per-channel sessions,
     command interception, and active relay tracking for /stop cancellation."""
 
-    def __init__(self, channel_name, typing_cb=None):
+    def __init__(self, channel_name, typing_cb=None, adapter=None):
         self._name = channel_name
         self._state = ChannelState()
         self._typing_cb = typing_cb
+        self._adapter = adapter
         # Load any persisted sessions for this channel
         _session_manager.load(channel_name)
 
@@ -4085,11 +4096,17 @@ class ChannelRelay:
         try:
             # Typing indicator loop (CHAN-06)
             typing_stop = threading.Event()
-            if self._typing_cb:
+            # Resolve typing callback: explicit cb > adapter.send_typing > none
+            _typing_fn = self._typing_cb
+            if not _typing_fn and self._adapter:
+                _caps = self._adapter.capabilities()
+                if getattr(_caps, "typing", False):
+                    _typing_fn = lambda uid: self._adapter.send_typing(uid)
+            if _typing_fn:
                 def _typing_loop():
                     while not typing_stop.is_set():
                         try:
-                            self._typing_cb(user_key)
+                            _typing_fn(user_key)
                         except Exception:
                             pass  # buggy callback must not crash relay
                         typing_stop.wait(4)
@@ -4263,7 +4280,7 @@ def _load_channel(filepath):
             if typing_cb and not callable(typing_cb):
                 print(f"[channels] warn: {name} typing is not callable, ignoring")
                 typing_cb = None
-            relay_fn = ChannelRelay(name, typing_cb=typing_cb)
+            relay_fn = ChannelRelay(name, typing_cb=typing_cb, adapter=adapter)
 
             def _poll_wrapper(_fn, _relay, _stop, _creds):
                 try:

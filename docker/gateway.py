@@ -7492,6 +7492,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.handle_agent_config()
         elif path == "/api/bots":
             self.handle_add_bot()
+        elif path == "/api/watchers/batch":
+            self.handle_watchers_batch_create()
         elif path == "/api/watchers":
             self.handle_create_watcher()
         elif path.startswith("/api/webhooks/"):
@@ -7527,6 +7529,9 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             if job_id:
                 self.handle_delete_job(job_id)
                 return
+        elif path == "/api/watchers/batch":
+            self.handle_watchers_batch_delete()
+            return
         elif path.startswith("/api/watchers/"):
             watcher_id = path[len("/api/watchers/"):]
             if watcher_id:
@@ -8420,6 +8425,88 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(404, {"error": err})
         else:
             self.send_json(200, updated)
+
+    def handle_watchers_batch_create(self):
+        """POST /api/watchers/batch -- create multiple watchers in one call."""
+        if not self._check_rate_limit(api_limiter):
+            return
+        if not self._check_local_or_auth():
+            return
+        body = self._read_body()
+        try:
+            data = json.loads(body)
+        except (json.JSONDecodeError, Exception):
+            self.send_json(400, {"error": "invalid JSON"})
+            return
+
+        items = data.get("watchers")
+        if not isinstance(items, list):
+            self.send_json(400, {"error": "'watchers' must be a list"})
+            return
+        if len(items) == 0:
+            self.send_json(400, {"error": "'watchers' list must not be empty"})
+            return
+
+        results = []
+        created = 0
+        errors = 0
+        for spec in items:
+            name = spec.get("name", spec.get("id", ""))
+            watcher, err = create_watcher(spec, _save=False)
+            if err:
+                results.append({"name": name, "status": "error", "error": err})
+                errors += 1
+            else:
+                results.append({
+                    "name": watcher["name"],
+                    "status": "created",
+                    "id": watcher["id"],
+                    "watcher": watcher,
+                })
+                created += 1
+
+        _save_watchers()
+        self.send_json(207, {"results": results, "created": created, "errors": errors})
+
+    def handle_watchers_batch_delete(self):
+        """DELETE /api/watchers/batch -- delete multiple watchers in one call."""
+        if not self._check_rate_limit(api_limiter):
+            return
+        if not self._check_local_or_auth():
+            return
+        body = self._read_body()
+        try:
+            data = json.loads(body)
+        except (json.JSONDecodeError, Exception):
+            self.send_json(400, {"error": "invalid JSON"})
+            return
+
+        ids = data.get("ids")
+        if not isinstance(ids, list):
+            self.send_json(400, {"error": "'ids' must be a list"})
+            return
+        if len(ids) == 0:
+            self.send_json(400, {"error": "'ids' list must not be empty"})
+            return
+
+        results = []
+        deleted = 0
+        errors = 0
+        for watcher_id in ids:
+            with _watchers_lock:
+                before = len(_watchers)
+                _watchers[:] = [w for w in _watchers if w["id"] != watcher_id]
+                found = len(_watchers) < before
+            if found:
+                results.append({"id": watcher_id, "status": "deleted"})
+                deleted += 1
+                print(f"[watchers] deleted: {watcher_id}")
+            else:
+                results.append({"id": watcher_id, "status": "error", "error": "watcher not found"})
+                errors += 1
+
+        _save_watchers()
+        self.send_json(207, {"results": results, "deleted": deleted, "errors": errors})
 
     def handle_webhook_incoming(self, webhook_name):
         """POST /api/webhooks/<name> -- receive external webhook."""

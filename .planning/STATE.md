@@ -149,8 +149,8 @@ Recent decisions affecting current work:
 
 ### Blockers/Concerns
 
-- /clear restarts goose web, nuking ALL sessions -- must scope before multi-bot ships
-- Session model state is in-memory only, lost on goose web restart
+- /clear restarts goosed, nuking ALL sessions -- /restart added as non-destructive alternative
+- Session model state is in-memory only, lost on goosed restart
 - Python stdlib only constraint limits concurrency primitives
 
 ### Quick Tasks Completed

@@ -27,7 +27,7 @@ Two layers. Know which one handles what:
 
 | Layer | What it is | What it handles |
 |-------|-----------|-----------------|
-| **Goose** (framework) | AI agent by Block. runs as `goose web` on port 3001 (internal) | LLM sessions, MCP extensions, tool execution, recipes |
+| **Goose** (framework) | AI agent by Block. runs as `goosed agent` on port 3001 (internal) | LLM sessions, MCP extensions, tool execution, recipes |
 | **Gateway** (custom) | Python HTTP server on port 8080. wraps goose. | Telegram bots, channel plugins, job/cron engine, notifications, setup wizard, identity files, credential vault |
 
 **Routing user requests:**

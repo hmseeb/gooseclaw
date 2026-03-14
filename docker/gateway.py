@@ -3783,6 +3783,66 @@ def _process_passthrough(watcher, data):
     return t.safe_substitute(flat)
 
 
+def _process_smart(watcher, data):
+    """Tier 2: LLM processing with session reuse. Returns response string."""
+    prompt = watcher.get("prompt", "")
+    payload_text = json.dumps(data)[:4000]
+    user_text = f"{prompt}\n\nData:\n{payload_text}" if prompt else payload_text
+
+    session_id = watcher.get("_session_id")
+
+    # Create session if none stored
+    if not session_id:
+        session_id = _create_goose_session()
+        if not session_id:
+            return "Error: could not create goose session"
+        watcher["_session_id"] = session_id
+
+    # Relay to LLM
+    response, error, _media = _relay_to_goose_web(
+        user_text, session_id, channel=watcher.get("channel"))
+
+    # Handle stale session: retry once with fresh session
+    if error and any(hint in error.lower() for hint in ("session not found", "session expired")):
+        watcher.pop("_session_id", None)
+        session_id = _create_goose_session()
+        if not session_id:
+            return "Error: could not create goose session"
+        watcher["_session_id"] = session_id
+        response, error, _media = _relay_to_goose_web(
+            user_text, session_id, channel=watcher.get("channel"))
+
+    if error:
+        return f"Error: {error}"
+    return response
+
+
+def _fire_watcher(watcher, data):
+    """Dispatch watcher event to correct tier and deliver via notify_all."""
+    try:
+        if watcher.get("smart"):
+            message = _process_smart(watcher, data)
+        else:
+            message = _process_passthrough(watcher, data)
+
+        if not message:
+            _save_watchers()
+            return
+
+        watcher_name = watcher.get("name", watcher.get("id", "watcher"))
+        full_message = f"[{watcher_name}] {message}"
+        notify_all(full_message, channel=watcher.get("channel"))
+
+        watcher["fire_count"] = watcher.get("fire_count", 0) + 1
+        watcher["last_fired"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        watcher["last_error"] = None
+    except Exception as e:
+        watcher["last_error"] = str(e)
+        print(f"[watchers] error firing {watcher.get('name', '?')}: {e}")
+
+    _save_watchers()
+
+
 # ── cron scheduler (channel-agnostic, reads goose schedule.json) ─────────────
 #
 # Replaces goose's built-in scheduler (which only runs inside `goose gateway`,

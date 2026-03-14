@@ -7801,5 +7801,350 @@ class TestWebhookEndpoint(unittest.TestCase):
         self.assertTrue(resp.get("accepted"))
 
 
+# ── Watcher Filter Tests ─────────────────────────────────────────────────────
+
+
+class TestEvaluateFilter(unittest.TestCase):
+    """Tests for _evaluate_filter() parsing and evaluation."""
+
+    def test_contains_match(self):
+        result = gateway._evaluate_filter("body contains 'party'", {"body": "come to the party tonight"})
+        self.assertTrue(result)
+
+    def test_contains_no_match(self):
+        result = gateway._evaluate_filter("body contains 'party'", {"body": "boring meeting"})
+        self.assertFalse(result)
+
+    def test_contains_case_insensitive(self):
+        result = gateway._evaluate_filter("body contains 'PARTY'", {"body": "come to the party tonight"})
+        self.assertTrue(result)
+
+    def test_equals_match(self):
+        result = gateway._evaluate_filter("status equals 'failed'", {"status": "failed"})
+        self.assertTrue(result)
+
+    def test_equals_no_match(self):
+        result = gateway._evaluate_filter("status equals 'failed'", {"status": "success"})
+        self.assertFalse(result)
+
+    def test_matches_regex(self):
+        result = gateway._evaluate_filter("message matches 'error.*timeout'", {"message": "error: connection timeout"})
+        self.assertTrue(result)
+
+    def test_matches_regex_no_match(self):
+        result = gateway._evaluate_filter("message matches 'error.*timeout'", {"message": "all good"})
+        self.assertFalse(result)
+
+    def test_gt_numeric(self):
+        result = gateway._evaluate_filter("amount gt 100", {"amount": "150"})
+        self.assertTrue(result)
+
+    def test_gt_numeric_fail(self):
+        result = gateway._evaluate_filter("amount gt 100", {"amount": "50"})
+        self.assertFalse(result)
+
+    def test_lt_numeric(self):
+        result = gateway._evaluate_filter("count lt 5", {"count": "3"})
+        self.assertTrue(result)
+
+    def test_lt_numeric_fail(self):
+        result = gateway._evaluate_filter("count lt 5", {"count": "10"})
+        self.assertFalse(result)
+
+    def test_gte_numeric(self):
+        result = gateway._evaluate_filter("score gte 80", {"score": "80"})
+        self.assertTrue(result)
+
+    def test_lte_numeric(self):
+        result = gateway._evaluate_filter("score lte 20", {"score": "20"})
+        self.assertTrue(result)
+
+    def test_not_equals(self):
+        result = gateway._evaluate_filter("status not_equals 'success'", {"status": "failed"})
+        self.assertTrue(result)
+
+    def test_not_equals_no_match(self):
+        result = gateway._evaluate_filter("status not_equals 'success'", {"status": "success"})
+        self.assertFalse(result)
+
+    def test_not_contains(self):
+        result = gateway._evaluate_filter("body not_contains 'test'", {"body": "production deploy"})
+        self.assertTrue(result)
+
+    def test_not_contains_no_match(self):
+        result = gateway._evaluate_filter("body not_contains 'test'", {"body": "this is a test run"})
+        self.assertFalse(result)
+
+    def test_missing_field_passes(self):
+        """Missing field should pass (don't silently drop events)."""
+        result = gateway._evaluate_filter("nonexistent contains 'x'", {"body": "hello"})
+        self.assertTrue(result)
+
+    def test_invalid_filter_passes(self):
+        """Unparseable filter should pass (don't silently drop events)."""
+        result = gateway._evaluate_filter("this is not a valid filter", {"body": "hello"})
+        self.assertTrue(result)
+
+    def test_nested_field_access(self):
+        """Flattened dict keys like 'pull_request_title' should work."""
+        data = {"pull_request_title": "fix: handle edge case"}
+        result = gateway._evaluate_filter("pull_request_title contains 'fix'", data)
+        self.assertTrue(result)
+
+    def test_empty_filter_passes(self):
+        """Empty filter string should pass."""
+        result = gateway._evaluate_filter("", {"body": "hello"})
+        self.assertTrue(result)
+
+    def test_value_with_spaces(self):
+        """Filter value containing spaces should work."""
+        result = gateway._evaluate_filter("body contains 'hello world'", {"body": "say hello world now"})
+        self.assertTrue(result)
+
+
+class TestFireWatcherFilter(unittest.TestCase):
+    """Integration tests: filter evaluation inside _fire_watcher()."""
+
+    def _make_watcher(self, **overrides):
+        w = {
+            "id": "wf1", "name": "FilterWatcher", "type": "webhook",
+            "smart": False, "prompt": "", "transform": "",
+            "channel": "telegram", "enabled": True, "filter": "",
+            "fire_count": 0, "last_fired": None, "last_error": None,
+        }
+        w.update(overrides)
+        return w
+
+    @patch.object(gateway, "_save_watchers")
+    @patch.object(gateway, "notify_all")
+    @patch.object(gateway, "_process_passthrough", return_value="formatted result")
+    def test_fire_watcher_skips_on_filter_fail(self, mock_pt, mock_notify, mock_save):
+        """Passthrough watcher with failing filter should skip delivery."""
+        w = self._make_watcher(filter="status equals 'failed'")
+        gateway._fire_watcher(w, {"status": "success"})
+        mock_pt.assert_not_called()
+        mock_notify.assert_not_called()
+
+    @patch.object(gateway, "_save_watchers")
+    @patch.object(gateway, "notify_all")
+    @patch.object(gateway, "_process_passthrough", return_value="formatted result")
+    def test_fire_watcher_delivers_on_filter_pass(self, mock_pt, mock_notify, mock_save):
+        """Passthrough watcher with passing filter should deliver."""
+        w = self._make_watcher(filter="status equals 'failed'")
+        gateway._fire_watcher(w, {"status": "failed"})
+        mock_pt.assert_called_once()
+        mock_notify.assert_called_once()
+
+    @patch.object(gateway, "_save_watchers")
+    @patch.object(gateway, "notify_all")
+    @patch.object(gateway, "_process_passthrough", return_value="formatted result")
+    def test_fire_watcher_no_filter_delivers(self, mock_pt, mock_notify, mock_save):
+        """Passthrough watcher without filter should always deliver."""
+        w = self._make_watcher()
+        gateway._fire_watcher(w, {"status": "success"})
+        mock_pt.assert_called_once()
+        mock_notify.assert_called_once()
+
+    @patch.object(gateway, "_save_watchers")
+    @patch.object(gateway, "notify_all")
+    @patch.object(gateway, "_process_smart", return_value="LLM result")
+    def test_fire_watcher_smart_ignores_filter(self, mock_smart, mock_notify, mock_save):
+        """Smart watchers should bypass filter (LLM handles filtering)."""
+        w = self._make_watcher(smart=True, filter="status equals 'failed'")
+        gateway._fire_watcher(w, {"status": "success"})
+        mock_smart.assert_called_once()
+        mock_notify.assert_called_once()
+
+    @patch.object(gateway, "_save_watchers")
+    @patch.object(gateway, "notify_all")
+    @patch.object(gateway, "_process_passthrough", return_value="formatted result")
+    def test_fire_watcher_filter_uses_flattened_data(self, mock_pt, mock_notify, mock_save):
+        """Filter should work on flattened nested data."""
+        w = self._make_watcher(filter="pull_request_title contains 'fix'")
+        gateway._fire_watcher(w, {"pull_request": {"title": "fix: bug"}})
+        mock_pt.assert_called_once()
+        mock_notify.assert_called_once()
+
+
+# ── batch watcher API ─────────────────────────────────────────────────────
+
+class TestWatcherBatchAPI(unittest.TestCase):
+    """Tests for POST/DELETE /api/watchers/batch."""
+
+    def setUp(self):
+        self._orig = list(gateway._watchers)
+        with gateway._watchers_lock:
+            gateway._watchers.clear()
+
+    def tearDown(self):
+        with gateway._watchers_lock:
+            gateway._watchers[:] = self._orig
+
+    def _make_handler(self, path="/api/watchers/batch", method="POST", body=b"{}"):
+        handler = MagicMock(spec=gateway.GatewayHandler)
+        handler.path = path
+        handler.command = method
+        handler.headers = {}
+        handler.client_address = ("127.0.0.1", 12345)
+        handler._json_response = None
+        handler._read_body = MagicMock(return_value=body)
+        handler._request_start = time.time()
+        handler._check_rate_limit = MagicMock(return_value=True)
+        handler._check_local_or_auth = MagicMock(return_value=True)
+
+        def mock_send_json(status, data):
+            handler._json_response = (status, data)
+        handler.send_json = mock_send_json
+        return handler
+
+    @patch("gateway._save_watchers")
+    def test_batch_create_multiple(self, mock_save):
+        """POST /api/watchers/batch with 3 valid watchers -> 207, all created."""
+        watchers = [
+            {"name": "w1", "type": "webhook"},
+            {"name": "w2", "type": "webhook"},
+            {"name": "w3", "type": "feed", "source": "https://example.com/rss"},
+        ]
+        body = json.dumps({"watchers": watchers}).encode()
+        handler = self._make_handler(body=body)
+        gateway.GatewayHandler.handle_watchers_batch_create(handler)
+        status, resp = handler._json_response
+        self.assertEqual(status, 207)
+        self.assertEqual(resp["created"], 3)
+        self.assertEqual(resp["errors"], 0)
+        self.assertEqual(len(resp["results"]), 3)
+        for r in resp["results"]:
+            self.assertEqual(r["status"], "created")
+            self.assertIn("id", r)
+            self.assertIn("watcher", r)
+
+    @patch("gateway._save_watchers")
+    def test_batch_create_partial_failure(self, mock_save):
+        """POST /api/watchers/batch with 2 valid + 1 invalid -> 207, mixed results."""
+        watchers = [
+            {"name": "good1", "type": "webhook"},
+            {"name": "bad1", "type": "feed"},  # missing source
+            {"name": "good2", "type": "webhook"},
+        ]
+        body = json.dumps({"watchers": watchers}).encode()
+        handler = self._make_handler(body=body)
+        gateway.GatewayHandler.handle_watchers_batch_create(handler)
+        status, resp = handler._json_response
+        self.assertEqual(status, 207)
+        self.assertEqual(resp["created"], 2)
+        self.assertEqual(resp["errors"], 1)
+        self.assertEqual(resp["results"][0]["status"], "created")
+        self.assertEqual(resp["results"][1]["status"], "error")
+        self.assertIn("error", resp["results"][1])
+        self.assertEqual(resp["results"][2]["status"], "created")
+
+    @patch("gateway._save_watchers")
+    def test_batch_create_empty_list(self, mock_save):
+        """POST /api/watchers/batch with empty watchers array -> 400."""
+        body = json.dumps({"watchers": []}).encode()
+        handler = self._make_handler(body=body)
+        gateway.GatewayHandler.handle_watchers_batch_create(handler)
+        status, resp = handler._json_response
+        self.assertEqual(status, 400)
+        self.assertIn("error", resp)
+
+    @patch("gateway._save_watchers")
+    def test_batch_create_not_list(self, mock_save):
+        """POST /api/watchers/batch with non-list -> 400."""
+        body = json.dumps({"watchers": "not a list"}).encode()
+        handler = self._make_handler(body=body)
+        gateway.GatewayHandler.handle_watchers_batch_create(handler)
+        status, resp = handler._json_response
+        self.assertEqual(status, 400)
+        self.assertIn("error", resp)
+
+    @patch("gateway._save_watchers")
+    def test_batch_create_duplicate_names(self, mock_save):
+        """POST /api/watchers/batch with duplicate IDs -> first succeeds, second errors."""
+        watchers = [
+            {"id": "dup1", "name": "first", "type": "webhook"},
+            {"id": "dup1", "name": "second", "type": "webhook"},
+        ]
+        body = json.dumps({"watchers": watchers}).encode()
+        handler = self._make_handler(body=body)
+        gateway.GatewayHandler.handle_watchers_batch_create(handler)
+        status, resp = handler._json_response
+        self.assertEqual(status, 207)
+        self.assertEqual(resp["created"], 1)
+        self.assertEqual(resp["errors"], 1)
+        self.assertEqual(resp["results"][0]["status"], "created")
+        self.assertEqual(resp["results"][1]["status"], "error")
+
+    @patch("gateway._save_watchers")
+    def test_batch_create_single_save(self, mock_save):
+        """Verify _save_watchers is called exactly once, not per-watcher."""
+        watchers = [
+            {"name": "s1", "type": "webhook"},
+            {"name": "s2", "type": "webhook"},
+            {"name": "s3", "type": "webhook"},
+        ]
+        body = json.dumps({"watchers": watchers}).encode()
+        handler = self._make_handler(body=body)
+        gateway.GatewayHandler.handle_watchers_batch_create(handler)
+        mock_save.assert_called_once()
+
+    @patch("gateway._save_watchers")
+    def test_batch_delete_multiple(self, mock_save):
+        """DELETE /api/watchers/batch with valid ids -> 207, all deleted."""
+        # create watchers first
+        gateway.create_watcher({"id": "d1", "name": "del1", "type": "webhook"})
+        gateway.create_watcher({"id": "d2", "name": "del2", "type": "webhook"})
+        mock_save.reset_mock()
+
+        body = json.dumps({"ids": ["d1", "d2"]}).encode()
+        handler = self._make_handler(method="DELETE", body=body)
+        gateway.GatewayHandler.handle_watchers_batch_delete(handler)
+        status, resp = handler._json_response
+        self.assertEqual(status, 207)
+        self.assertEqual(resp["deleted"], 2)
+        self.assertEqual(resp["errors"], 0)
+        self.assertEqual(len(resp["results"]), 2)
+        for r in resp["results"]:
+            self.assertEqual(r["status"], "deleted")
+
+    @patch("gateway._save_watchers")
+    def test_batch_delete_partial_failure(self, mock_save):
+        """DELETE /api/watchers/batch with mix of valid/invalid ids -> 207, mixed."""
+        gateway.create_watcher({"id": "e1", "name": "exist", "type": "webhook"})
+        mock_save.reset_mock()
+
+        body = json.dumps({"ids": ["e1", "nonexistent"]}).encode()
+        handler = self._make_handler(method="DELETE", body=body)
+        gateway.GatewayHandler.handle_watchers_batch_delete(handler)
+        status, resp = handler._json_response
+        self.assertEqual(status, 207)
+        self.assertEqual(resp["deleted"], 1)
+        self.assertEqual(resp["errors"], 1)
+        self.assertEqual(resp["results"][0]["status"], "deleted")
+        self.assertEqual(resp["results"][1]["status"], "error")
+
+    @patch("gateway._save_watchers")
+    def test_batch_delete_empty_ids(self, mock_save):
+        """DELETE /api/watchers/batch with empty ids array -> 400."""
+        body = json.dumps({"ids": []}).encode()
+        handler = self._make_handler(method="DELETE", body=body)
+        gateway.GatewayHandler.handle_watchers_batch_delete(handler)
+        status, resp = handler._json_response
+        self.assertEqual(status, 400)
+        self.assertIn("error", resp)
+
+    @patch("gateway._save_watchers")
+    def test_batch_delete_single_save(self, mock_save):
+        """Verify _save_watchers is called exactly once for batch delete."""
+        gateway.create_watcher({"id": "f1", "name": "f1", "type": "webhook"})
+        gateway.create_watcher({"id": "f2", "name": "f2", "type": "webhook"})
+        mock_save.reset_mock()
+
+        body = json.dumps({"ids": ["f1", "f2"]}).encode()
+        handler = self._make_handler(method="DELETE", body=body)
+        gateway.GatewayHandler.handle_watchers_batch_delete(handler)
+        mock_save.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

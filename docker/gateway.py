@@ -7268,6 +7268,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.handle_telegram_status()
         elif path == "/api/jobs":
             self.handle_list_jobs()
+        elif path == "/api/watchers":
+            self.handle_list_watchers()
         elif path == "/api/channels":
             self.handle_list_channels()
         elif path.rstrip("/") == "/login":
@@ -7340,6 +7342,14 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.handle_agent_config()
         elif path == "/api/bots":
             self.handle_add_bot()
+        elif path == "/api/watchers":
+            self.handle_create_watcher()
+        elif path.startswith("/api/webhooks/"):
+            webhook_name = path[len("/api/webhooks/"):]
+            if webhook_name:
+                self.handle_webhook_incoming(webhook_name)
+            else:
+                self.proxy_to_goose()
         else:
             self.proxy_to_goose()
 
@@ -7351,6 +7361,11 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             if job_id:
                 self.handle_update_job(job_id)
                 return
+        elif path.startswith("/api/watchers/"):
+            watcher_id = path[len("/api/watchers/"):]
+            if watcher_id:
+                self.handle_update_watcher(watcher_id)
+                return
         self.proxy_to_goose()
 
     def do_DELETE(self):
@@ -7361,6 +7376,11 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             job_id = path[len("/api/jobs/"):]
             if job_id:
                 self.handle_delete_job(job_id)
+                return
+        elif path.startswith("/api/watchers/"):
+            watcher_id = path[len("/api/watchers/"):]
+            if watcher_id:
+                self.handle_delete_watcher(watcher_id)
                 return
         elif path.startswith("/api/bots/"):
             bot_name = path[len("/api/bots/"):]
@@ -8188,6 +8208,76 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(401, {"error": "Authentication required"})
             return False
         return True
+
+    # ── watcher endpoints ──
+
+    def handle_create_watcher(self):
+        """POST /api/watchers -- create a new watcher."""
+        if not self._check_rate_limit(api_limiter):
+            return
+        if not self._check_local_or_auth():
+            return
+        body = self._read_body()
+        try:
+            data = json.loads(body)
+        except (json.JSONDecodeError, Exception):
+            self.send_json(400, {"error": "invalid JSON"})
+            return
+        watcher, err = create_watcher(data)
+        if err:
+            self.send_json(400, {"error": err})
+        else:
+            self.send_json(201, watcher)
+
+    def handle_list_watchers(self):
+        """GET /api/watchers -- list all watchers."""
+        if not self._check_rate_limit(api_limiter):
+            return
+        if not self._check_local_or_auth():
+            return
+        watchers = list_watchers()
+        self.send_json(200, {"watchers": watchers, "count": len(watchers)})
+
+    def handle_delete_watcher(self, watcher_id):
+        """DELETE /api/watchers/<id> -- delete a watcher."""
+        if not self._check_rate_limit(api_limiter):
+            return
+        if not self._check_local_or_auth():
+            return
+        if delete_watcher(watcher_id):
+            self.send_json(200, {"deleted": True, "id": watcher_id})
+        else:
+            self.send_json(404, {"error": "watcher not found"})
+
+    def handle_update_watcher(self, watcher_id):
+        """PUT /api/watchers/<id> -- update watcher fields."""
+        if not self._check_rate_limit(api_limiter):
+            return
+        if not self._check_local_or_auth():
+            return
+        try:
+            body = self._read_body()
+            data = json.loads(body)
+        except (json.JSONDecodeError, Exception):
+            self.send_json(400, {"error": "invalid JSON"})
+            return
+        updated, err = update_watcher(watcher_id, data)
+        if err:
+            self.send_json(404, {"error": err})
+        else:
+            self.send_json(200, updated)
+
+    def handle_webhook_incoming(self, webhook_name):
+        """POST /api/webhooks/<name> -- receive external webhook."""
+        if not self._check_rate_limit(api_limiter):
+            return
+        body = self._read_body()
+        headers = dict(self.headers) if self.headers else {}
+        count = _handle_webhook_incoming(webhook_name, body, headers)
+        if count > 0:
+            self.send_json(200, {"accepted": True, "watchers": count})
+        else:
+            self.send_json(404, {"error": f"no watchers for webhook '{webhook_name}'"})
 
     def handle_create_job(self):
         """POST /api/jobs — create a new job.

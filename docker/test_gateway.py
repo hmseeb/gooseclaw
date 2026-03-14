@@ -7499,5 +7499,177 @@ class TestFeedWatcher(unittest.TestCase):
         assert result[1]["title"] == "Second Post"
 
 
+class TestWatcherAPI(unittest.TestCase):
+    """Tests for watcher CRUD API endpoints."""
+
+    def setUp(self):
+        self._orig = list(gateway._watchers)
+        with gateway._watchers_lock:
+            gateway._watchers.clear()
+
+    def tearDown(self):
+        with gateway._watchers_lock:
+            gateway._watchers[:] = self._orig
+
+    def _make_handler(self, path="/api/watchers", method="GET", body=b"{}"):
+        handler = MagicMock(spec=gateway.GatewayHandler)
+        handler.path = path
+        handler.command = method
+        handler.headers = {}
+        handler.client_address = ("127.0.0.1", 12345)
+        handler._json_response = None
+        handler._read_body = MagicMock(return_value=body)
+        handler._request_start = time.time()
+        handler._check_rate_limit = MagicMock(return_value=True)
+        handler._check_local_or_auth = MagicMock(return_value=True)
+
+        def mock_send_json(status, data):
+            handler._json_response = (status, data)
+        handler.send_json = mock_send_json
+        return handler
+
+    @patch("gateway._save_watchers")
+    def test_create_watcher_post(self, _save):
+        """POST /api/watchers with valid JSON -> 201, response contains watcher with id."""
+        data = {"name": "test-w", "type": "webhook"}
+        handler = self._make_handler(path="/api/watchers", method="POST",
+                                     body=json.dumps(data).encode())
+        gateway.GatewayHandler.handle_create_watcher(handler)
+        status, resp = handler._json_response
+        self.assertEqual(status, 201)
+        self.assertIn("id", resp)
+        self.assertEqual(resp["name"], "test-w")
+
+    def test_create_watcher_invalid_type(self):
+        """POST with type='invalid' -> 400 with error."""
+        data = {"name": "bad", "type": "invalid"}
+        handler = self._make_handler(path="/api/watchers", method="POST",
+                                     body=json.dumps(data).encode())
+        gateway.GatewayHandler.handle_create_watcher(handler)
+        status, resp = handler._json_response
+        self.assertEqual(status, 400)
+        self.assertIn("error", resp)
+
+    @patch("gateway._save_watchers")
+    def test_list_watchers_get(self, _save):
+        """GET /api/watchers -> 200, response contains watchers list."""
+        # add a watcher first
+        gateway.create_watcher({"name": "w1", "type": "webhook"})
+        handler = self._make_handler(path="/api/watchers", method="GET")
+        gateway.GatewayHandler.handle_list_watchers(handler)
+        status, resp = handler._json_response
+        self.assertEqual(status, 200)
+        self.assertIn("watchers", resp)
+        self.assertIsInstance(resp["watchers"], list)
+        self.assertGreaterEqual(len(resp["watchers"]), 1)
+
+    @patch("gateway._save_watchers")
+    def test_delete_watcher(self, _save):
+        """DELETE /api/watchers/test-id -> 200."""
+        w, _ = gateway.create_watcher({"id": "del1", "name": "to-delete", "type": "webhook"})
+        handler = self._make_handler(path="/api/watchers/del1", method="DELETE")
+        gateway.GatewayHandler.handle_delete_watcher(handler, "del1")
+        status, resp = handler._json_response
+        self.assertEqual(status, 200)
+        self.assertTrue(resp.get("deleted"))
+
+    @patch("gateway._save_watchers")
+    def test_delete_watcher_not_found(self, _save):
+        """DELETE /api/watchers/nope -> 404."""
+        handler = self._make_handler(path="/api/watchers/nope", method="DELETE")
+        gateway.GatewayHandler.handle_delete_watcher(handler, "nope")
+        status, resp = handler._json_response
+        self.assertEqual(status, 404)
+        self.assertIn("error", resp)
+
+    @patch("gateway._save_watchers")
+    def test_update_watcher(self, _save):
+        """PUT /api/watchers/test-id with {enabled: false} -> 200."""
+        gateway.create_watcher({"id": "upd1", "name": "to-update", "type": "webhook"})
+        data = {"enabled": False}
+        handler = self._make_handler(path="/api/watchers/upd1", method="PUT",
+                                     body=json.dumps(data).encode())
+        gateway.GatewayHandler.handle_update_watcher(handler, "upd1")
+        status, resp = handler._json_response
+        self.assertEqual(status, 200)
+        self.assertFalse(resp.get("enabled"))
+
+    @patch("gateway._save_watchers")
+    def test_update_watcher_not_found(self, _save):
+        """PUT /api/watchers/nope -> 404."""
+        data = {"enabled": False}
+        handler = self._make_handler(path="/api/watchers/nope", method="PUT",
+                                     body=json.dumps(data).encode())
+        gateway.GatewayHandler.handle_update_watcher(handler, "nope")
+        status, resp = handler._json_response
+        self.assertEqual(status, 404)
+        self.assertIn("error", resp)
+
+
+class TestWebhookEndpoint(unittest.TestCase):
+    """Tests for webhook receiver endpoint."""
+
+    def setUp(self):
+        self._orig = list(gateway._watchers)
+        with gateway._watchers_lock:
+            gateway._watchers.clear()
+
+    def tearDown(self):
+        with gateway._watchers_lock:
+            gateway._watchers[:] = self._orig
+
+    def _make_handler(self, path="/api/webhooks/test", method="POST", body=b"{}"):
+        handler = MagicMock(spec=gateway.GatewayHandler)
+        handler.path = path
+        handler.command = method
+        handler.headers = {}
+        handler.client_address = ("127.0.0.1", 12345)
+        handler._json_response = None
+        handler._read_body = MagicMock(return_value=body)
+        handler._request_start = time.time()
+        handler._check_rate_limit = MagicMock(return_value=True)
+
+        def mock_send_json(status, data):
+            handler._json_response = (status, data)
+        handler.send_json = mock_send_json
+        return handler
+
+    @patch("gateway._fire_watcher")
+    @patch("gateway._save_watchers")
+    def test_webhook_post_match(self, _save, mock_fire):
+        """POST /api/webhooks/gh-prs with body -> 200, accepted=true."""
+        gateway.create_watcher({"id": "wh1", "name": "gh-watcher", "type": "webhook",
+                                "source": "/api/webhooks/gh-prs"})
+        body = json.dumps({"action": "opened"}).encode()
+        handler = self._make_handler(path="/api/webhooks/gh-prs", body=body)
+        gateway.GatewayHandler.handle_webhook_incoming(handler, "gh-prs")
+        status, resp = handler._json_response
+        self.assertEqual(status, 200)
+        self.assertTrue(resp.get("accepted"))
+        self.assertEqual(resp.get("watchers"), 1)
+
+    @patch("gateway._fire_watcher")
+    @patch("gateway._save_watchers")
+    def test_webhook_post_no_match(self, _save, mock_fire):
+        """POST /api/webhooks/unknown -> 404."""
+        handler = self._make_handler(path="/api/webhooks/unknown")
+        gateway.GatewayHandler.handle_webhook_incoming(handler, "unknown")
+        status, resp = handler._json_response
+        self.assertEqual(status, 404)
+        self.assertIn("error", resp)
+
+    @patch("gateway._fire_watcher")
+    @patch("gateway._save_watchers")
+    def test_webhook_post_non_json(self, _save, mock_fire):
+        """POST with plain text body -> still routes (wrapped as raw)."""
+        gateway.create_watcher({"id": "wh2", "name": "txt-watcher", "type": "webhook",
+                                "source": "/api/webhooks/txt"})
+        handler = self._make_handler(path="/api/webhooks/txt", body=b"plain text data")
+        gateway.GatewayHandler.handle_webhook_incoming(handler, "txt")
+        status, resp = handler._json_response
+        self.assertEqual(status, 200)
+        self.assertTrue(resp.get("accepted"))
+
+
 if __name__ == "__main__":
     unittest.main()

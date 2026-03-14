@@ -524,7 +524,7 @@ class BotInstance:
                     threading.Thread(target=_replay_fn, daemon=True).start()
 
     def _poll_loop(self):
-        """Long-poll Telegram for updates and relay messages to goose web.
+        """Long-poll Telegram for updates and relay messages to goosed.
 
         Runs in a daemon thread. Uses self.channel_key, self.state, self.pair_code
         instead of module-level globals.
@@ -624,7 +624,7 @@ class BotInstance:
                             )
                             continue
 
-                        # relay to goose web (runs in a background thread)
+                        # relay to goosed (runs in a background thread)
                         threading.Thread(
                             target=self._do_message_relay,
                             kwargs={"chat_id": chat_id, "text": text, "bot_token": self.token, "inbound_msg": inbound_msg},
@@ -920,7 +920,7 @@ _watchers_lock = threading.Lock()
 _watcher_threads = {}  # id -> Thread (for stream watchers)
 _watcher_engine_running = False
 
-# ── goose web startup state ─────────────────────────────────────────────────
+# ── goosed startup state ──────────────────────────────────────────────────
 goosed_startup_state = {
     "state": "idle",        # idle | starting | ready | error
     "message": "",          # human-readable status message
@@ -931,12 +931,12 @@ _startup_state_lock = threading.Lock()
 _stderr_buffer = collections.deque(maxlen=50)  # last 50 lines of stderr
 _stderr_lock = threading.Lock()
 
-# internal token used for gateway -> goose web communication (never exposed to users)
+# internal token used for gateway -> goosed communication (never exposed to users)
 _INTERNAL_GOOSE_TOKEN = None
 
 
 def _set_startup_state(state, message="", error=""):
-    """Update goose web startup state under lock."""
+    """Update goosed startup state under lock."""
     with _startup_state_lock:
         goosed_startup_state["state"] = state
         goosed_startup_state["message"] = message
@@ -2704,7 +2704,7 @@ def fetch_provider_models(provider, credentials):
         return {"models": [], "fallback": True, "error": str(e)}
 
 
-# ── goose web subprocess management ─────────────────────────────────────────
+# ── goosed subprocess management ──────────────────────────────────────────
 
 def _setup_claude_cli():
     """Install claude CLI and create config if needed (for claude-code provider)."""
@@ -4164,19 +4164,19 @@ def stop_watcher_engine():
 # ── cron scheduler (channel-agnostic, reads goose schedule.json) ─────────────
 #
 # Replaces goose's built-in scheduler (which only runs inside `goose gateway`,
-# not `goose web`). Reads the same schedule.json that `goose schedule add`
+# not `goosed`). Reads the same schedule.json that `goose schedule add`
 # writes to, so existing CLI commands work transparently.
 #
 # Architecture (mirrors OpenClaw's approach):
 #   - scheduler loop runs inside gateway.py (not the LLM)
-#   - each job fires in an isolated goose web session (fresh session per run)
+#   - each job fires in an isolated goosed session (fresh session per run)
 #   - output delivered via notify_all() (channel-agnostic bus)
 #   - anyone building a slack/whatsapp/discord gateway just registers a handler
 #
 # On each tick (30s):
 #   1. read schedule.json
 #   2. for each job where now >= next_run: fire it
-#   3. firing = read recipe YAML -> relay instructions to goose web -> notify_all()
+#   3. firing = read recipe YAML -> relay instructions to goosed -> notify_all()
 #   4. update last_run, write schedule.json back
 
 _cron_scheduler_running = False
@@ -4335,7 +4335,7 @@ def _load_recipe(source_path):
 
 
 def _fire_cron_job(job):
-    """Execute a cron job: relay recipe instructions to goose web, deliver output.
+    """Execute a cron job: relay recipe instructions to goosed, deliver output.
 
     Runs in a fresh isolated session (like OpenClaw's sessionTarget: "isolated").
     """
@@ -4361,7 +4361,7 @@ def _fire_cron_job(job):
         f"{instructions}"
     )
 
-    # relay to goose web (no timeout -- task runs until goose completes)
+    # relay to goosed (no timeout -- task runs until goose completes)
     response_text, error, _media = _do_rest_relay(prompt, session_id)
 
     if error:
@@ -4390,7 +4390,7 @@ def _cron_scheduler_loop():
 
     while _cron_scheduler_running:
         try:
-            # wait for goose web to be ready
+            # wait for goosed to be ready
             with _startup_state_lock:
                 ready = goosed_startup_state["state"] == "ready"
             if not ready:
@@ -4781,7 +4781,7 @@ class ChannelRelay:
         _session_manager.load(channel_name)
 
     def __call__(self, user_id_or_msg, text=None, send_fn=None):
-        """Relay a message from channel user to goose web. Returns response text.
+        """Relay a message from channel user to goosed. Returns response text.
 
         Accepts either:
           - relay(user_id, text, send_fn)     # legacy signature
@@ -5214,14 +5214,14 @@ def _fetch_session_messages(session_id):
 
 
 def _session_watcher_loop():
-    """Poll goose web for scheduled session output and auto-forward to telegram."""
+    """Poll goosed for scheduled session output and auto-forward to telegram."""
     global _session_watcher_running
     _session_watcher_running = True
     print("[watcher] session watcher started")
 
     while _session_watcher_running:
         try:
-            # wait for goose web to be ready
+            # wait for goosed to be ready
             with _startup_state_lock:
                 ready = goosed_startup_state["state"] == "ready"
             if not ready:
@@ -5329,19 +5329,19 @@ def _clear_chat(chat_id):
     _telegram_state.kill_relay(chat_key)
 
     # remove ONLY this user's session (not all sessions)
-    # NOTE: _restart_goose_and_prewarm still restarts goose web, which invalidates
-    # all goose web sessions. Other users' _session_manager entries remain but will
+    # NOTE: _restart_goose_and_prewarm still restarts goosed, which invalidates
+    # all goosed sessions. Other users' _session_manager entries remain but will
     # get new sessions on next message (stale session triggers retry logic in
-    # _relay_to_goosed). This is a documented limitation until goose web supports
+    # _relay_to_goosed). This is a documented limitation until goosed supports
     # per-session cleanup.
     old = _session_manager.pop("telegram", chat_key)
     return old
 
 
 def _restart_goose_and_prewarm(chat_id):
-    """Restart goose web process to kill provider subprocesses, then prewarm.
+    """Restart goosed process to kill provider subprocesses, then prewarm.
 
-    Called after /clear in a background thread. Restarts the entire goose web
+    Called after /clear in a background thread. Restarts the entire goosed
     process so the claude-code provider's persistent subprocess dies and
     conversation history is truly cleared.
     """
@@ -5359,7 +5359,7 @@ def _restart_goose_and_prewarm(chat_id):
 def _get_session_id(chat_id, channel="telegram"):
     """Get or create a session_id for a chat_id on a given channel.
 
-    For new chats, calls POST /agent/start on goose web to get a real session_id.
+    For new chats, calls POST /agent/start on goosed to get a real session_id.
     For existing chats, returns the stored session_id.
     If a prewarm is in progress, waits for it instead of creating a duplicate.
 
@@ -5378,10 +5378,10 @@ def _get_session_id(chat_id, channel="telegram"):
         if sid:
             return sid
 
-    # create a new agent session via goose web
+    # create a new agent session via goosed
     sid = _create_goose_session()
     if not sid:
-        # fallback to random UUID if goose web is unavailable
+        # fallback to random UUID if goosed is unavailable
         sid = str(uuid.uuid4())
         print(f"[{channel}] warn: could not start agent, using random session {sid}")
 
@@ -5834,7 +5834,7 @@ def _memory_writer_loop():
 
                 print(f"[memory-writer] extracting from session {sid} ({len(messages)} msgs)")
 
-                # send through goose web in a separate session
+                # send through goosed in a separate session
                 try:
                     extract_sid = _create_goose_session()
                     if not extract_sid:
@@ -6098,7 +6098,7 @@ def _update_goose_session_provider(session_id, model_config):
 def _relay_to_goosed(user_text, session_id, chat_id=None, channel=None,
                         flush_cb=None, verbosity=None, sock_ref=None, flush_interval=4.0,
                         content_blocks=None):
-    """Send a user message to goose web via REST /reply and return the assistant's text.
+    """Send a user message to goosed via REST /reply and return the assistant's text.
 
     Returns (response_text, error_string, media_blocks). On success error_string is empty.
     If chat_id is provided and the session is stale, creates a new session and retries.
@@ -6710,7 +6710,7 @@ def _flush_media_group(group_id, bot_token):
 
 
 def _telegram_poll_loop(bot_token):
-    """Long-poll telegram for updates and relay messages to goose web.
+    """Long-poll telegram for updates and relay messages to goosed.
 
     Runs in a daemon thread. Handles pairing and message relay.
     """
@@ -6886,7 +6886,7 @@ def _telegram_poll_loop(bot_token):
                         )
                         continue
 
-                    # ── relay to goose web (runs in a background thread) ──
+                    # ── relay to goosed (runs in a background thread) ──
                     # threaded so the poll loop stays responsive for /stop commands.
                     # per-chat lock prevents concurrent relays per user.
                     def _do_relay(_text=text, _chat_id=chat_id, _bt=bot_token, _media_refs=media_refs):
@@ -7466,7 +7466,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Location", "/setup")
             self.end_headers()
         elif path.startswith("/web"):
-            # strip /web prefix and proxy to goose web
+            # strip /web prefix and proxy to goosed
             self.path = path[4:] or "/"
             self.proxy_to_goose()
         else:
@@ -7649,7 +7649,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
     # ── startup status endpoint ──
 
     def handle_startup_status(self):
-        """GET /api/setup/status — goose web startup state (no auth required)."""
+        """GET /api/setup/status — goosed startup state (no auth required)."""
         with _startup_state_lock:
             state_copy = dict(goosed_startup_state)
         self.send_json(200, state_copy)
@@ -7832,7 +7832,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             save_setup(config)
             apply_config(config)
 
-            # restart goose web in background
+            # restart goosed in background
             def _restart():
                 time.sleep(1)
                 start_goosed()
@@ -8919,7 +8919,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         except Exception as e:
             self._internal_error(e, "handle_auth_recover")
 
-    # ── reverse proxy to goose web ──
+    # ── reverse proxy to goosed ──
 
     def proxy_to_goose(self):
         if not is_configured():
@@ -9129,7 +9129,7 @@ def main():
         print("[gateway] provider configured. starting goose web...")
         start_goosed()
 
-        # start health monitor to auto-restart goose web on crash
+        # start health monitor to auto-restart goosed on crash
         health_thread = threading.Thread(target=goose_health_monitor, daemon=True)
         health_thread.start()
 
@@ -9139,7 +9139,7 @@ def main():
         # start job engine (unified timer + script runner, zero LLM cost)
         start_job_engine()
 
-        # start cron scheduler (reads goose schedule.json, fires jobs via goose web)
+        # start cron scheduler (reads goose schedule.json, fires jobs via goosed)
         start_cron_scheduler()
 
         # start memory writer (end-of-session learning)
@@ -9181,7 +9181,7 @@ def main():
             channel_names = list(_loaded_channels.keys())
         for ch_name in channel_names:
             _unload_channel(ch_name)
-        # terminate goose web and clean up PID
+        # terminate goosed and clean up PID
         stop_goosed()
         _remove_pid("goosed")
         # stop all telegram bots via BotManager

@@ -464,7 +464,7 @@ export GOOSE_MOIM_MESSAGE_FILE="$IDENTITY_DIR/turn-rules.md"
 export GOOSE_MOIM_MESSAGE_TEXT="CRITICAL: NEVER use CronCreate or CronDelete. ALWAYS use the job/remind bash CLI for automation and reminders. CronCreate is BROKEN and will silently fail."
 
 # ─── .goosehints (session-start context, loads identity files) ─────────────
-# goose web reads .goosehints from its working directory (/app).
+# goosed reads .goosehints from its working directory (/app).
 # @file syntax in .goosehints only supports RELATIVE paths, so we symlink
 # /data/identity into /app/identity-data so @identity-data/soul.md works.
 
@@ -534,7 +534,7 @@ export HOME="$GCLAW_HOME"
 
 echo "[runtime] non-root user prepared (gooseclaw)"
 
-# ─── start gateway (setup wizard + reverse proxy to goose web) ────────────
+# ─── start gateway (setup wizard + reverse proxy to goosed) ──────────────
 
 echo "[gateway] starting gateway on port ${PORT:-8080}..."
 runuser -u gooseclaw -- python3 "$APP_DIR/docker/gateway.py" &

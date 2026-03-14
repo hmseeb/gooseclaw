@@ -9,7 +9,7 @@ See: .planning/PROJECT.md (updated 2026-03-13)
 
 ## Current Position
 
-Phase: 16 of 16 (complete)
+Phase: 16 of 17 (complete)
 Plan: 3 of 3 (done)
 Status: Phase 16 complete. Watcher engine fully integrated with CRUD API, webhook receiver, engine loop, and startup wiring. 50 total watcher tests.
 Last activity: 2026-03-14 - Completed 16-03: Gateway API Integration + Engine Loop
@@ -145,6 +145,7 @@ Recent decisions affecting current work:
 ### Roadmap Evolution
 
 - Phase 16 added: Watcher Engine — Real-time event subscriptions with two-tier architecture (passthrough + smart/LLM)
+- Phase 17 added: Vector Knowledge Base — Semantic retrieval MCP extension for context-aware doc loading. ~60-75% token reduction per message.
 
 ### Blockers/Concerns
 

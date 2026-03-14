@@ -11,13 +11,13 @@ See: .planning/PROJECT.md (updated 2026-03-13)
 
 Phase: 17 of 17
 Plan: 3 of 3
-Status: Plan 17-02 complete. FastMCP server with 4 knowledge tools, 17 tests passing.
-Last activity: 2026-03-15 - Completed 17-02: MCP Server Tools
+Status: Phase 17 complete. Full vector knowledge base pipeline deployed (3/3 plans).
+Last activity: 2026-03-15 - Completed 17-03: Deployment Pipeline Integration
 
 Progress v2.0: [==========] 100% (10/10 phases complete, shipped)
 Progress v3.0: [==========] 100% (5/5 phases complete)
 Progress v4.0 (watchers): [==========] 100% (3/3 plans complete)
-Progress v5.0 (knowledge): [======----] 66% (2/3 plans complete)
+Progress v5.0 (knowledge): [==========] 100% (3/3 plans complete)
 
 ## Performance Metrics
 
@@ -60,6 +60,7 @@ Progress v5.0 (knowledge): [======----] 66% (2/3 plans complete)
 | Phase 16 P03 | 7min | 2 tasks | 2 files |
 | Phase 17 P01 | 3min | 1 tasks | 4 files |
 | Phase 17 P02 | 4min | 1 tasks | 3 files |
+| Phase 17 P03 | 3min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -134,6 +135,8 @@ Recent decisions affecting current work:
 - [Phase 17]: Two-namespace pattern: system (wiped on deploy) vs runtime (never wiped). Chunk metadata: type/source/section/namespace/refs/key. Hierarchical dot-notation IDs.
 - [Phase 17]: MCP tool functions are regular Python functions testable without running MCP server (monkey-patch module-level collections)
 - [Phase 17]: Search merges both collections, sorts by score descending, caps at limit. Delete checks system first, refuses before checking runtime.
+- [Phase 17]: Memory migration guarded by .memory_migrated flag file for one-time execution. Boot-time indexer runs before gateway starts.
+- [Phase 17]: .goosehints directs to knowledge_search instead of direct file loading (system.md, memory.md, onboarding.md removed)
 
 ### Pending Todos
 
@@ -177,5 +180,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-03-15
-Stopped at: Completed 17-02-PLAN.md
+Stopped at: Completed 17-03-PLAN.md (Phase 17 complete)
 Resume file: None

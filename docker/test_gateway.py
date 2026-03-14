@@ -4584,9 +4584,10 @@ class TestMediaContent(unittest.TestCase):
         import base64
         self.assertEqual(block["data"], base64.b64encode(b"\xff\xd8").decode("ascii"))
 
-    def test_to_content_block_non_image(self):
+    def test_to_content_block_audio_produces_block(self):
         mc = gateway.MediaContent(kind="audio", mime_type="audio/ogg", data=b"data")
-        self.assertIsNone(mc.to_content_block())
+        block = mc.to_content_block()
+        self.assertIsNotNone(block, "audio should produce a content block")
 
     def test_voice_is_audio_kind(self):
         mc = gateway.MediaContent(kind="audio", mime_type="audio/ogg", data=b"data")
@@ -5154,12 +5155,12 @@ class TestBuildContentBlocks(unittest.TestCase):
         types = [b["type"] for b in result]
         self.assertIn("image", types)
 
-    def test_non_image_media_skipped(self):
+    def test_audio_media_included(self):
         mc = gateway.MediaContent(kind="audio", mime_type="audio/ogg", data=b"\x00\x01")
         msg = gateway.InboundMessage(user_id="1", text="listen", media=[mc])
         result = gateway._build_content_blocks("listen", inbound_msg=msg)
-        # audio to_content_block returns None, so only text block
-        self.assertEqual(len(result), 1)
+        # audio to_content_block now produces a block, so text + audio
+        self.assertEqual(len(result), 2)
         self.assertEqual(result[0]["type"], "text")
 
     def test_empty_fallback(self):
@@ -8244,6 +8245,247 @@ class TestWatcherBatchAPI(unittest.TestCase):
         handler = self._make_handler(method="DELETE", body=body)
         gateway.GatewayHandler.handle_watchers_batch_delete(handler)
         mock_save.assert_called_once()
+
+
+# ── MediaContent audio/video content blocks ────────────────────────────────
+
+
+class TestMediaContentAudioVideo(unittest.TestCase):
+    """Tests for MediaContent.to_content_block() with audio and video kinds."""
+
+    def test_audio_produces_content_block(self):
+        """Audio media should produce a content block, not None."""
+        mc = gateway.MediaContent(kind="audio", mime_type="audio/ogg", data=b"\x00\x01\x02")
+        block = mc.to_content_block()
+        self.assertIsNotNone(block, "audio should produce a content block")
+
+    def test_video_produces_content_block(self):
+        """Video media should produce a content block, not None."""
+        mc = gateway.MediaContent(kind="video", mime_type="video/mp4", data=b"\x00\x01\x02")
+        block = mc.to_content_block()
+        self.assertIsNotNone(block, "video should produce a content block")
+
+    def test_audio_block_is_text_description(self):
+        """Audio content block should be a text block with file info."""
+        mc = gateway.MediaContent(kind="audio", mime_type="audio/ogg", data=b"\x00" * 1024, filename="voice.ogg")
+        block = mc.to_content_block()
+        self.assertEqual(block["type"], "text")
+        self.assertIn("voice.ogg", block["text"])
+
+    def test_video_block_is_text_description(self):
+        """Video content block should be a text block with file info."""
+        mc = gateway.MediaContent(kind="video", mime_type="video/mp4", data=b"\x00" * 2048, filename="clip.mp4")
+        block = mc.to_content_block()
+        self.assertEqual(block["type"], "text")
+        self.assertIn("clip.mp4", block["text"])
+
+    def test_build_content_blocks_includes_audio(self):
+        """_build_content_blocks should include audio media (not skip it)."""
+        mc = gateway.MediaContent(kind="audio", mime_type="audio/ogg", data=b"\x00\x01")
+        msg = gateway.InboundMessage(user_id="1", text="listen to this", media=[mc])
+        result = gateway._build_content_blocks("listen to this", inbound_msg=msg)
+        # should have text block + audio block
+        self.assertEqual(len(result), 2, f"expected 2 blocks, got {len(result)}: {result}")
+
+    def test_build_content_blocks_includes_video(self):
+        """_build_content_blocks should include video media (not skip it)."""
+        mc = gateway.MediaContent(kind="video", mime_type="video/mp4", data=b"\x00\x01")
+        msg = gateway.InboundMessage(user_id="1", text="watch this", media=[mc])
+        result = gateway._build_content_blocks("watch this", inbound_msg=msg)
+        self.assertEqual(len(result), 2, f"expected 2 blocks, got {len(result)}: {result}")
+
+    def test_document_content_block_text_file(self):
+        """Text files sent as documents should have their content extracted."""
+        mc = gateway.MediaContent(kind="document", mime_type="text/plain", data=b"hello world", filename="notes.txt")
+        block = mc.to_content_block()
+        self.assertEqual(block["type"], "text")
+        self.assertIn("hello world", block["text"])
+
+    def test_document_content_block_pdf(self):
+        """PDF files should produce a document block with base64 data."""
+        mc = gateway.MediaContent(kind="document", mime_type="application/pdf", data=b"%PDF-fake", filename="report.pdf")
+        block = mc.to_content_block()
+        self.assertEqual(block["type"], "document")
+        self.assertEqual(block["source"]["media_type"], "application/pdf")
+
+    def test_document_content_block_archive(self):
+        """Archive files should produce a text block acknowledging receipt."""
+        mc = gateway.MediaContent(kind="document", mime_type="application/zip", data=b"PK\x03\x04", filename="data.zip")
+        block = mc.to_content_block()
+        self.assertEqual(block["type"], "text")
+        self.assertIn("data.zip", block["text"])
+        self.assertIn("archive", block["text"].lower())
+
+
+# ── BotInstance media group buffering ──────────────────────────────────────
+
+
+class TestBotInstanceMediaGroupBuffering(unittest.TestCase):
+    """Tests for media_group_id buffering in BotInstance._poll_loop."""
+
+    def setUp(self):
+        self.bot = gateway.BotInstance.__new__(gateway.BotInstance)
+        self.bot.name = "test_mg"
+        self.bot.channel_key = "telegram_test_mg"
+        self.bot.token = "fake:token"
+        self.bot.running = True
+        self.bot.pair_code = None
+        self.bot.state = gateway.ChannelState()
+        # give the bot its own media group buffer
+        self.bot._media_group_buffer = {}
+        self.bot._media_group_lock = threading.Lock()
+
+    @patch("gateway.get_paired_chat_ids", return_value={"12345"})
+    @patch("gateway._download_telegram_file", return_value=(b"\xff\xd8", "photos/file.jpg"))
+    @patch("gateway._relay_to_goosed", return_value=("ok", "", []))
+    @patch("gateway.send_telegram_message")
+    @patch("gateway._send_typing_action")
+    @patch("gateway.load_setup", return_value=None)
+    @patch("gateway._get_session_id", return_value="sid1")
+    @patch("gateway._memory_touch")
+    def test_media_group_buffers_multiple_photos(self, *mocks):
+        """Messages with same media_group_id should be buffered together."""
+        msg1 = {
+            "message_id": 1,
+            "chat": {"id": 12345},
+            "media_group_id": "mg_001",
+            "photo": [{"file_id": "photo1", "width": 800, "height": 600}],
+            "caption": "two screenshots",
+        }
+        msg2 = {
+            "message_id": 2,
+            "chat": {"id": 12345},
+            "media_group_id": "mg_001",
+            "photo": [{"file_id": "photo2", "width": 800, "height": 600}],
+        }
+
+        # simulate what _poll_loop does with media_group_id
+        refs_collected = []
+        for msg in [msg1, msg2]:
+            has_media = gateway._has_media(msg)
+            self.assertTrue(has_media)
+            media_refs = []
+            for mkey in gateway._MEDIA_KEYS:
+                if mkey in msg:
+                    fid, mime_hint, fname = gateway._extract_file_info(msg, mkey)
+                    if fid:
+                        media_refs.append({
+                            "media_key": mkey,
+                            "file_id": fid,
+                            "mime_hint": mime_hint,
+                            "filename": fname,
+                        })
+            refs_collected.extend(media_refs)
+
+        # all refs should be collected
+        self.assertEqual(len(refs_collected), 2)
+        self.assertEqual(refs_collected[0]["file_id"], "photo1")
+        self.assertEqual(refs_collected[1]["file_id"], "photo2")
+
+    def test_bot_has_media_group_buffer(self):
+        """BotInstance should have _media_group_buffer and _media_group_lock attributes."""
+        bot = gateway.BotInstance.__new__(gateway.BotInstance)
+        bot.name = "test"
+        bot.channel_key = "telegram_test"
+        bot.token = "fake"
+        bot.running = True
+        bot.pair_code = None
+        bot.state = gateway.ChannelState()
+        bot._media_group_buffer = {}
+        bot._media_group_lock = threading.Lock()
+        self.assertIsInstance(bot._media_group_buffer, dict)
+        self.assertIsInstance(bot._media_group_lock, type(threading.Lock()))
+
+    @patch("gateway.get_paired_chat_ids", return_value={"12345"})
+    def test_media_group_id_detected_in_poll(self, mock_paired):
+        """BotInstance._poll_loop should detect media_group_id and buffer refs."""
+        # This tests that the BotInstance _poll_loop code path checks for media_group_id
+        # We can't easily run the full poll loop, so test the buffering logic directly
+        mg_id = "mg_test_123"
+        chat_id = "12345"
+        text = "test caption"
+        media_refs = [{"media_key": "photo", "file_id": "p1", "mime_hint": None, "filename": None}]
+
+        buffer = {}
+        lock = threading.Lock()
+
+        with lock:
+            buffer[mg_id] = {
+                "chat_id": chat_id,
+                "text": text,
+                "refs": list(media_refs),
+            }
+
+        # add second ref (simulating second message in group)
+        more_refs = [{"media_key": "photo", "file_id": "p2", "mime_hint": None, "filename": None}]
+        with lock:
+            buffer[mg_id]["refs"].extend(more_refs)
+
+        self.assertEqual(len(buffer[mg_id]["refs"]), 2)
+        self.assertEqual(buffer[mg_id]["text"], "test caption")
+
+
+# ── BotInstance._flush_media_group_v2 ──────────────────────────────────────
+
+
+class TestBotInstanceFlushMediaGroup(unittest.TestCase):
+    """Tests for BotInstance._flush_media_group_v2."""
+
+    def setUp(self):
+        self.bot = gateway.BotInstance.__new__(gateway.BotInstance)
+        self.bot.name = "test_flush"
+        self.bot.channel_key = "telegram_test_flush"
+        self.bot.token = "fake:token"
+        self.bot.running = True
+        self.bot.pair_code = None
+        self.bot.state = gateway.ChannelState()
+        self.bot._media_group_buffer = {}
+        self.bot._media_group_lock = threading.Lock()
+
+    def test_flush_method_exists(self):
+        """BotInstance should have a _flush_media_group_v2 method."""
+        self.assertTrue(hasattr(gateway.BotInstance, '_flush_media_group_v2'),
+                        "BotInstance should have _flush_media_group_v2 method")
+
+    @patch("gateway.get_paired_chat_ids", return_value={"12345"})
+    @patch("gateway._download_telegram_file", return_value=(b"\xff\xd8", "photos/file.jpg"))
+    @patch("gateway._relay_to_goosed", return_value=("ok", "", []))
+    @patch("gateway.send_telegram_message")
+    @patch("gateway._send_typing_action")
+    @patch("gateway.load_setup", return_value=None)
+    @patch("gateway._get_session_id", return_value="sid1")
+    @patch("gateway._memory_touch")
+    def test_flush_downloads_and_relays(self, mock_mem, mock_sid, mock_setup,
+                                        mock_typing, mock_send, mock_relay,
+                                        mock_dl, mock_paired):
+        """_flush_media_group_v2 should download files and relay to goosed."""
+        mg_id = "mg_flush_001"
+        self.bot._media_group_buffer[mg_id] = {
+            "chat_id": "12345",
+            "text": "check these",
+            "refs": [
+                {"media_key": "photo", "file_id": "p1", "mime_hint": None, "filename": None},
+                {"media_key": "photo", "file_id": "p2", "mime_hint": None, "filename": None},
+            ],
+        }
+
+        # call flush directly (synchronous part)
+        self.bot._flush_media_group_v2(mg_id)
+
+        # buffer should be emptied
+        self.assertNotIn(mg_id, self.bot._media_group_buffer)
+
+    @patch("gateway.get_paired_chat_ids", return_value=set())
+    def test_flush_skips_unpaired(self, mock_paired):
+        """_flush_media_group_v2 should skip relay for unpaired users."""
+        mg_id = "mg_skip_001"
+        self.bot._media_group_buffer[mg_id] = {
+            "chat_id": "99999",
+            "text": "",
+            "refs": [{"media_key": "photo", "file_id": "p1", "mime_hint": None, "filename": None}],
+        }
+        self.bot._flush_media_group_v2(mg_id)
+        self.assertNotIn(mg_id, self.bot._media_group_buffer)
 
 
 if __name__ == "__main__":

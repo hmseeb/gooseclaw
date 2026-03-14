@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
 """
-gooseclaw gateway — setup wizard + notification bus + reverse proxy to goose web.
+gooseclaw gateway — setup wizard + notification bus + reverse proxy to goosed.
 
-Runs on $PORT. Serves /setup directly, proxies everything else to goose web
-on an internal port. Manages the goose web subprocess lifecycle.
+Runs on $PORT. Serves /setup directly, proxies everything else to goosed
+on an internal port. Manages the goosed subprocess lifecycle.
 
 Architecture:
   - notification bus: channel-agnostic delivery. telegram/slack/whatsapp register
     handlers via register_notification_handler(). scheduler, job engine, and session
     watcher all deliver through notify_all() without knowing which channels are active.
-  - cron scheduler: reads goose schedule.json, fires jobs in isolated goose web
+  - cron scheduler: reads goose schedule.json, fires jobs in isolated goosed
     sessions, delivers output via notify_all(). replaces goose's built-in scheduler
-    which only runs inside `goose gateway` (not `goose web`).
+    which only runs inside `goose gateway` (not `goosed`).
   - job engine: unified timer + script runner. 10s tick, zero LLM cost.
-  - session watcher: polls goose web for scheduled session output, forwards via notify.
+  - session watcher: polls goosed for scheduled session output, forwards via notify.
 
 API:
   GET  /api/health           -> health check
   GET  /api/setup/config     -> current provider config (masked)
-  GET  /api/setup/status     -> goose web startup state (idle/starting/ready/error)
+  GET  /api/setup/status     -> goosed startup state (idle/starting/ready/error)
   POST /api/setup/validate   -> validate provider credentials
   POST /api/setup/save       -> save provider config and restart
   POST /api/notify           -> send message to all registered notification channels
@@ -381,7 +381,7 @@ class BotInstance:
         return False
 
     def _do_message_relay(self, chat_id, text, bot_token, inbound_msg=None):
-        """Relay a user message to goose web. Uses self.state and self.channel_key.
+        """Relay a user message to goosed. Uses self.state and self.channel_key.
 
         Extracted from the poll loop to make the relay path unit-testable.
         inbound_msg: optional InboundMessage envelope (v2 contract, Phase 12+ uses media).
@@ -444,7 +444,7 @@ class BotInstance:
 
             try:
                 if _tg_verbosity == "quiet":
-                    response_text, error, media = _relay_to_goose_web(
+                    response_text, error, media = _relay_to_goosed(
                         text, session_id, chat_id=chat_id, channel=self.channel_key,
                         sock_ref=_sock_ref, content_blocks=content_blocks,
                     )
@@ -479,7 +479,7 @@ class BotInstance:
                         else:
                             _edit_telegram_message(bot_token, chat_id, _st["msg_id"], txt)
 
-                    response_text, error, media = _relay_to_goose_web(
+                    response_text, error, media = _relay_to_goosed(
                         text, session_id, chat_id=chat_id, channel=self.channel_key,
                         flush_cb=_tg_flush_edit, verbosity=_tg_verbosity,
                         sock_ref=_sock_ref, flush_interval=2.0,
@@ -688,7 +688,7 @@ class BotInstance:
                                         _typing_thread.start()
                                         try:
                                             with self.state.get_user_lock(c):
-                                                txt, err, *_ = _relay_to_goose_web(
+                                                txt, err, *_ = _relay_to_goosed(
                                                     msg, s, chat_id=str(c), channel=ck,
                                                 )
                                                 if err:
@@ -817,7 +817,7 @@ def _goosed_conn(timeout=10):
         "127.0.0.1", GOOSE_WEB_PORT, timeout=timeout, context=_GOOSED_SSL_CTX
     )
 
-goose_process = None
+goosed_process = None
 goose_lock = threading.Lock()
 telegram_process = None  # kept for backwards compat; no longer a subprocess
 telegram_lock = threading.Lock()
@@ -921,7 +921,7 @@ _watcher_threads = {}  # id -> Thread (for stream watchers)
 _watcher_engine_running = False
 
 # ── goose web startup state ─────────────────────────────────────────────────
-goose_startup_state = {
+goosed_startup_state = {
     "state": "idle",        # idle | starting | ready | error
     "message": "",          # human-readable status message
     "error": "",            # stderr output when state=error
@@ -938,10 +938,10 @@ _INTERNAL_GOOSE_TOKEN = None
 def _set_startup_state(state, message="", error=""):
     """Update goose web startup state under lock."""
     with _startup_state_lock:
-        goose_startup_state["state"] = state
-        goose_startup_state["message"] = message
-        goose_startup_state["error"] = error
-        goose_startup_state["timestamp"] = time.time()
+        goosed_startup_state["state"] = state
+        goosed_startup_state["message"] = message
+        goosed_startup_state["error"] = error
+        goosed_startup_state["timestamp"] = time.time()
 
 
 def _append_stderr(line):
@@ -3875,7 +3875,7 @@ def _process_smart(watcher, data):
         watcher["_session_id"] = session_id
 
     # Relay to LLM
-    response, error, _media = _relay_to_goose_web(
+    response, error, _media = _relay_to_goosed(
         user_text, session_id, channel=watcher.get("channel"))
 
     # Handle stale session: retry once with fresh session
@@ -3885,7 +3885,7 @@ def _process_smart(watcher, data):
         if not session_id:
             return "Error: could not create goose session"
         watcher["_session_id"] = session_id
-        response, error, _media = _relay_to_goose_web(
+        response, error, _media = _relay_to_goosed(
             user_text, session_id, channel=watcher.get("channel"))
 
     if error:
@@ -4392,7 +4392,7 @@ def _cron_scheduler_loop():
         try:
             # wait for goose web to be ready
             with _startup_state_lock:
-                ready = goose_startup_state["state"] == "ready"
+                ready = goosed_startup_state["state"] == "ready"
             if not ready:
                 time.sleep(10)
                 continue
@@ -4868,14 +4868,14 @@ class ChannelRelay:
                     _cb = _build_content_blocks(text, user_id_or_msg)
 
                 if use_streaming:
-                    response_text, error, _media = _relay_to_goose_web(
+                    response_text, error, _media = _relay_to_goosed(
                         text, session_id, chat_id=user_key, channel=self._name,
                         flush_cb=send_fn, verbosity=verbosity,
                         sock_ref=sock_ref, flush_interval=2.0,
                         content_blocks=_cb,
                     )
                 else:
-                    response_text, error, _media = _relay_to_goose_web(
+                    response_text, error, _media = _relay_to_goosed(
                         text, session_id, chat_id=user_key, channel=self._name,
                         sock_ref=sock_ref, content_blocks=_cb,
                     )
@@ -4888,14 +4888,14 @@ class ChannelRelay:
                     session_id = f"{self._name}_{user_key}_{time.strftime('%Y%m%d_%H%M%S')}"
                     _session_manager.set(self._name, user_key, session_id)
                     if use_streaming:
-                        response_text, error, _media = _relay_to_goose_web(
+                        response_text, error, _media = _relay_to_goosed(
                             text, session_id, chat_id=user_key, channel=self._name,
                             flush_cb=send_fn, verbosity=verbosity,
                             sock_ref=sock_ref, flush_interval=2.0,
                             content_blocks=_cb,
                         )
                     else:
-                        response_text, error, _media = _relay_to_goose_web(
+                        response_text, error, _media = _relay_to_goosed(
                             text, session_id, chat_id=user_key, channel=self._name,
                             sock_ref=sock_ref, content_blocks=_cb,
                         )
@@ -5223,7 +5223,7 @@ def _session_watcher_loop():
         try:
             # wait for goose web to be ready
             with _startup_state_lock:
-                ready = goose_startup_state["state"] == "ready"
+                ready = goosed_startup_state["state"] == "ready"
             if not ready:
                 time.sleep(10)
                 continue
@@ -5332,7 +5332,7 @@ def _clear_chat(chat_id):
     # NOTE: _restart_goose_and_prewarm still restarts goose web, which invalidates
     # all goose web sessions. Other users' _session_manager entries remain but will
     # get new sessions on next message (stale session triggers retry logic in
-    # _relay_to_goose_web). This is a documented limitation until goose web supports
+    # _relay_to_goosed). This is a documented limitation until goose web supports
     # per-session cleanup.
     old = _session_manager.pop("telegram", chat_key)
     return old
@@ -5347,8 +5347,8 @@ def _restart_goose_and_prewarm(chat_id):
     """
     chat_key = str(chat_id)
     print(f"[clear] restarting goose web to clear provider state...")
-    stop_goose_web()
-    ok = start_goose_web()
+    stop_goosed()
+    ok = start_goosed()
     if not ok:
         print(f"[clear] goose web restart failed! next message will trigger health monitor restart")
         return
@@ -5507,7 +5507,7 @@ def _handle_cmd_compact(ctx):
     if not session_id:
         ctx["send_fn"]("No active session. Send a message first.")
         return
-    response_text, error, *_ = _relay_to_goose_web(
+    response_text, error, *_ = _relay_to_goosed(
         "Please summarize our conversation so far into key points, "
         "then we can continue from this summary. Be concise.",
         session_id, chat_id=chat_id, channel=channel
@@ -6095,7 +6095,7 @@ def _update_goose_session_provider(session_id, model_config):
         print(f"[routing] failed to update session provider: {e}")
 
 
-def _relay_to_goose_web(user_text, session_id, chat_id=None, channel=None,
+def _relay_to_goosed(user_text, session_id, chat_id=None, channel=None,
                         flush_cb=None, verbosity=None, sock_ref=None, flush_interval=4.0,
                         content_blocks=None):
     """Send a user message to goose web via REST /reply and return the assistant's text.
@@ -6155,7 +6155,7 @@ def _diagnose_empty_response():
                 return f"Goose error: {line.strip()}"
 
     # 2. check if goose process is alive
-    if goose_process and goose_process.poll() is not None:
+    if goosed_process and goosed_process.poll() is not None:
         return "Goose crashed. Restarting..."
 
     # 3. test the provider directly (claude-code specific)
@@ -6677,7 +6677,7 @@ def _flush_media_group(group_id, bot_token):
             typing_thread.start()
 
             try:
-                response_text, error, _resp_media = _relay_to_goose_web(
+                response_text, error, _resp_media = _relay_to_goosed(
                     _text, session_id, chat_id=_chat_id, channel="telegram",
                     content_blocks=_leg_cb, sock_ref=_sock_ref,
                 )
@@ -6829,7 +6829,7 @@ def _telegram_poll_loop(bot_token):
                                 _inbound = InboundMessage(user_id=_chat_id, text=_text, channel="telegram")
                                 _inbound.media = downloaded
                                 _leg_cb = _build_content_blocks(_text, _inbound) if _inbound.has_media else None
-                                response_text, error, _resp_media = _relay_to_goose_web(
+                                response_text, error, _resp_media = _relay_to_goosed(
                                     _text, session_id, chat_id=_chat_id, channel="telegram",
                                     content_blocks=_leg_cb,
                                 )
@@ -6949,7 +6949,7 @@ def _telegram_poll_loop(bot_token):
 
                             try:
                                 if _tg_verbosity == "quiet":
-                                    response_text, error, _leg_media = _relay_to_goose_web(
+                                    response_text, error, _leg_media = _relay_to_goosed(
                                         _text, session_id, chat_id=_chat_id, channel="telegram",
                                         sock_ref=_sock_ref, content_blocks=_leg_content_blocks,
                                     )
@@ -6984,7 +6984,7 @@ def _telegram_poll_loop(bot_token):
                                         else:
                                             _edit_telegram_message(_bt, _chat_id, _st["msg_id"], txt)
 
-                                    response_text, error, _leg_media = _relay_to_goose_web(
+                                    response_text, error, _leg_media = _relay_to_goosed(
                                         _text, session_id, chat_id=_chat_id, channel="telegram",
                                         flush_cb=_tg_flush_edit, verbosity=_tg_verbosity,
                                         sock_ref=_sock_ref, flush_interval=2.0,
@@ -7094,7 +7094,7 @@ def _telegram_poll_loop(bot_token):
                                     _typing_thread.start()
                                     try:
                                         with _get_chat_lock(c):
-                                            txt, err, *_ = _relay_to_goose_web(
+                                            txt, err, *_ = _relay_to_goosed(
                                                 msg, s, chat_id=str(c), channel="telegram",
                                             )
                                             if err:
@@ -7189,17 +7189,17 @@ def _configure_goosed_provider():
         print(f"[gateway] WARN: failed to configure goosed provider: {e}")
 
 
-def start_goose_web():
-    global goose_process, _INTERNAL_GOOSE_TOKEN
+def start_goosed():
+    global goosed_process, _INTERNAL_GOOSE_TOKEN
     _check_stale_pid("goosed")
     _set_startup_state("starting", "Starting goosed...")
     with goose_lock:
-        if goose_process and goose_process.poll() is None:
-            goose_process.terminate()
+        if goosed_process and goosed_process.poll() is None:
+            goosed_process.terminate()
             try:
-                goose_process.wait(timeout=10)
+                goosed_process.wait(timeout=10)
             except subprocess.TimeoutExpired:
-                goose_process.kill()
+                goosed_process.kill()
 
         # Generate a random internal token for goosed communication.
         # This token is never exposed to users -- gateway handles all user auth.
@@ -7229,19 +7229,19 @@ def start_goose_web():
         print(f"[gateway] env: GOOSE_PROVIDER={env.get('GOOSE_PROVIDER', 'NOT SET')} "
               f"GOOSE_MODEL={env.get('GOOSE_MODEL', 'NOT SET')} "
               f"GOOSE_MODE={env.get('GOOSE_MODE', 'NOT SET')}")
-        goose_process = subprocess.Popen(cmd, stdout=sys.stdout, stderr=subprocess.PIPE, env=env)
-        _write_pid("goosed", goose_process.pid)
+        goosed_process = subprocess.Popen(cmd, stdout=sys.stdout, stderr=subprocess.PIPE, env=env)
+        _write_pid("goosed", goosed_process.pid)
 
         # Start daemon thread to read stderr line-by-line, forward to sys.stderr,
         # and buffer lines for the startup status API.
-        threading.Thread(target=_stderr_reader, args=(goose_process,), daemon=True).start()
+        threading.Thread(target=_stderr_reader, args=(goosed_process,), daemon=True).start()
 
         # wait for it to listen
         for i in range(30):
             time.sleep(1)
             # check if process exited prematurely
-            if goose_process.poll() is not None:
-                exit_code = goose_process.returncode
+            if goosed_process.poll() is not None:
+                exit_code = goosed_process.returncode
                 _set_startup_state("error", f"goosed exited with code {exit_code}", error=_get_recent_stderr(20))
                 print(f"[gateway] goosed exited during startup with code {exit_code}")
                 return False
@@ -7264,16 +7264,16 @@ def start_goose_web():
         return False
 
 
-def stop_goose_web():
-    global goose_process
+def stop_goosed():
+    global goosed_process
     with goose_lock:
-        if goose_process and goose_process.poll() is None:
-            goose_process.terminate()
+        if goosed_process and goosed_process.poll() is None:
+            goosed_process.terminate()
             try:
-                goose_process.wait(timeout=5)
+                goosed_process.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                goose_process.kill()
-        goose_process = None
+                goosed_process.kill()
+        goosed_process = None
     _remove_pid("goosed")
 
 
@@ -7289,7 +7289,7 @@ def goose_health_monitor():
             continue
 
         with goose_lock:
-            proc = goose_process
+            proc = goosed_process
         if proc is None:
             continue
 
@@ -7304,7 +7304,7 @@ def goose_health_monitor():
             _remove_pid("goosed")
             time.sleep(wait_time)
             try:
-                start_goose_web()
+                start_goosed()
                 print(f"[health] goosed restarted after failure #{consecutive_failures}")
             except Exception as e:
                 print(f"[health] restart failed: {e}")
@@ -7605,7 +7605,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         """GET /api/health — deep health check: liveness + goosed subprocess status."""
         status = {"service": "gooseclaw", "configured": is_configured()}
 
-        if goose_process and goose_process.poll() is None:
+        if goosed_process and goosed_process.poll() is None:
             # process is alive — probe it
             status["goosed"] = self._ping_goosed()
         else:
@@ -7624,7 +7624,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
 
     def handle_health_ready(self):
         """GET /api/health/ready — readiness probe: 200 only when goosed is up and responding."""
-        if goose_process and goose_process.poll() is None:
+        if goosed_process and goosed_process.poll() is None:
             result = self._ping_goosed()
             if result == "healthy":
                 self.send_json(200, {"ready": True, "goosed": "healthy"})
@@ -7651,7 +7651,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
     def handle_startup_status(self):
         """GET /api/setup/status — goose web startup state (no auth required)."""
         with _startup_state_lock:
-            state_copy = dict(goose_startup_state)
+            state_copy = dict(goosed_startup_state)
         self.send_json(200, state_copy)
 
     # ── setup endpoints ──
@@ -7835,7 +7835,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             # restart goose web in background
             def _restart():
                 time.sleep(1)
-                start_goose_web()
+                start_goosed()
                 start_session_watcher()
                 start_job_engine()
                 start_cron_scheduler()
@@ -7902,7 +7902,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         apply_config(config)
         def _restart():
             time.sleep(1)
-            start_goose_web()
+            start_goosed()
             start_session_watcher()
             start_job_engine()
             start_cron_scheduler()
@@ -8929,10 +8929,10 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             return
 
         with goose_lock:
-            gproc = goose_process
+            gproc = goosed_process
         if gproc is None or gproc.poll() is not None:
             with _startup_state_lock:
-                state_copy = dict(goose_startup_state)
+                state_copy = dict(goosed_startup_state)
             stderr_tail = _get_recent_stderr(10)
             error_detail = {
                 "status": state_copy["state"],
@@ -9040,7 +9040,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         except OSError:
             try:
                 with _startup_state_lock:
-                    state_copy = dict(goose_startup_state)
+                    state_copy = dict(goosed_startup_state)
                 stderr_tail = _get_recent_stderr(10)
                 error_detail = {
                     "status": state_copy["state"],
@@ -9127,7 +9127,7 @@ def main():
         if setup:
             apply_config(setup)
         print("[gateway] provider configured. starting goose web...")
-        start_goose_web()
+        start_goosed()
 
         # start health monitor to auto-restart goose web on crash
         health_thread = threading.Thread(target=goose_health_monitor, daemon=True)
@@ -9182,7 +9182,7 @@ def main():
         for ch_name in channel_names:
             _unload_channel(ch_name)
         # terminate goose web and clean up PID
-        stop_goose_web()
+        stop_goosed()
         _remove_pid("goosed")
         # stop all telegram bots via BotManager
         _bot_manager.stop_all()

@@ -1661,7 +1661,7 @@ class TestGeneralizedCommandHandlers(unittest.TestCase):
         self.assertIsNone(gateway._telegram_state.pop_active_relay("user4"))
         self.assertIsNone(gateway._session_manager.get("telegram", "user4"))
 
-    @patch("gateway._relay_to_goose_web", return_value=("Compacted summary", "", []))
+    @patch("gateway._relay_to_goosed", return_value=("Compacted summary", "", []))
     def test_compact_uses_ctx_channel(self, mock_relay):
         """_handle_cmd_compact uses ctx['channel'] instead of hardcoded 'telegram'."""
         gateway._session_manager.set("slack", "user5", "sid_5")
@@ -1672,7 +1672,7 @@ class TestGeneralizedCommandHandlers(unittest.TestCase):
             "send_fn": send_fn,
         }
         gateway._handle_cmd_compact(ctx)
-        # _relay_to_goose_web should have been called with channel="slack"
+        # _relay_to_goosed should have been called with channel="slack"
         call_kwargs = mock_relay.call_args
         self.assertEqual(call_kwargs[1].get("channel") or call_kwargs[0][3] if len(call_kwargs[0]) > 3 else call_kwargs[1].get("channel"), "slack")
 
@@ -1829,7 +1829,7 @@ class TestChannelRelayCommands(unittest.TestCase):
         self.assertIn("Unknown command", send_fn.call_args[0][0])
         self.assertEqual(result, "")
 
-    @patch("gateway._relay_to_goose_web", return_value=("hello back", "", []))
+    @patch("gateway._relay_to_goosed", return_value=("hello back", "", []))
     @patch("gateway.load_setup", return_value=None)
     def test_relay_non_command_still_relays(self, mock_setup, mock_relay):
         """Regular text is not intercepted and gets relayed to goose."""
@@ -1859,7 +1859,7 @@ class TestChannelRelayStop(unittest.TestCase):
         gateway._session_manager._sessions.clear()
 
     @patch("gateway.load_setup", return_value=None)
-    @patch("gateway._relay_to_goose_web", return_value=("response", "", []))
+    @patch("gateway._relay_to_goosed", return_value=("response", "", []))
     def test_relay_sets_active_relay(self, mock_relay, mock_setup):
         """ChannelRelay sets active relay on its _state before relaying."""
         relay = gateway.ChannelRelay("test_ch")
@@ -1878,7 +1878,7 @@ class TestChannelRelayStop(unittest.TestCase):
         self.assertIsInstance(calls[0][1], list)
 
     @patch("gateway.load_setup", return_value=None)
-    @patch("gateway._relay_to_goose_web", return_value=("response", "", []))
+    @patch("gateway._relay_to_goosed", return_value=("response", "", []))
     def test_relay_pops_active_relay_after_complete(self, mock_relay, mock_setup):
         """ChannelRelay pops active relay after relay completes (finally block)."""
         relay = gateway.ChannelRelay("test_ch")
@@ -1919,7 +1919,7 @@ class TestChannelRelayStop(unittest.TestCase):
                 sock_ref[1].set()  # set the cancelled event
             return ("should not see this", "", [])
 
-        with patch("gateway._relay_to_goose_web", side_effect=fake_relay):
+        with patch("gateway._relay_to_goosed", side_effect=fake_relay):
             result = relay("user1", "hello", send_fn)
 
         self.assertEqual(result, "")
@@ -1944,7 +1944,7 @@ class TestChannelRelayLocks(unittest.TestCase):
                 pass
 
     @patch("gateway.load_setup", return_value=None)
-    @patch("gateway._relay_to_goose_web", return_value=("ok", "", []))
+    @patch("gateway._relay_to_goosed", return_value=("ok", "", []))
     def test_relay_acquires_user_lock(self, mock_relay, mock_setup):
         """Relay acquires and releases user lock around relay call."""
         relay = gateway.ChannelRelay("test_ch")
@@ -1957,7 +1957,7 @@ class TestChannelRelayLocks(unittest.TestCase):
             lock.release()
 
     @patch("gateway.load_setup", return_value=None)
-    @patch("gateway._relay_to_goose_web", return_value=("ok", "", []))
+    @patch("gateway._relay_to_goosed", return_value=("ok", "", []))
     def test_concurrent_relay_gets_busy_message(self, mock_relay, mock_setup):
         """When user lock is already held, relay sends 'Still thinking' and returns ''."""
         relay = gateway.ChannelRelay("test_ch")
@@ -1980,7 +1980,7 @@ class TestChannelRelayLocks(unittest.TestCase):
         mock_relay.assert_not_called()
 
     @patch("gateway.load_setup", return_value=None)
-    @patch("gateway._relay_to_goose_web", return_value=("ok", "", []))
+    @patch("gateway._relay_to_goosed", return_value=("ok", "", []))
     def test_concurrent_relay_no_send_fn_blocks_longer(self, mock_relay, mock_setup):
         """Without send_fn, lock timeout is longer (can't notify user)."""
         relay = gateway.ChannelRelay("test_ch")
@@ -2008,7 +2008,7 @@ class TestChannelRelayLocks(unittest.TestCase):
         done.wait(timeout=5)
 
     @patch("gateway.load_setup", return_value=None)
-    @patch("gateway._relay_to_goose_web", return_value=("ok", "", []))
+    @patch("gateway._relay_to_goosed", return_value=("ok", "", []))
     def test_different_users_not_blocked(self, mock_relay, mock_setup):
         """Different users have separate locks; one user's lock doesn't block another."""
         relay = gateway.ChannelRelay("test_ch")
@@ -2022,7 +2022,7 @@ class TestChannelRelayLocks(unittest.TestCase):
         self.assertNotEqual(result, "")
 
     @patch("gateway.load_setup", return_value=None)
-    @patch("gateway._relay_to_goose_web", side_effect=Exception("boom"))
+    @patch("gateway._relay_to_goosed", side_effect=Exception("boom"))
     def test_lock_released_on_relay_error(self, mock_relay, mock_setup):
         """Lock is released even when relay raises an exception."""
         relay = gateway.ChannelRelay("test_ch")
@@ -2048,7 +2048,7 @@ class TestChannelRelayLocks(unittest.TestCase):
                 sock_ref[1].set()  # simulate /stop cancellation
             return ("cancelled", "", [])
 
-        with patch("gateway._relay_to_goose_web", side_effect=fake_relay):
+        with patch("gateway._relay_to_goosed", side_effect=fake_relay):
             relay("user1", "hello")
 
         # Lock should be released after cancellation
@@ -2080,7 +2080,7 @@ class TestChannelRelayTyping(unittest.TestCase):
             time.sleep(0.15)
             return ("response", "", [])
 
-        with patch("gateway._relay_to_goose_web", side_effect=slow_relay):
+        with patch("gateway._relay_to_goosed", side_effect=slow_relay):
             relay("user1", "hello")
 
         mock_typing.assert_called()
@@ -2088,7 +2088,7 @@ class TestChannelRelayTyping(unittest.TestCase):
         mock_typing.assert_any_call("user1")
 
     @patch("gateway.load_setup", return_value=None)
-    @patch("gateway._relay_to_goose_web", return_value=("response", "", []))
+    @patch("gateway._relay_to_goosed", return_value=("response", "", []))
     def test_typing_stops_after_relay_completes(self, mock_relay, mock_setup):
         """Typing callback stops being called after relay completes."""
         mock_typing = MagicMock()
@@ -2103,7 +2103,7 @@ class TestChannelRelayTyping(unittest.TestCase):
             "Typing callback should stop after relay completes")
 
     @patch("gateway.load_setup", return_value=None)
-    @patch("gateway._relay_to_goose_web", return_value=("response", "", []))
+    @patch("gateway._relay_to_goosed", return_value=("response", "", []))
     def test_no_typing_when_no_callback(self, mock_relay, mock_setup):
         """Relay works normally without typing callback (default None)."""
         relay = gateway.ChannelRelay("test_ch")
@@ -2112,7 +2112,7 @@ class TestChannelRelayTyping(unittest.TestCase):
         self.assertIsNotNone(result)
 
     @patch("gateway.load_setup", return_value=None)
-    @patch("gateway._relay_to_goose_web", return_value=("ok", "", []))
+    @patch("gateway._relay_to_goosed", return_value=("ok", "", []))
     def test_typing_callback_error_does_not_crash_relay(self, mock_relay, mock_setup):
         """Buggy typing callback does not crash relay."""
         def bad_typing(uid):
@@ -2124,7 +2124,7 @@ class TestChannelRelayTyping(unittest.TestCase):
             time.sleep(0.15)
             return ("ok", "", [])
 
-        with patch("gateway._relay_to_goose_web", side_effect=slow_relay):
+        with patch("gateway._relay_to_goosed", side_effect=slow_relay):
             result = relay("user1", "hello")
 
         self.assertEqual(result, "ok")
@@ -2166,7 +2166,7 @@ class TestCustomCommandRegistration(unittest.TestCase):
             gateway._loaded_channels.clear()
             gateway._loaded_channels.update(self._saved_channels)
 
-    @patch("gateway._relay_to_goose_web", return_value=("ok", "", []))
+    @patch("gateway._relay_to_goosed", return_value=("ok", "", []))
     def test_load_channel_registers_custom_commands(self, mock_relay):
         """_load_channel registers custom commands from CHANNEL dict commands field."""
         mock_handler = MagicMock()
@@ -2192,7 +2192,7 @@ class TestCustomCommandRegistration(unittest.TestCase):
         gateway._command_router.dispatch("/status", ctx)
         mock_handler.assert_called_once()
 
-    @patch("gateway._relay_to_goose_web", return_value=("ok", "", []))
+    @patch("gateway._relay_to_goosed", return_value=("ok", "", []))
     def test_load_channel_no_commands_field(self, mock_relay):
         """_load_channel with no commands key in CHANNEL dict works fine."""
         mock_module = MagicMock()
@@ -2216,7 +2216,7 @@ class TestCustomCommandRegistration(unittest.TestCase):
         self.assertEqual(len(gateway._command_router._handlers), handler_count_before)
 
     @patch("gateway.load_setup", return_value=None)
-    @patch("gateway._relay_to_goose_web", return_value=("response", "", []))
+    @patch("gateway._relay_to_goosed", return_value=("response", "", []))
     def test_custom_command_invoked_via_relay(self, mock_relay, mock_setup):
         """Custom command registered via _load_channel is invoked through ChannelRelay."""
         mock_handler = MagicMock()
@@ -2234,7 +2234,7 @@ class TestCustomCommandRegistration(unittest.TestCase):
         self.assertEqual(ctx["channel"], "test_ch")
         self.assertEqual(ctx["user_id"], "user1")
 
-    @patch("gateway._relay_to_goose_web", return_value=("ok", "", []))
+    @patch("gateway._relay_to_goosed", return_value=("ok", "", []))
     def test_custom_command_empty_dict(self, mock_relay):
         """CHANNEL dict with commands: {} causes no error and no new commands."""
         mock_module = MagicMock()
@@ -2257,7 +2257,7 @@ class TestCustomCommandRegistration(unittest.TestCase):
         self.assertTrue(result)
         self.assertEqual(len(gateway._command_router._handlers), handler_count_before)
 
-    @patch("gateway._relay_to_goose_web", return_value=("ok", "", []))
+    @patch("gateway._relay_to_goosed", return_value=("ok", "", []))
     def test_custom_command_invalid_handler_skipped(self, mock_relay):
         """CHANNEL dict with non-callable handler is skipped without crash."""
         mock_module = MagicMock()
@@ -2295,7 +2295,7 @@ class TestCustomCommandConflicts(unittest.TestCase):
             gateway._loaded_channels.clear()
             gateway._loaded_channels.update(self._saved_channels)
 
-    @patch("gateway._relay_to_goose_web", return_value=("ok", "", []))
+    @patch("gateway._relay_to_goosed", return_value=("ok", "", []))
     def test_builtin_commands_not_overwritten(self, mock_relay):
         """Custom command named 'help' conflicts with built-in; built-in handler stays."""
         custom_handler = MagicMock()
@@ -2323,7 +2323,7 @@ class TestCustomCommandConflicts(unittest.TestCase):
         custom_handler.assert_not_called()
         send_fn.assert_called_once()  # built-in help calls send_fn
 
-    @patch("gateway._relay_to_goose_web", return_value=("ok", "", []))
+    @patch("gateway._relay_to_goosed", return_value=("ok", "", []))
     def test_builtin_conflict_logged(self, mock_relay):
         """Conflict with built-in command produces a warning message."""
         mock_module = MagicMock()
@@ -2348,7 +2348,7 @@ class TestCustomCommandConflicts(unittest.TestCase):
         output = captured.getvalue()
         self.assertIn("conflicts with built-in", output)
 
-    @patch("gateway._relay_to_goose_web", return_value=("ok", "", []))
+    @patch("gateway._relay_to_goosed", return_value=("ok", "", []))
     def test_non_conflicting_custom_commands_registered(self, mock_relay):
         """Non-conflicting custom commands status and ping are registered and dispatchable."""
         status_handler = MagicMock()
@@ -2826,7 +2826,7 @@ class TestBotPollLoop(unittest.TestCase):
         self.assertEqual(bot.channel_key, "telegram:research")
         with patch.object(gateway._session_manager, "get", return_value="sess1") as mock_get, \
              patch.object(gateway._session_manager, "set") as mock_set, \
-             patch("gateway._relay_to_goose_web", return_value=("hi", "", [])) as mock_relay, \
+             patch("gateway._relay_to_goosed", return_value=("hi", "", [])) as mock_relay, \
              patch("gateway.send_telegram_message") as mock_send, \
              patch("gateway._send_typing_action"), \
              patch("gateway.load_setup", return_value=None), \
@@ -2840,7 +2840,7 @@ class TestBotPollLoop(unittest.TestCase):
         with patch.object(bot.state, "set_active_relay") as mock_set, \
              patch.object(bot.state, "pop_active_relay") as mock_pop, \
              patch.object(gateway._session_manager, "get", return_value="sess1"), \
-             patch("gateway._relay_to_goose_web", return_value=("ok", "", [])) as mock_relay, \
+             patch("gateway._relay_to_goosed", return_value=("ok", "", [])) as mock_relay, \
              patch("gateway.send_telegram_message"), \
              patch("gateway._send_typing_action"), \
              patch("gateway.load_setup", return_value=None), \
@@ -2854,7 +2854,7 @@ class TestBotPollLoop(unittest.TestCase):
         bot = gateway.BotInstance("research", "tok123")
         with patch.object(bot.state, "get_user_lock", return_value=threading.Lock()) as mock_lock, \
              patch.object(gateway._session_manager, "get", return_value="sess1"), \
-             patch("gateway._relay_to_goose_web", return_value=("ok", "", [])) as mock_relay, \
+             patch("gateway._relay_to_goosed", return_value=("ok", "", [])) as mock_relay, \
              patch("gateway.send_telegram_message"), \
              patch("gateway._send_typing_action"), \
              patch("gateway.load_setup", return_value=None), \
@@ -2874,7 +2874,7 @@ class TestBotPollLoop(unittest.TestCase):
         bot = gateway.BotInstance("research", "tok123")
         setup = {"channel_verbosity": {"telegram:research": "quiet"}}
         with patch.object(gateway._session_manager, "get", return_value="sess1"), \
-             patch("gateway._relay_to_goose_web", return_value=("ok", "", [])) as mock_relay, \
+             patch("gateway._relay_to_goosed", return_value=("ok", "", [])) as mock_relay, \
              patch("gateway.send_telegram_message"), \
              patch("gateway._send_typing_action"), \
              patch("gateway.load_setup", return_value=setup), \
@@ -3656,7 +3656,7 @@ class TestUXPaperCuts(unittest.TestCase):
     @patch("gateway.load_setup", return_value={"provider": "openai", "api_key": "sk-test", "web_auth_token_hash": "existinghash"})
     @patch("gateway.save_setup")
     @patch("gateway.apply_config")
-    @patch("gateway.start_goose_web")
+    @patch("gateway.start_goosed")
     @patch("gateway.start_session_watcher")
     @patch("gateway.start_job_engine")
     @patch("gateway.start_cron_scheduler")
@@ -3687,7 +3687,7 @@ class TestUXPaperCuts(unittest.TestCase):
     @patch("gateway.load_setup", return_value={"provider": "openai", "api_key": "sk-test", "web_auth_token_hash": "existinghash"})
     @patch("gateway.save_setup")
     @patch("gateway.apply_config")
-    @patch("gateway.start_goose_web")
+    @patch("gateway.start_goosed")
     @patch("gateway.start_session_watcher")
     @patch("gateway.start_job_engine")
     @patch("gateway.start_cron_scheduler")
@@ -4306,7 +4306,7 @@ class TestChannelRelayV2(unittest.TestCase):
     def setUp(self):
         self.relay = gateway.ChannelRelay("test_relay_v2")
 
-    @patch("gateway._relay_to_goose_web", return_value=("response", None, []))
+    @patch("gateway._relay_to_goosed", return_value=("response", None, []))
     @patch("gateway.load_setup", return_value=None)
     @patch("gateway._session_manager")
     def test_relay_accepts_inbound_message(self, mock_sm, mock_setup, mock_relay):
@@ -4317,7 +4317,7 @@ class TestChannelRelayV2(unittest.TestCase):
         result = self.relay(msg)
         self.assertIsNotNone(result)
 
-    @patch("gateway._relay_to_goose_web", return_value=("response", None, []))
+    @patch("gateway._relay_to_goosed", return_value=("response", None, []))
     @patch("gateway.load_setup", return_value=None)
     @patch("gateway._session_manager")
     def test_relay_still_accepts_legacy_args(self, mock_sm, mock_setup, mock_relay):
@@ -4326,7 +4326,7 @@ class TestChannelRelayV2(unittest.TestCase):
         result = self.relay("123", "hello")
         self.assertIsNotNone(result)
 
-    @patch("gateway._relay_to_goose_web", return_value=("response", None, []))
+    @patch("gateway._relay_to_goosed", return_value=("response", None, []))
     @patch("gateway.load_setup", return_value=None)
     @patch("gateway._session_manager")
     def test_relay_inbound_message_extracts_text(self, mock_sm, mock_setup, mock_relay):
@@ -4334,7 +4334,7 @@ class TestChannelRelayV2(unittest.TestCase):
         mock_sm.get.return_value = "sess_123"
         msg = gateway.InboundMessage(user_id="456", text="test message")
         self.relay(msg)
-        # Verify _relay_to_goose_web was called with the text from InboundMessage
+        # Verify _relay_to_goosed was called with the text from InboundMessage
         self.assertTrue(mock_relay.called)
         call_args = mock_relay.call_args
         self.assertEqual(call_args[0][0], "test message")
@@ -5391,15 +5391,15 @@ class TestRestRelayStreaming(unittest.TestCase):
 
 
 class TestRelayProtocolUpgrade(unittest.TestCase):
-    """Tests for wiring REST relay into _relay_to_goose_web and removing WS."""
+    """Tests for wiring REST relay into _relay_to_goosed and removing WS."""
 
     @patch("gateway._do_rest_relay")
     def test_relay_returns_3_tuple(self, mock_rest):
-        """_relay_to_goose_web should return 3 values: text, error, media."""
+        """_relay_to_goosed should return 3 values: text, error, media."""
         mock_rest.return_value = ("hi", "", [])
         gateway._INTERNAL_GOOSE_TOKEN = "tok"
         try:
-            result = gateway._relay_to_goose_web("test", "sid")
+            result = gateway._relay_to_goosed("test", "sid")
             self.assertEqual(len(result), 3, f"Expected 3-tuple, got {len(result)}-tuple: {result}")
             text, err, media = result
             self.assertEqual(text, "hi")
@@ -5410,12 +5410,12 @@ class TestRelayProtocolUpgrade(unittest.TestCase):
 
     @patch("gateway._do_rest_relay")
     def test_relay_passes_content_blocks(self, mock_rest):
-        """_relay_to_goose_web should forward content_blocks to _do_rest_relay."""
+        """_relay_to_goosed should forward content_blocks to _do_rest_relay."""
         mock_rest.return_value = ("ok", "", [])
         gateway._INTERNAL_GOOSE_TOKEN = "tok"
         blocks = [{"type": "text", "text": "test"}]
         try:
-            gateway._relay_to_goose_web("test", "sid", content_blocks=blocks)
+            gateway._relay_to_goosed("test", "sid", content_blocks=blocks)
             # verify _do_rest_relay received content_blocks
             call_kwargs = mock_rest.call_args
             # the lambda should pass content_blocks through
@@ -5426,11 +5426,11 @@ class TestRelayProtocolUpgrade(unittest.TestCase):
 
     @patch("gateway._do_rest_relay")
     def test_relay_uses_rest_not_ws(self, mock_rest):
-        """_relay_to_goose_web should call _do_rest_relay. WS relay is fully removed."""
+        """_relay_to_goosed should call _do_rest_relay. WS relay is fully removed."""
         mock_rest.return_value = ("hi", "", [])
         gateway._INTERNAL_GOOSE_TOKEN = "tok"
         try:
-            gateway._relay_to_goose_web("test", "sid")
+            gateway._relay_to_goosed("test", "sid")
             mock_rest.assert_called()
             # verify WS functions no longer exist
             self.assertFalse(hasattr(gateway, "_do_ws_relay"),
@@ -5448,7 +5448,7 @@ class TestRelayProtocolUpgrade(unittest.TestCase):
         mock_rest_stream.return_value = ("hi", "", [])
         gateway._INTERNAL_GOOSE_TOKEN = "tok"
         try:
-            result = gateway._relay_to_goose_web(
+            result = gateway._relay_to_goosed(
                 "test", "sid", flush_cb=lambda t: None, verbosity="balanced",
             )
             mock_rest_stream.assert_called()
@@ -5460,19 +5460,19 @@ class TestRelayProtocolUpgrade(unittest.TestCase):
     @patch("gateway._create_goose_session")
     @patch("gateway._do_rest_relay")
     def test_relay_retry_on_error_returns_3_tuple(self, mock_rest, mock_create, mock_sm):
-        """On error+retry, _relay_to_goose_web should still return 3-tuple."""
+        """On error+retry, _relay_to_goosed should still return 3-tuple."""
         mock_rest.side_effect = [("", "session expired", []), ("retried", "", [])]
         mock_create.return_value = "new-sid"
         gateway._INTERNAL_GOOSE_TOKEN = "tok"
         try:
-            result = gateway._relay_to_goose_web("test", "sid", chat_id="123", channel="telegram")
+            result = gateway._relay_to_goosed("test", "sid", chat_id="123", channel="telegram")
             self.assertEqual(len(result), 3, f"Expected 3-tuple on retry, got {len(result)}")
             text, err, media = result
             self.assertEqual(text, "retried")
         finally:
             gateway._INTERNAL_GOOSE_TOKEN = None
 
-    @patch("gateway._relay_to_goose_web")
+    @patch("gateway._relay_to_goosed")
     @patch("gateway._download_telegram_file")
     def test_bot_relay_builds_content_blocks_from_media(self, mock_dl, mock_relay):
         """BotInstance._do_message_relay should build content_blocks when InboundMessage has media."""
@@ -5504,7 +5504,7 @@ class TestRelayProtocolUpgrade(unittest.TestCase):
             # call _do_message_relay directly (positional: chat_id, text, bot_token)
             bot._do_message_relay("123", "look at this", "tok", inbound_msg=inbound)
 
-            # verify content_blocks was passed to _relay_to_goose_web
+            # verify content_blocks was passed to _relay_to_goosed
             self.assertTrue(mock_relay.called, "relay not called")
             _, kwargs = mock_relay.call_args
             self.assertIn("content_blocks", kwargs,
@@ -5512,7 +5512,7 @@ class TestRelayProtocolUpgrade(unittest.TestCase):
             self.assertIsNotNone(kwargs["content_blocks"],
                                  "content_blocks should not be None for media message")
 
-    @patch("gateway._relay_to_goose_web")
+    @patch("gateway._relay_to_goosed")
     def test_bot_relay_text_only_no_content_blocks(self, mock_relay):
         """Text-only InboundMessage should NOT build content_blocks (None)."""
         mock_relay.return_value = ("response", "", [])
@@ -5544,21 +5544,21 @@ class TestRelayProtocolUpgrade(unittest.TestCase):
             self.assertIsNone(cb, f"content_blocks should be None for text-only, got {cb}")
 
     def test_all_callers_unpack_3_tuple(self):
-        """Meta-test: no call site in gateway.py uses 2-value unpack from _relay_to_goose_web."""
+        """Meta-test: no call site in gateway.py uses 2-value unpack from _relay_to_goosed."""
         import re
         src_path = os.path.join(os.path.dirname(__file__), "gateway.py")
         with open(src_path) as f:
             source = f.read()
 
-        # match patterns like "x, y = _relay_to_goose_web(" where there's no *_
+        # match patterns like "x, y = _relay_to_goosed(" where there's no *_
         # this catches exactly 2-value unpack without star expression
-        pattern = r'(\w+),\s*(\w+)\s*=\s*_relay_to_goose_web\('
+        pattern = r'(\w+),\s*(\w+)\s*=\s*_relay_to_goosed\('
         matches = re.findall(pattern, source)
 
         # filter out any that use *_ patterns (3-tuple safe)
         bad_sites = []
         for line_num, line in enumerate(source.split("\n"), 1):
-            if "_relay_to_goose_web(" in line:
+            if "_relay_to_goosed(" in line:
                 # check previous non-blank line for assignment
                 pass  # use regex on full source instead
 
@@ -5566,7 +5566,7 @@ class TestRelayProtocolUpgrade(unittest.TestCase):
         bad_lines = []
         for line_num, line in enumerate(source.split("\n"), 1):
             stripped = line.strip()
-            if re.match(r'\w+,\s*\w+\s*=\s*_relay_to_goose_web\(', stripped):
+            if re.match(r'\w+,\s*\w+\s*=\s*_relay_to_goosed\(', stripped):
                 bad_lines.append((line_num, stripped))
 
         self.assertEqual(len(bad_lines), 0,
@@ -5798,7 +5798,7 @@ class TestBotMediaRouting(unittest.TestCase):
 
     @patch("gateway._route_media_blocks")
     @patch("gateway.TelegramOutboundAdapter")
-    @patch("gateway._relay_to_goose_web")
+    @patch("gateway._relay_to_goosed")
     @patch("gateway.send_telegram_message", return_value=(True, ""))
     @patch("gateway._send_typing_action")
     @patch("gateway.load_setup", return_value=None)
@@ -5816,7 +5816,7 @@ class TestBotMediaRouting(unittest.TestCase):
 
     @patch("gateway._route_media_blocks")
     @patch("gateway.TelegramOutboundAdapter")
-    @patch("gateway._relay_to_goose_web")
+    @patch("gateway._relay_to_goosed")
     @patch("gateway.send_telegram_message", return_value=(True, ""))
     @patch("gateway._send_typing_action")
     @patch("gateway.load_setup", return_value=None)
@@ -5833,7 +5833,7 @@ class TestBotMediaRouting(unittest.TestCase):
 
     @patch("gateway._route_media_blocks")
     @patch("gateway.TelegramOutboundAdapter")
-    @patch("gateway._relay_to_goose_web")
+    @patch("gateway._relay_to_goosed")
     @patch("gateway.send_telegram_message", return_value=(True, ""))
     @patch("gateway._send_typing_action")
     @patch("gateway.load_setup", return_value=None)
@@ -5859,7 +5859,7 @@ class TestBotMediaRouting(unittest.TestCase):
 
     @patch("gateway._route_media_blocks", side_effect=Exception("network error"))
     @patch("gateway.TelegramOutboundAdapter")
-    @patch("gateway._relay_to_goose_web")
+    @patch("gateway._relay_to_goosed")
     @patch("gateway.send_telegram_message", return_value=(True, ""))
     @patch("gateway._send_typing_action")
     @patch("gateway.load_setup", return_value=None)
@@ -5878,7 +5878,7 @@ class TestBotMediaRouting(unittest.TestCase):
 
     @patch("gateway._route_media_blocks")
     @patch("gateway.TelegramOutboundAdapter")
-    @patch("gateway._relay_to_goose_web")
+    @patch("gateway._relay_to_goosed")
     @patch("gateway.send_telegram_message", return_value=(True, ""))
     @patch("gateway._send_typing_action")
     @patch("gateway.load_setup", return_value=None)
@@ -5906,7 +5906,7 @@ class TestChannelRelayMedia(unittest.TestCase):
         self.relay = gateway.ChannelRelay("test_media_ch")
 
     @patch("gateway._route_media_blocks")
-    @patch("gateway._relay_to_goose_web")
+    @patch("gateway._relay_to_goosed")
     @patch("gateway.load_setup", return_value=None)
     @patch("gateway._session_manager")
     def test_media_blocks_routed_through_adapter(self, mock_sm, mock_setup,
@@ -5924,7 +5924,7 @@ class TestChannelRelayMedia(unittest.TestCase):
 
         mock_route.assert_called_once_with(media, mock_adapter)
 
-    @patch("gateway._relay_to_goose_web")
+    @patch("gateway._relay_to_goosed")
     @patch("gateway.load_setup", return_value=None)
     @patch("gateway._session_manager")
     def test_legacy_adapter_gets_text_fallback(self, mock_sm, mock_setup,
@@ -6589,7 +6589,7 @@ class TestPasswordAuth(unittest.TestCase):
     @patch("gateway.start_cron_scheduler")
     @patch("gateway.start_job_engine")
     @patch("gateway.start_session_watcher")
-    @patch("gateway.start_goose_web")
+    @patch("gateway.start_goosed")
     @patch("gateway.save_setup")
     @patch("gateway.apply_config")
     @patch("gateway.validate_setup_config")
@@ -7256,7 +7256,7 @@ class TestSmartProcess(unittest.TestCase):
         return w
 
     @patch.object(gateway, "_create_goose_session", return_value="sess-123")
-    @patch.object(gateway, "_relay_to_goose_web", return_value=("LLM says hi", None, []))
+    @patch.object(gateway, "_relay_to_goosed", return_value=("LLM says hi", None, []))
     def test_smart_creates_session_on_first_fire(self, mock_relay, mock_create):
         w = self._make_watcher()
         result = gateway._process_smart(w, {"event": "push"})
@@ -7266,7 +7266,7 @@ class TestSmartProcess(unittest.TestCase):
         mock_relay.assert_called_once()
 
     @patch.object(gateway, "_create_goose_session")
-    @patch.object(gateway, "_relay_to_goose_web", return_value=("reused", None, []))
+    @patch.object(gateway, "_relay_to_goosed", return_value=("reused", None, []))
     def test_smart_reuses_existing_session(self, mock_relay, mock_create):
         w = self._make_watcher(_session_id="sess-existing")
         result = gateway._process_smart(w, {"event": "push"})
@@ -7276,7 +7276,7 @@ class TestSmartProcess(unittest.TestCase):
         assert "sess-existing" in str(call_kwargs)
 
     @patch.object(gateway, "_create_goose_session", return_value="sess-new")
-    @patch.object(gateway, "_relay_to_goose_web",
+    @patch.object(gateway, "_relay_to_goosed",
                   side_effect=[("", "session not found", []), ("ok", None, [])])
     def test_smart_creates_new_session_on_stale(self, mock_relay, mock_create):
         w = self._make_watcher(_session_id="sess-old")
@@ -7293,14 +7293,14 @@ class TestSmartProcess(unittest.TestCase):
         assert "could not create goose session" in result.lower()
 
     @patch.object(gateway, "_create_goose_session", return_value="sess-1")
-    @patch.object(gateway, "_relay_to_goose_web", return_value=("", "timeout", []))
+    @patch.object(gateway, "_relay_to_goosed", return_value=("", "timeout", []))
     def test_smart_relay_error(self, mock_relay, mock_create):
         w = self._make_watcher()
         result = gateway._process_smart(w, {"event": "push"})
         assert "timeout" in result.lower() or "error" in result.lower()
 
     @patch.object(gateway, "_create_goose_session", return_value="sess-1")
-    @patch.object(gateway, "_relay_to_goose_web", return_value=("truncated", None, []))
+    @patch.object(gateway, "_relay_to_goosed", return_value=("truncated", None, []))
     def test_smart_truncates_payload(self, mock_relay, mock_create):
         w = self._make_watcher()
         big_data = {"big": "x" * 5000}
@@ -7309,7 +7309,7 @@ class TestSmartProcess(unittest.TestCase):
         assert len(user_text) <= 4200  # prompt + truncated data
 
     @patch.object(gateway, "_create_goose_session", return_value="sess-1")
-    @patch.object(gateway, "_relay_to_goose_web", return_value=("ok", None, []))
+    @patch.object(gateway, "_relay_to_goosed", return_value=("ok", None, []))
     def test_smart_includes_prompt(self, mock_relay, mock_create):
         w = self._make_watcher(prompt="Analyze this webhook")
         gateway._process_smart(w, {"event": "deploy"})
@@ -7766,7 +7766,7 @@ class TestWatcherStartupWiring(unittest.TestCase):
     @patch("gateway.start_cron_scheduler")
     @patch("gateway.start_job_engine")
     @patch("gateway.start_session_watcher")
-    @patch("gateway.start_goose_web")
+    @patch("gateway.start_goosed")
     @patch("gateway.goose_health_monitor")
     @patch("gateway.start_watcher_engine")
     @patch("gateway._load_watchers")
@@ -7792,7 +7792,7 @@ class TestWatcherStartupWiring(unittest.TestCase):
     @patch("gateway.start_cron_scheduler")
     @patch("gateway.start_job_engine")
     @patch("gateway.start_session_watcher")
-    @patch("gateway.start_goose_web")
+    @patch("gateway.start_goosed")
     @patch("gateway.goose_health_monitor")
     @patch("gateway.start_watcher_engine")
     @patch("gateway._load_watchers")

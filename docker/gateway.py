@@ -3675,8 +3675,12 @@ def _save_watchers():
         print(f"[watchers] warn: could not save watchers.json: {e}")
 
 
-def create_watcher(data):
-    """Create a new watcher. Returns (watcher_dict, error_string)."""
+def create_watcher(data, _save=True):
+    """Create a new watcher. Returns (watcher_dict, error_string).
+
+    When _save=False the caller is responsible for calling _save_watchers()
+    after the batch is complete (used by batch-create to avoid N disk writes).
+    """
     watcher_id = data.get("id") or str(uuid.uuid4())[:8]
 
     with _watchers_lock:
@@ -3714,7 +3718,8 @@ def create_watcher(data):
 
     with _watchers_lock:
         _watchers.append(watcher)
-    _save_watchers()
+    if _save:
+        _save_watchers()
     print(f"[watchers] created: {watcher['name']} ({watcher_id}) type={watcher_type}")
     return watcher, ""
 
@@ -3773,6 +3778,75 @@ def _convert_double_braces(tmpl):
     return re.sub(r'\{\{(\w+)\}\}', r'${\1}', tmpl)
 
 
+def _evaluate_filter(filter_str, data_dict):
+    """Evaluate a filter expression against a data dict.
+
+    Returns True if the event should pass through (be delivered).
+    Returns True on empty filter, parse error, or missing field (safe default).
+
+    Supported operators:
+      contains, not_contains     - case-insensitive substring
+      equals, not_equals         - exact string match
+      matches                    - regex match
+      gt, lt, gte, lte           - numeric comparison
+    """
+    if not filter_str or not filter_str.strip():
+        return True
+
+    try:
+        # Parse: "field operator 'value'" or "field operator number"
+        # Match quoted value or bare number
+        m = re.match(
+            r"(\S+)\s+(contains|not_contains|equals|not_equals|matches|gt|lt|gte|lte)\s+'([^']*)'$",
+            filter_str.strip()
+        )
+        if not m:
+            # Try bare numeric value (no quotes)
+            m = re.match(
+                r"(\S+)\s+(gt|lt|gte|lte)\s+([0-9.eE+-]+)$",
+                filter_str.strip()
+            )
+        if not m:
+            return True  # unparseable -> pass
+
+        field, operator, value = m.group(1), m.group(2), m.group(3)
+
+        # Look up field in data dict
+        if field not in data_dict:
+            return True  # missing field -> pass
+
+        actual = data_dict[field]
+
+        if operator == "contains":
+            return value.lower() in actual.lower()
+        elif operator == "not_contains":
+            return value.lower() not in actual.lower()
+        elif operator == "equals":
+            return actual == value
+        elif operator == "not_equals":
+            return actual != value
+        elif operator == "matches":
+            return bool(re.search(value, actual))
+        elif operator in ("gt", "lt", "gte", "lte"):
+            try:
+                actual_num = float(actual)
+                value_num = float(value)
+            except (ValueError, TypeError):
+                return True  # non-numeric -> pass
+            if operator == "gt":
+                return actual_num > value_num
+            elif operator == "lt":
+                return actual_num < value_num
+            elif operator == "gte":
+                return actual_num >= value_num
+            elif operator == "lte":
+                return actual_num <= value_num
+
+        return True  # unknown operator -> pass
+    except Exception:
+        return True  # any error -> pass
+
+
 def _process_passthrough(watcher, data):
     """Tier 1: template transform, no LLM. Returns formatted string."""
     tmpl = watcher.get("transform", "")
@@ -3822,6 +3896,14 @@ def _process_smart(watcher, data):
 def _fire_watcher(watcher, data):
     """Dispatch watcher event to correct tier and deliver via notify_all."""
     try:
+        # Passthrough filter: evaluate before processing (smart tier skips this)
+        filter_str = watcher.get("filter")
+        if filter_str and not watcher.get("smart"):
+            flat = _flatten_dict(data) if isinstance(data, dict) else {}
+            if not _evaluate_filter(filter_str, flat):
+                _save_watchers()
+                return
+
         if watcher.get("smart"):
             message = _process_smart(watcher, data)
         else:

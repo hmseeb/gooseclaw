@@ -30,6 +30,8 @@ API:
   POST /api/jobs              -> create a job
   DELETE /api/jobs/<id>       -> cancel/delete a job
   POST /api/jobs/<id>/run     -> manually trigger a job
+  GET  /api/schedule/upcoming -> upcoming jobs with next-run times (LLM-aware)
+  GET  /api/schedule/context  -> human-readable schedule summary for LLM
   GET  /api/channels          -> list loaded channel plugins
   POST /api/channels/reload   -> hot-reload channel plugins from /data/channels/
   GET  /admin                  -> admin dashboard
@@ -3301,6 +3303,227 @@ def list_active_jobs():
     """Return list of active (not fired, enabled) jobs. Returns copies to avoid mutation."""
     with _jobs_lock:
         return [dict(j) for j in _jobs if not j.get("fired") and j.get("enabled", True)]
+
+
+# ── LLM-aware schedule registry ────────────────────────────────────────────
+#
+# Exposes schedule/cron state to the LLM so it can reason about timing,
+# avoid conflicts, and proactively inform users about upcoming events.
+
+def _next_cron_occurrence(cron_expr, after_ts=None):
+    """Compute the next time a 5-field cron expression fires after a given timestamp.
+
+    Args:
+        cron_expr: 5-field cron expression (minute hour dom month dow)
+        after_ts: unix timestamp to search from (default: now)
+
+    Returns:
+        Unix timestamp of next occurrence, or None if invalid/not found within 7 days.
+    """
+    import calendar
+
+    if after_ts is None:
+        after_ts = time.time()
+
+    # validate first
+    valid, _ = _validate_cron(cron_expr)
+    if not valid:
+        return None
+
+    fields = cron_expr.strip().split()
+    if len(fields) == 6:
+        fields = fields[1:]
+    if len(fields) != 5:
+        return None
+
+    try:
+        minutes = _parse_cron_field(fields[0], 0, 59)
+        hours = _parse_cron_field(fields[1], 0, 23)
+        days = _parse_cron_field(fields[2], 1, 31)
+        months = _parse_cron_field(fields[3], 1, 12)
+        weekdays = _parse_cron_field(fields[4], 0, 6)
+    except (ValueError, IndexError):
+        return None
+
+    # start from the next minute after after_ts
+    candidate_ts = after_ts + 60
+    # zero out seconds
+    t = time.gmtime(candidate_ts)
+    candidate_ts = calendar.timegm((t.tm_year, t.tm_mon, t.tm_mday, t.tm_hour, t.tm_min, 0, 0, 0, 0))
+
+    # search up to 7 days (10080 minutes)
+    max_checks = 10080
+    for _ in range(max_checks):
+        t = time.gmtime(candidate_ts)
+        cron_wday = (t.tm_wday + 1) % 7  # Python Mon=0 -> cron Sun=0
+        if (t.tm_min in minutes
+                and t.tm_hour in hours
+                and t.tm_mday in days
+                and t.tm_mon in months
+                and cron_wday in weekdays):
+            return candidate_ts
+        candidate_ts += 60
+
+    return None
+
+
+def get_upcoming_jobs(hours=24):
+    """Return all jobs that will fire within the next N hours, sorted by next_run.
+
+    Merges both the job engine (jobs.json) and goose cron scheduler (schedule.json).
+    Each result includes next_run (unix ts), next_run_human, and source ("jobs"|"schedule").
+    """
+    now = time.time()
+    window_end = now + hours * 3600
+    upcoming = []
+
+    # 1. job engine jobs
+    with _jobs_lock:
+        active_jobs = [dict(j) for j in _jobs
+                       if not j.get("fired") and j.get("enabled", True)]
+
+    for job in active_jobs:
+        next_run = None
+
+        # cron-based: compute next occurrence
+        cron_expr = job.get("cron")
+        if cron_expr:
+            next_run = _next_cron_occurrence(cron_expr, now)
+
+        # fire_at-based (one-shot or recurring)
+        fire_at = job.get("fire_at")
+        if fire_at and fire_at > now:
+            if next_run is None or fire_at < next_run:
+                next_run = fire_at
+
+        # recurring: if last_run exists, compute next from last_run + interval
+        recurring = job.get("recurring_seconds")
+        if recurring and job.get("last_run"):
+            try:
+                lr = job["last_run"]
+                if "T" in lr:
+                    import calendar as _cal
+                    lr_struct = time.strptime(lr.replace("Z", ""), "%Y-%m-%dT%H:%M:%S")
+                    lr_ts = _cal.timegm(lr_struct)
+                    recur_next = lr_ts + recurring
+                    while recur_next <= now:
+                        recur_next += recurring
+                    if next_run is None or recur_next < next_run:
+                        next_run = recur_next
+            except (ValueError, OverflowError):
+                pass
+
+        if next_run and next_run <= window_end:
+            entry = {
+                "id": job["id"],
+                "name": job.get("name", job["id"]),
+                "type": job.get("type", "script"),
+                "next_run": next_run,
+                "next_run_human": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(next_run)),
+                "next_run_relative": _relative_time(next_run - now),
+                "source": "jobs",
+            }
+            if cron_expr:
+                entry["cron"] = cron_expr
+                entry["cron_human"] = humanize_cron(cron_expr)
+            if job.get("text"):
+                entry["description"] = job["text"][:200]
+            elif job.get("command"):
+                entry["description"] = job["command"][:200]
+            if job.get("last_run"):
+                entry["last_run"] = job["last_run"]
+            if job.get("last_status"):
+                entry["last_status"] = job["last_status"]
+            upcoming.append(entry)
+
+    # 2. goose schedule.json cron jobs
+    try:
+        schedule_jobs = _load_schedule()
+        for sj in schedule_jobs:
+            if sj.get("paused"):
+                continue
+            cron_expr = sj.get("cron", "")
+            if not cron_expr:
+                continue
+            next_run = _next_cron_occurrence(cron_expr, now)
+            if next_run and next_run <= window_end:
+                entry = {
+                    "id": sj.get("id", "unknown"),
+                    "name": sj.get("id", "goose-cron"),
+                    "type": "goose-recipe",
+                    "next_run": next_run,
+                    "next_run_human": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(next_run)),
+                    "next_run_relative": _relative_time(next_run - now),
+                    "source": "schedule",
+                }
+                if cron_expr:
+                    entry["cron"] = cron_expr
+                    entry["cron_human"] = humanize_cron(cron_expr)
+                if sj.get("source"):
+                    entry["recipe"] = sj["source"]
+                if sj.get("last_run"):
+                    entry["last_run"] = sj["last_run"]
+                upcoming.append(entry)
+    except Exception as e:
+        print(f"[schedule] warn: could not load goose schedule: {e}")
+
+    # sort by next_run
+    upcoming.sort(key=lambda x: x["next_run"])
+    return upcoming
+
+
+def _relative_time(seconds):
+    """Convert seconds delta to human-readable relative time string."""
+    if seconds < 0:
+        return "overdue"
+    if seconds < 60:
+        return "less than a minute"
+    mins = int(seconds / 60)
+    if mins < 60:
+        return f"{mins}m"
+    hours = int(mins / 60)
+    remaining_mins = mins % 60
+    if hours < 24:
+        if remaining_mins:
+            return f"{hours}h {remaining_mins}m"
+        return f"{hours}h"
+    days = int(hours / 24)
+    remaining_hours = hours % 24
+    if remaining_hours:
+        return f"{days}d {remaining_hours}h"
+    return f"{days}d"
+
+
+def get_schedule_context(hours=24):
+    """Generate an LLM-consumable text summary of the current schedule.
+
+    Returns a human-readable string the LLM can use to reason about timing.
+    """
+    upcoming = get_upcoming_jobs(hours=hours)
+
+    if not upcoming:
+        return f"No scheduled jobs in the next {hours} hours."
+
+    lines = [f"Scheduled jobs (next {hours}h):"]
+    for i, job in enumerate(upcoming, 1):
+        name = job.get("name", job["id"])
+        when = job.get("next_run_relative", "unknown")
+        time_str = job.get("next_run_human", "")
+        desc = job.get("description", "")
+        cron_human = job.get("cron_human", "")
+
+        line = f"  {i}. {name}"
+        if cron_human:
+            line += f" ({cron_human})"
+        line += f" - fires in {when}"
+        if time_str:
+            line += f" [{time_str}]"
+        if desc:
+            line += f"\n     {desc}"
+        lines.append(line)
+
+    lines.append(f"\nTotal: {len(upcoming)} job(s) upcoming")
+    return "\n".join(lines)
 
 
 def _fix_goose_run_recipe(command):
@@ -7439,6 +7662,10 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.handle_telegram_status()
         elif path == "/api/jobs":
             self.handle_list_jobs()
+        elif path == "/api/schedule/upcoming":
+            self.handle_schedule_upcoming()
+        elif path == "/api/schedule/context":
+            self.handle_schedule_context()
         elif path == "/api/watchers":
             self.handle_list_watchers()
         elif path == "/api/channels":
@@ -8692,6 +8919,53 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                 j["expires_in_seconds"] = round(j["expires_at"] - now)
                 j["expires_at_human"] = time.strftime("%Y-%m-%d %H:%M:%S %Z", time.localtime(j["expires_at"]))
         self.send_json(200, {"jobs": active, "count": len(active)})
+
+    def handle_schedule_upcoming(self):
+        """GET /api/schedule/upcoming — list upcoming jobs with next-run times.
+
+        Query params:
+          hours: int — look-ahead window (default: 24, max: 168)
+
+        Returns unified view of jobs from both job engine and goose schedule.
+        Sorted by next_run time. Designed for LLM consumption.
+        """
+        if not self._check_rate_limit(api_limiter):
+            return
+        if not self._check_local_or_auth():
+            return
+        try:
+            qs = urllib.parse.urlparse(self.path).query
+            params = urllib.parse.parse_qs(qs)
+            hours = min(int(params.get("hours", ["24"])[0]), 168)
+        except (ValueError, TypeError):
+            hours = 24
+        upcoming = get_upcoming_jobs(hours=hours)
+        self.send_json(200, {
+            "upcoming": upcoming,
+            "count": len(upcoming),
+            "window_hours": hours,
+        })
+
+    def handle_schedule_context(self):
+        """GET /api/schedule/context — human-readable schedule summary for LLM.
+
+        Query params:
+          hours: int — look-ahead window (default: 24, max: 168)
+
+        Returns a plain-text summary the LLM can include in its reasoning.
+        """
+        if not self._check_rate_limit(api_limiter):
+            return
+        if not self._check_local_or_auth():
+            return
+        try:
+            qs = urllib.parse.urlparse(self.path).query
+            params = urllib.parse.parse_qs(qs)
+            hours = min(int(params.get("hours", ["24"])[0]), 168)
+        except (ValueError, TypeError):
+            hours = 24
+        context = get_schedule_context(hours=hours)
+        self.send_json(200, {"context": context, "window_hours": hours})
 
     def handle_delete_job(self, job_id):
         """DELETE /api/jobs/<id> — delete/cancel a job."""

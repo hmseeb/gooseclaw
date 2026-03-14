@@ -396,5 +396,105 @@ class TestIndexer(unittest.TestCase):
         self.assertIsNotNone(rt_col)
 
 
+SAMPLE_MEMORY_MD = """\
+# Memory
+
+## Integrations
+
+- Fireflies: API key stored in vault
+- Slack: connected via webhook
+
+## Lessons Learned
+
+- Always validate input before processing
+- Use retry logic for flaky API calls
+
+## Projects
+
+- GooseClaw: personal AI agent on Railway
+"""
+
+
+class TestMigration(unittest.TestCase):
+    """KB-07: migrate_memory.py parses memory.md sections into typed runtime chunks."""
+
+    def test_migrate_creates_runtime_chunks(self):
+        """Migrate should create chunks in runtime collection."""
+        import chromadb
+        from knowledge.migrate_memory import migrate
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            chroma_dir = os.path.join(tmpdir, "chroma")
+            identity_dir = os.path.join(tmpdir, "identity")
+            os.makedirs(identity_dir)
+            with open(os.path.join(identity_dir, "memory.md"), "w") as f:
+                f.write(SAMPLE_MEMORY_MD)
+
+            count = migrate(identity_dir=identity_dir, chroma_path=chroma_dir)
+            self.assertEqual(count, 3)  # Integrations, Lessons Learned, Projects
+
+            client = chromadb.PersistentClient(path=chroma_dir)
+            runtime_col = client.get_collection("runtime")
+            all_data = runtime_col.get()
+            self.assertEqual(len(all_data["ids"]), 3)
+            self.assertIn("memory.integrations", all_data["ids"])
+            self.assertIn("memory.lessons-learned", all_data["ids"])
+            self.assertIn("memory.projects", all_data["ids"])
+
+    def test_migrate_correct_types(self):
+        """Migrate should assign correct types to chunks."""
+        import chromadb
+        from knowledge.migrate_memory import migrate
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            chroma_dir = os.path.join(tmpdir, "chroma")
+            identity_dir = os.path.join(tmpdir, "identity")
+            os.makedirs(identity_dir)
+            with open(os.path.join(identity_dir, "memory.md"), "w") as f:
+                f.write(SAMPLE_MEMORY_MD)
+
+            migrate(identity_dir=identity_dir, chroma_path=chroma_dir)
+
+            client = chromadb.PersistentClient(path=chroma_dir)
+            runtime_col = client.get_collection("runtime")
+            all_data = runtime_col.get(include=["metadatas"])
+            type_map = {m["key"]: m["type"] for m in all_data["metadatas"]}
+            self.assertEqual(type_map["memory.integrations"], "integration")
+            self.assertEqual(type_map["memory.lessons-learned"], "fact")
+            self.assertEqual(type_map["memory.projects"], "fact")
+
+    def test_migrate_idempotent(self):
+        """Running migrate twice should not create duplicates."""
+        import chromadb
+        from knowledge.migrate_memory import migrate
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            chroma_dir = os.path.join(tmpdir, "chroma")
+            identity_dir = os.path.join(tmpdir, "identity")
+            os.makedirs(identity_dir)
+            with open(os.path.join(identity_dir, "memory.md"), "w") as f:
+                f.write(SAMPLE_MEMORY_MD)
+
+            migrate(identity_dir=identity_dir, chroma_path=chroma_dir)
+            migrate(identity_dir=identity_dir, chroma_path=chroma_dir)
+
+            client = chromadb.PersistentClient(path=chroma_dir)
+            runtime_col = client.get_collection("runtime")
+            all_data = runtime_col.get()
+            self.assertEqual(len(all_data["ids"]), 3)  # still 3, not 6
+
+    def test_migrate_missing_memory_md(self):
+        """Missing memory.md should return 0 gracefully."""
+        from knowledge.migrate_memory import migrate
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            identity_dir = os.path.join(tmpdir, "identity")
+            os.makedirs(identity_dir)
+            # no memory.md created
+            count = migrate(identity_dir=identity_dir, chroma_path=os.path.join(tmpdir, "chroma"))
+
+        self.assertEqual(count, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

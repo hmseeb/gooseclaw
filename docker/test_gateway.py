@@ -7166,5 +7166,149 @@ class TestPassthroughProcess(unittest.TestCase):
         assert len(result) <= 2000
 
 
+class TestSmartProcess(unittest.TestCase):
+    """Tests for _process_smart() tier-2 LLM processing with session reuse."""
+
+    def _make_watcher(self, **overrides):
+        w = {
+            "id": "w1", "name": "test-watcher", "type": "webhook",
+            "smart": True, "prompt": "Summarize this event",
+            "channel": "telegram", "transform": "", "enabled": True,
+        }
+        w.update(overrides)
+        return w
+
+    @patch.object(gateway, "_create_goose_session", return_value="sess-123")
+    @patch.object(gateway, "_relay_to_goose_web", return_value=("LLM says hi", None, []))
+    def test_smart_creates_session_on_first_fire(self, mock_relay, mock_create):
+        w = self._make_watcher()
+        result = gateway._process_smart(w, {"event": "push"})
+        assert result == "LLM says hi"
+        assert w["_session_id"] == "sess-123"
+        mock_create.assert_called_once()
+        mock_relay.assert_called_once()
+
+    @patch.object(gateway, "_create_goose_session")
+    @patch.object(gateway, "_relay_to_goose_web", return_value=("reused", None, []))
+    def test_smart_reuses_existing_session(self, mock_relay, mock_create):
+        w = self._make_watcher(_session_id="sess-existing")
+        result = gateway._process_smart(w, {"event": "push"})
+        assert result == "reused"
+        mock_create.assert_not_called()
+        call_kwargs = mock_relay.call_args
+        assert "sess-existing" in str(call_kwargs)
+
+    @patch.object(gateway, "_create_goose_session", return_value="sess-new")
+    @patch.object(gateway, "_relay_to_goose_web",
+                  side_effect=[("", "session not found", []), ("ok", None, [])])
+    def test_smart_creates_new_session_on_stale(self, mock_relay, mock_create):
+        w = self._make_watcher(_session_id="sess-old")
+        result = gateway._process_smart(w, {"event": "push"})
+        assert result == "ok"
+        assert w["_session_id"] == "sess-new"
+        mock_create.assert_called_once()
+        assert mock_relay.call_count == 2
+
+    @patch.object(gateway, "_create_goose_session", return_value=None)
+    def test_smart_session_failure(self, mock_create):
+        w = self._make_watcher()
+        result = gateway._process_smart(w, {"event": "push"})
+        assert "could not create goose session" in result.lower()
+
+    @patch.object(gateway, "_create_goose_session", return_value="sess-1")
+    @patch.object(gateway, "_relay_to_goose_web", return_value=("", "timeout", []))
+    def test_smart_relay_error(self, mock_relay, mock_create):
+        w = self._make_watcher()
+        result = gateway._process_smart(w, {"event": "push"})
+        assert "timeout" in result.lower() or "error" in result.lower()
+
+    @patch.object(gateway, "_create_goose_session", return_value="sess-1")
+    @patch.object(gateway, "_relay_to_goose_web", return_value=("truncated", None, []))
+    def test_smart_truncates_payload(self, mock_relay, mock_create):
+        w = self._make_watcher()
+        big_data = {"big": "x" * 5000}
+        gateway._process_smart(w, big_data)
+        user_text = mock_relay.call_args[0][0]
+        assert len(user_text) <= 4200  # prompt + truncated data
+
+    @patch.object(gateway, "_create_goose_session", return_value="sess-1")
+    @patch.object(gateway, "_relay_to_goose_web", return_value=("ok", None, []))
+    def test_smart_includes_prompt(self, mock_relay, mock_create):
+        w = self._make_watcher(prompt="Analyze this webhook")
+        gateway._process_smart(w, {"event": "deploy"})
+        user_text = mock_relay.call_args[0][0]
+        assert "Analyze this webhook" in user_text
+        assert "deploy" in user_text
+
+
+class TestFireWatcher(unittest.TestCase):
+    """Tests for _fire_watcher() dispatch and notification."""
+
+    def _make_watcher(self, **overrides):
+        w = {
+            "id": "w1", "name": "TestWatcher", "type": "webhook",
+            "smart": False, "prompt": "", "transform": "",
+            "channel": "telegram", "enabled": True,
+            "fire_count": 0, "last_fired": None, "last_error": None,
+        }
+        w.update(overrides)
+        return w
+
+    @patch.object(gateway, "_save_watchers")
+    @patch.object(gateway, "notify_all")
+    @patch.object(gateway, "_process_passthrough", return_value="formatted result")
+    def test_fire_passthrough(self, mock_pt, mock_notify, mock_save):
+        w = self._make_watcher(smart=False)
+        gateway._fire_watcher(w, {"event": "push"})
+        mock_pt.assert_called_once_with(w, {"event": "push"})
+        mock_notify.assert_called_once()
+        assert "[TestWatcher]" in mock_notify.call_args[0][0]
+
+    @patch.object(gateway, "_save_watchers")
+    @patch.object(gateway, "notify_all")
+    @patch.object(gateway, "_process_smart", return_value="LLM analysis")
+    def test_fire_smart(self, mock_smart, mock_notify, mock_save):
+        w = self._make_watcher(smart=True)
+        gateway._fire_watcher(w, {"event": "push"})
+        mock_smart.assert_called_once_with(w, {"event": "push"})
+        mock_notify.assert_called_once()
+
+    @patch.object(gateway, "_save_watchers")
+    @patch.object(gateway, "notify_all")
+    @patch.object(gateway, "_process_passthrough", return_value="result")
+    def test_fire_channel_targeting(self, mock_pt, mock_notify, mock_save):
+        w = self._make_watcher(channel="discord")
+        gateway._fire_watcher(w, {"event": "push"})
+        call_kwargs = mock_notify.call_args
+        assert call_kwargs[1].get("channel") == "discord" or "discord" in str(call_kwargs)
+
+    @patch.object(gateway, "_save_watchers")
+    @patch.object(gateway, "notify_all")
+    @patch.object(gateway, "_process_passthrough", return_value="result")
+    def test_fire_updates_stats(self, mock_pt, mock_notify, mock_save):
+        w = self._make_watcher(fire_count=5)
+        gateway._fire_watcher(w, {"event": "push"})
+        assert w["fire_count"] == 6
+        assert w["last_fired"] is not None
+        assert w["last_error"] is None
+
+    @patch.object(gateway, "_save_watchers")
+    @patch.object(gateway, "notify_all")
+    @patch.object(gateway, "_process_passthrough", return_value="")
+    def test_fire_empty_message_skips_notify(self, mock_pt, mock_notify, mock_save):
+        w = self._make_watcher()
+        gateway._fire_watcher(w, {"event": "push"})
+        mock_notify.assert_not_called()
+
+    @patch.object(gateway, "_save_watchers")
+    @patch.object(gateway, "notify_all")
+    @patch.object(gateway, "_process_passthrough", side_effect=Exception("boom"))
+    def test_fire_exception_sets_last_error(self, mock_pt, mock_notify, mock_save):
+        w = self._make_watcher()
+        gateway._fire_watcher(w, {"event": "push"})
+        assert w["last_error"] is not None
+        assert "boom" in w["last_error"]
+
+
 if __name__ == "__main__":
     unittest.main()

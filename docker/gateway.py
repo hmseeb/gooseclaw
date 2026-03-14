@@ -416,7 +416,8 @@ class BotInstance:
                             print(f"[telegram:{self.name}] media download failed for {ref.get('media_key')}: {file_path}")
                 inbound_msg.media = downloaded
 
-            _send_typing_action(bot_token, chat_id)
+            _adapter = TelegramOutboundAdapter(bot_token, chat_id)
+            _adapter.send_typing(chat_id)
             session_id = _get_session_id(chat_id, channel=self.channel_key)
             _cancelled = threading.Event()
             _sock_ref = [None, _cancelled]
@@ -436,7 +437,7 @@ class BotInstance:
 
             def _typing_loop():
                 while not typing_stop.is_set():
-                    _send_typing_action(bot_token, chat_id)
+                    _adapter.send_typing(chat_id)
                     typing_stop.wait(4)
 
             typing_thread = threading.Thread(target=_typing_loop, daemon=True)
@@ -499,7 +500,6 @@ class BotInstance:
                 # Route media blocks through adapter
                 if media and not _cancelled.is_set():
                     try:
-                        _adapter = TelegramOutboundAdapter(bot_token, chat_id)
                         _route_media_blocks(media, _adapter)
                     except Exception as _media_exc:
                         print(f"[telegram:{self.name}] media routing error: {_media_exc}")
@@ -677,11 +677,12 @@ class BotInstance:
 
                                     def _kick_greeting(msg=kick_msg, s=sid, c=chat_id, bt=self.token, ck=self.channel_key, evt=_greet_evt):
                                         # Change 2: typing indicator during kick_greeting
+                                        _greet_adapter = TelegramOutboundAdapter(bt, c)
                                         _typing_stop = threading.Event()
 
                                         def _typing_loop():
                                             while not _typing_stop.is_set():
-                                                _send_typing_action(bt, c)
+                                                _greet_adapter.send_typing(c)
                                                 _typing_stop.wait(4)
 
                                         _typing_thread = threading.Thread(target=_typing_loop, daemon=True)
@@ -5501,8 +5502,11 @@ def _handle_cmd_compact(ctx):
     chat_id = ctx["user_id"]
     channel = ctx.get("channel", "telegram")
     bot_token = ctx.get("bot_token")
-    if bot_token:
-        _send_typing_action(bot_token, chat_id)
+    _compact_adapter = ctx.get("adapter")
+    if not _compact_adapter and bot_token:
+        _compact_adapter = TelegramOutboundAdapter(bot_token, chat_id)
+    if _compact_adapter:
+        _compact_adapter.send_typing(chat_id)
     session_id = _session_manager.get(channel, chat_id)
     if not session_id:
         ctx["send_fn"]("No active session. Send a message first.")
@@ -6655,7 +6659,8 @@ def _flush_media_group(group_id, bot_token):
                     downloaded.append(mc)
                 else:
                     print(f"[telegram] media group download failed for {ref.get('media_key')}: {file_path}")
-            _send_typing_action(_bt, _chat_id)
+            _leg_adapter = TelegramOutboundAdapter(_bt, _chat_id)
+            _leg_adapter.send_typing(_chat_id)
             session_id = _get_session_id(_chat_id)
             _inbound = InboundMessage(user_id=_chat_id, text=_text, channel="telegram")
             _inbound.media = downloaded
@@ -6671,7 +6676,7 @@ def _flush_media_group(group_id, bot_token):
             typing_stop = threading.Event()
             def _typing_loop():
                 while not typing_stop.is_set():
-                    _send_typing_action(_bt, _chat_id)
+                    _leg_adapter.send_typing(_chat_id)
                     typing_stop.wait(4)
             typing_thread = threading.Thread(target=_typing_loop, daemon=True)
             typing_thread.start()
@@ -6689,8 +6694,7 @@ def _flush_media_group(group_id, bot_token):
                     send_telegram_message(_bt, _chat_id, response_text)
                 if _resp_media:
                     try:
-                        _adapter = TelegramOutboundAdapter(_bt, _chat_id)
-                        _route_media_blocks(_resp_media, _adapter)
+                        _route_media_blocks(_resp_media, _leg_adapter)
                     except Exception as _media_exc:
                         print(f"[telegram] media routing error: {_media_exc}")
             finally:
@@ -6823,7 +6827,8 @@ def _telegram_poll_loop(bot_token):
                                         downloaded.append(mc)
                                     else:
                                         print(f"[telegram] media download failed for {ref.get('media_key')}: {file_path}")
-                                _send_typing_action(_bt, _chat_id)
+                                _media_adapter = TelegramOutboundAdapter(_bt, _chat_id)
+                                _media_adapter.send_typing(_chat_id)
                                 session_id = _get_session_id(_chat_id)
                                 # build content blocks from downloaded media
                                 _inbound = InboundMessage(user_id=_chat_id, text=_text, channel="telegram")
@@ -6840,8 +6845,7 @@ def _telegram_poll_loop(bot_token):
                                 # Route response media blocks
                                 if _resp_media:
                                     try:
-                                        _adapter = TelegramOutboundAdapter(_bt, _chat_id)
-                                        _route_media_blocks(_resp_media, _adapter)
+                                        _route_media_blocks(_resp_media, _media_adapter)
                                     except Exception as _media_exc:
                                         print(f"[telegram] media routing error: {_media_exc}")
                             except Exception as exc:
@@ -6919,7 +6923,8 @@ def _telegram_poll_loop(bot_token):
                                     else:
                                         print(f"[telegram] media download failed for {ref.get('media_key')}: {file_path}")
 
-                            _send_typing_action(_bt, _chat_id)
+                            _relay_adapter = TelegramOutboundAdapter(_bt, _chat_id)
+                            _relay_adapter.send_typing(_chat_id)
                             session_id = _get_session_id(_chat_id)
                             _cancelled = threading.Event()
                             _sock_ref = [None, _cancelled]
@@ -6941,7 +6946,7 @@ def _telegram_poll_loop(bot_token):
 
                             def _typing_loop():
                                 while not typing_stop.is_set():
-                                    _send_typing_action(_bt, _chat_id)
+                                    _relay_adapter.send_typing(_chat_id)
                                     typing_stop.wait(4)
 
                             typing_thread = threading.Thread(target=_typing_loop, daemon=True)
@@ -7004,8 +7009,7 @@ def _telegram_poll_loop(bot_token):
                                 # Route media blocks through adapter
                                 if _leg_media and not _cancelled.is_set():
                                     try:
-                                        _adapter = TelegramOutboundAdapter(_bt, _chat_id)
-                                        _route_media_blocks(_leg_media, _adapter)
+                                        _route_media_blocks(_leg_media, _relay_adapter)
                                     except Exception as _media_exc:
                                         print(f"[telegram] media routing error: {_media_exc}")
                             finally:
@@ -7081,13 +7085,14 @@ def _telegram_poll_loop(bot_token):
                                 _greet_evt = threading.Event()
                                 _legacy_greeting_events[str(chat_id)] = _greet_evt
 
-                                def _kick_greeting(msg=kick_msg, s=sid, c=chat_id, evt=_greet_evt):
+                                def _kick_greeting(msg=kick_msg, s=sid, c=chat_id, evt=_greet_evt, _bt=bot_token):
                                     # Change 2: typing indicator during kick_greeting
+                                    _greet_adapter = TelegramOutboundAdapter(_bt, c)
                                     _typing_stop = threading.Event()
 
                                     def _typing_loop():
                                         while not _typing_stop.is_set():
-                                            _send_typing_action(bot_token, c)
+                                            _greet_adapter.send_typing(c)
                                             _typing_stop.wait(4)
 
                                     _typing_thread = threading.Thread(target=_typing_loop, daemon=True)

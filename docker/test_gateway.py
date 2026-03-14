@@ -6978,5 +6978,148 @@ class TestSessionExpiry(unittest.TestCase):
         self.assertEqual(gateway.SESSION_MAX_AGE, 86400)
 
 
+# ── watcher CRUD tests ─────────────────────────────────────────────────────
+
+class TestCreateWatcher(unittest.TestCase):
+    """Tests for create_watcher()."""
+
+    def setUp(self):
+        with gateway._watchers_lock:
+            gateway._watchers.clear()
+        self._save_patcher = patch("gateway._save_watchers")
+        self._save_patcher.start()
+
+    def tearDown(self):
+        self._save_patcher.stop()
+        with gateway._watchers_lock:
+            gateway._watchers.clear()
+
+    def test_valid_webhook_type(self):
+        w, err = gateway.create_watcher({"type": "webhook"})
+        assert err == ""
+        assert w is not None
+        assert w["type"] == "webhook"
+
+    def test_valid_feed_type(self):
+        w, err = gateway.create_watcher({"type": "feed", "source": "https://example.com/rss"})
+        assert err == ""
+        assert w["type"] == "feed"
+
+    def test_valid_stream_type(self):
+        w, err = gateway.create_watcher({"type": "stream", "source": "https://example.com/sse"})
+        assert err == ""
+        assert w["type"] == "stream"
+
+    def test_invalid_type_rejected(self):
+        w, err = gateway.create_watcher({"type": "invalid"})
+        assert w is None
+        assert "invalid type" in err
+
+    def test_duplicate_id_rejected(self):
+        gateway.create_watcher({"id": "dup", "type": "webhook"})
+        w, err = gateway.create_watcher({"id": "dup", "type": "webhook"})
+        assert w is None
+        assert "already exists" in err
+
+    def test_auto_generated_id(self):
+        w, _ = gateway.create_watcher({"type": "webhook"})
+        assert w["id"]  # should have a non-empty id
+        assert len(w["id"]) == 8  # uuid[:8]
+
+    def test_feed_requires_source(self):
+        w, err = gateway.create_watcher({"type": "feed"})
+        assert w is None
+        assert "source" in err.lower()
+
+    def test_default_values(self):
+        w, _ = gateway.create_watcher({"type": "webhook"})
+        assert w["enabled"] is True
+        assert w["fire_count"] == 0
+        assert w["smart"] is False
+        assert w["transform"] == ""
+        assert w["last_fired"] is None
+        assert w["last_error"] is None
+
+
+class TestDeleteWatcher(unittest.TestCase):
+    """Tests for delete_watcher()."""
+
+    def setUp(self):
+        with gateway._watchers_lock:
+            gateway._watchers.clear()
+        self._save_patcher = patch("gateway._save_watchers")
+        self._save_patcher.start()
+
+    def tearDown(self):
+        self._save_patcher.stop()
+        with gateway._watchers_lock:
+            gateway._watchers.clear()
+
+    def test_delete_existing_returns_true(self):
+        gateway.create_watcher({"id": "del1", "type": "webhook"})
+        assert gateway.delete_watcher("del1") is True
+
+    def test_delete_nonexistent_returns_false(self):
+        assert gateway.delete_watcher("nope") is False
+
+    def test_delete_removes_from_list(self):
+        gateway.create_watcher({"id": "del2", "type": "webhook"})
+        gateway.delete_watcher("del2")
+        watchers = gateway.list_watchers()
+        assert not any(w["id"] == "del2" for w in watchers)
+
+
+class TestListWatchers(unittest.TestCase):
+    """Tests for list_watchers()."""
+
+    def setUp(self):
+        with gateway._watchers_lock:
+            gateway._watchers.clear()
+        self._save_patcher = patch("gateway._save_watchers")
+        self._save_patcher.start()
+
+    def tearDown(self):
+        self._save_patcher.stop()
+        with gateway._watchers_lock:
+            gateway._watchers.clear()
+
+    def test_returns_all_watchers(self):
+        gateway.create_watcher({"id": "w1", "type": "webhook"})
+        gateway.create_watcher({"id": "w2", "type": "webhook"})
+        result = gateway.list_watchers()
+        assert len(result) == 2
+
+    def test_empty_list(self):
+        result = gateway.list_watchers()
+        assert result == []
+
+
+class TestUpdateWatcher(unittest.TestCase):
+    """Tests for update_watcher()."""
+
+    def setUp(self):
+        with gateway._watchers_lock:
+            gateway._watchers.clear()
+        self._save_patcher = patch("gateway._save_watchers")
+        self._save_patcher.start()
+
+    def tearDown(self):
+        self._save_patcher.stop()
+        with gateway._watchers_lock:
+            gateway._watchers.clear()
+
+    def test_update_fields(self):
+        gateway.create_watcher({"id": "u1", "type": "webhook"})
+        w, err = gateway.update_watcher("u1", {"name": "new name", "enabled": False})
+        assert err == ""
+        assert w["name"] == "new name"
+        assert w["enabled"] is False
+
+    def test_update_nonexistent_returns_error(self):
+        w, err = gateway.update_watcher("nope", {"name": "x"})
+        assert w is None
+        assert "not found" in err
+
+
 if __name__ == "__main__":
     unittest.main()

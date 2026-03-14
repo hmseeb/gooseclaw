@@ -661,9 +661,9 @@ class BotInstance:
 
                                 # Change 3: inject context into LLM kick message
                                 kick_msg = (
-                                    "I just paired via Telegram. I've already been shown a welcome message saying I'm gooseclaw, a personal AI agent that runs 24/7 and learns. Do NOT repeat any of that. Jump straight into the onboarding flow -- ask my name."
+                                    "I just paired via Telegram. I've already been shown a welcome message saying I'm gooseclaw, a personal AI agent that runs 24/7 and learns. Do NOT repeat any of that. Jump straight into the onboarding flow -- ask my name. Keep your response to 2-3 short sentences. Use normal prose, no bullet points, no line breaks between words. Plain text only, no markdown formatting."
                                     if needs_onboarding else
-                                    "I just paired a new device via Telegram. I've already seen a 'welcome back' message. Just say hi casually, keep it very short."
+                                    "I just paired a new device via Telegram. I've already seen a 'welcome back' message. Just say hi casually, keep it very short. Keep your response to 2-3 short sentences. Use normal prose, no bullet points, no line breaks between words. Plain text only, no markdown formatting."
                                 )
                                 sid = _get_session_id(chat_id, channel=self.channel_key)
                                 # Change 4: skip LLM kick greeting for returning users
@@ -910,6 +910,13 @@ _jobs = []             # list of job dicts
 _jobs_lock = threading.Lock()
 _job_engine_running = False
 
+# ── watcher engine state ──────────────────────────────────────────────────────
+_WATCHERS_FILE = os.path.join(DATA_DIR, "watchers.json")
+_watchers = []
+_watchers_lock = threading.Lock()
+_watcher_threads = {}  # id -> Thread (for stream watchers)
+_watcher_engine_running = False
+
 # ── goose web startup state ─────────────────────────────────────────────────
 goose_startup_state = {
     "state": "idle",        # idle | starting | ready | error
@@ -1108,6 +1115,69 @@ key_urls = {
 
 GOOSE_CONFIG_PATH = os.path.join(CONFIG_DIR, "config.yaml")
 
+# ── in-memory pairing cache ─────────────────────────────────────────────────
+# Pairings are stored on disk in config.yaml under gateway_pairings:, but goose
+# sessions or apply_config() calls can race and rewrite the file, temporarily
+# wiping pairings. This cache survives disk rewrites so a freshly paired user
+# never gets "You are not paired" due to a race condition.
+#   key: (platform, user_id_str)  value: True
+_pairing_cache = {}
+_pairing_cache_lock = threading.Lock()
+
+
+def _cache_pairing(user_id, platform="telegram"):
+    """Record a pairing in memory so it survives config.yaml rewrites."""
+    with _pairing_cache_lock:
+        _pairing_cache[(platform, str(user_id))] = True
+
+
+def _is_cached_paired(user_id, platform="telegram"):
+    """Check if a user_id is in the in-memory pairing cache."""
+    with _pairing_cache_lock:
+        return _pairing_cache.get((platform, str(user_id)), False)
+
+
+def _re_persist_cached_pairings(config_path=None):
+    """Re-inject any in-memory cached pairings missing from config.yaml on disk.
+
+    Called after apply_config() or any other config.yaml rewrite to guard against
+    race conditions that wipe the gateway_pairings section.
+    """
+    if config_path is None:
+        config_path = GOOSE_CONFIG_PATH
+    with _pairing_cache_lock:
+        if not _pairing_cache:
+            return
+        cached = list(_pairing_cache.keys())  # list of (platform, user_id)
+    try:
+        content = ""
+        if os.path.exists(config_path):
+            with open(config_path) as f:
+                content = f.read()
+        missing = [(plat, uid) for plat, uid in cached if uid not in content]
+        if not missing:
+            return
+        for plat, uid in missing:
+            pairing_entry = (
+                f"  - platform: {plat}\n"
+                f"    user_id: '{uid}'\n"
+                f"    state: paired\n"
+            )
+            if "gateway_pairings:" in content:
+                content = content.replace(
+                    "gateway_pairings:\n",
+                    "gateway_pairings:\n" + pairing_entry, 1,
+                )
+            else:
+                content = content.rstrip("\n") + "\ngateway_pairings:\n" + pairing_entry
+            print(f"[gateway] re-persisted pairing for {plat}:{uid} after config rewrite")
+        tmp = config_path + ".tmp"
+        with open(tmp, "w") as f:
+            f.write(content)
+        os.replace(tmp, config_path)
+    except Exception as e:
+        print(f"[gateway] warn: could not re-persist pairings: {e}")
+
 
 def get_bot_token():
     """Get telegram bot token from env, setup.json, or goose config."""
@@ -1160,6 +1230,11 @@ def get_paired_chat_ids(platform="telegram"):
             chat_ids.append(current_entry["user_id"])
     except Exception as e:
         print(f"[gateway] warn: could not read pairings: {e}")
+    # merge in-memory cache (survives config.yaml race rewrites)
+    with _pairing_cache_lock:
+        for (plat, uid), _ in _pairing_cache.items():
+            if plat == platform and uid not in chat_ids:
+                chat_ids.append(uid)
     return chat_ids
 
 
@@ -2857,6 +2932,9 @@ def apply_config(config):
         f.write(content)
     os.replace(tmp_path, config_path)
 
+    # re-persist any in-memory cached pairings that may have been lost during rewrite
+    _re_persist_cached_pairings(config_path)
+
     # propagate GOOSE_* config to env vars so goosed subprocess inherits them
     # (goosed reads env vars with highest priority, config.yaml as fallback)
     for line in lines:
@@ -3562,6 +3640,118 @@ def start_job_engine():
     threading.Thread(target=_job_engine_loop, daemon=True).start()
 
 
+# ── watcher engine (event subscriptions: webhook, feed, stream) ──────────────
+
+
+def _load_watchers():
+    """Load watchers from disk."""
+    global _watchers
+    try:
+        if os.path.exists(_WATCHERS_FILE):
+            with open(_WATCHERS_FILE) as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                with _watchers_lock:
+                    _watchers = data
+                print(f"[watchers] loaded {len(data)} watcher(s)")
+    except Exception as e:
+        print(f"[watchers] warn: could not load watchers.json: {e}")
+
+
+def _save_watchers():
+    """Persist watchers to disk (atomic write)."""
+    with _watchers_lock:
+        data = list(_watchers)
+    try:
+        os.makedirs(os.path.dirname(_WATCHERS_FILE), exist_ok=True)
+        tmp = _WATCHERS_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp, _WATCHERS_FILE)
+    except Exception as e:
+        print(f"[watchers] warn: could not save watchers.json: {e}")
+
+
+def create_watcher(data):
+    """Create a new watcher. Returns (watcher_dict, error_string)."""
+    watcher_id = data.get("id") or str(uuid.uuid4())[:8]
+
+    with _watchers_lock:
+        if any(w["id"] == watcher_id for w in _watchers):
+            return None, f"watcher with id '{watcher_id}' already exists"
+
+    watcher_type = data.get("type", "webhook")
+    if watcher_type not in ("webhook", "feed", "stream"):
+        return None, f"invalid type: {watcher_type} (must be webhook, feed, or stream)"
+
+    if watcher_type == "feed" and not data.get("source"):
+        return None, "source URL is required for feed watchers"
+
+    watcher = {
+        "id": watcher_id,
+        "name": data.get("name", watcher_id),
+        "type": watcher_type,
+        "source": data.get("source", f"/api/webhooks/{watcher_id}"),
+        "channel": data.get("channel"),
+        "smart": data.get("smart", False),
+        "transform": data.get("transform", ""),
+        "prompt": data.get("prompt", ""),
+        "enabled": data.get("enabled", True),
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "poll_seconds": data.get("poll_seconds", 300),
+        "filter": data.get("filter", ""),
+        "headers": data.get("headers", {}),
+        "webhook_secret": data.get("webhook_secret", ""),
+        "last_hash": "",
+        "last_check": None,
+        "last_fired": None,
+        "fire_count": 0,
+        "last_error": None,
+    }
+
+    with _watchers_lock:
+        _watchers.append(watcher)
+    _save_watchers()
+    print(f"[watchers] created: {watcher['name']} ({watcher_id}) type={watcher_type}")
+    return watcher, ""
+
+
+def delete_watcher(watcher_id):
+    """Delete a watcher by ID. Returns True if found."""
+    with _watchers_lock:
+        before = len(_watchers)
+        _watchers[:] = [w for w in _watchers if w["id"] != watcher_id]
+        found = len(_watchers) < before
+    if found:
+        _save_watchers()
+        print(f"[watchers] deleted: {watcher_id}")
+    return found
+
+
+def list_watchers():
+    """Return a copy of all watchers."""
+    with _watchers_lock:
+        return [dict(w) for w in _watchers]
+
+
+def update_watcher(watcher_id, updates):
+    """Update an existing watcher. Returns (updated_watcher_dict, error_string)."""
+    with _watchers_lock:
+        watcher = next((w for w in _watchers if w["id"] == watcher_id), None)
+    if not watcher:
+        return None, f"watcher '{watcher_id}' not found"
+
+    allowed = {"name", "enabled", "transform", "prompt", "channel", "filter",
+               "poll_seconds", "headers", "webhook_secret"}
+    with _watchers_lock:
+        for key, val in updates.items():
+            if key in allowed:
+                watcher[key] = val
+    _save_watchers()
+    print(f"[watchers] updated: {watcher.get('name', watcher_id)} ({watcher_id})")
+    return dict(watcher), ""
+
+
 # ── cron scheduler (channel-agnostic, reads goose schedule.json) ─────────────
 #
 # Replaces goose's built-in scheduler (which only runs inside `goose gateway`,
@@ -4144,6 +4334,11 @@ def get_paired_user_ids(platform):
             user_ids.append(current_entry["user_id"])
     except Exception as e:
         print(f"[channels] warn: could not read pairings for {platform}: {e}")
+    # merge in-memory cache (survives config.yaml race rewrites)
+    with _pairing_cache_lock:
+        for (plat, uid), _ in _pairing_cache.items():
+            if plat == platform and uid not in user_ids:
+                user_ids.append(uid)
     return user_ids
 
 
@@ -5943,6 +6138,8 @@ def _add_pairing_to_config(chat_id, platform="telegram"):
     """
     config_path = GOOSE_CONFIG_PATH
     chat_str = str(chat_id)
+    # always cache in memory first (survives config.yaml race rewrites)
+    _cache_pairing(chat_str, platform)
     try:
         content = ""
         if os.path.exists(config_path):
@@ -6443,9 +6640,9 @@ def _telegram_poll_loop(bot_token):
 
                             # Change 3: inject context into LLM kick message
                             kick_msg = (
-                                "I just paired via Telegram. I've already been shown a welcome message saying I'm gooseclaw, a personal AI agent that runs 24/7 and learns. Do NOT repeat any of that. Jump straight into the onboarding flow -- ask my name."
+                                "I just paired via Telegram. I've already been shown a welcome message saying I'm gooseclaw, a personal AI agent that runs 24/7 and learns. Do NOT repeat any of that. Jump straight into the onboarding flow -- ask my name. Keep your response to 2-3 short sentences. Use normal prose, no bullet points, no line breaks between words. Plain text only, no markdown formatting."
                                 if needs_onboarding else
-                                "I just paired a new device via Telegram. I've already seen a 'welcome back' message. Just say hi casually, keep it very short."
+                                "I just paired a new device via Telegram. I've already seen a 'welcome back' message. Just say hi casually, keep it very short. Keep your response to 2-3 short sentences. Use normal prose, no bullet points, no line breaks between words. Plain text only, no markdown formatting."
                             )
                             sid = _get_session_id(chat_id)
                             # Change 4: skip LLM kick greeting for returning users

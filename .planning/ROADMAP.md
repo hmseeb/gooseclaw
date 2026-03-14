@@ -235,9 +235,21 @@ Phase 15 (reference plugin) depends on Phase 14 (outbound media).
 
 ### Phase 17: Vector Knowledge Base — Semantic retrieval MCP extension replacing monolithic system.md context loading
 
-**Goal:** [To be planned]
+**Goal:** Replace monolithic system.md context loading (~6,000 tokens per session) with a ChromaDB-backed semantic retrieval MCP extension. The bot calls knowledge_search() on-demand. Vector store also absorbs memory.md as the unified knowledge persistence layer.
 **Depends on:** Phase 16
-**Plans:** 0 plans
+**Requirements**: KB-01, KB-02, KB-03, KB-04, KB-05, KB-06, KB-07, KB-08, KB-09, KB-10
+**Success Criteria** (what must be TRUE):
+  1. LOCKED files (system.md, schemas/, onboarding.md) are chunked into ~30-40 typed chunks and indexed into ChromaDB
+  2. knowledge_search returns top-N semantically relevant chunks with similarity scores
+  3. knowledge_upsert writes typed chunks to runtime collection (replaces memory.md)
+  4. knowledge_get retrieves chunks by exact key from either collection
+  5. Deploy-time re-index wipes system collection, preserves runtime collection
+  6. .goosehints no longer loads system.md, memory.md, or onboarding.md (token reduction)
+  7. memory.md contents migrated to runtime chunks on first boot
+  8. MCP extension registered in goose config.yaml and bot can call tools
+**Plans:** 3 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 17 to break down)
+- [ ] 17-01-PLAN.md -- TDD: Chunker pipeline and deploy-time indexer (KB-01, KB-05, KB-06, KB-09)
+- [ ] 17-02-PLAN.md -- TDD: FastMCP server with 4 knowledge tools (KB-02, KB-03, KB-04, KB-10)
+- [ ] 17-03-PLAN.md -- Integration: Dockerfile, entrypoint, .goosehints, memory migration (KB-07, KB-08)

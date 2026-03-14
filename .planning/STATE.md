@@ -10,13 +10,13 @@ See: .planning/PROJECT.md (updated 2026-03-13)
 ## Current Position
 
 Phase: 16 of 16 (in progress)
-Plan: 1 of 3 (done)
-Status: Phase 16 Plan 01 complete. Watcher CRUD + passthrough processing with 21 tests.
-Last activity: 2026-03-14 - Completed 16-01: Watcher CRUD + Passthrough
+Plan: 2 of 3 (done)
+Status: Phase 16 Plan 02 complete. Smart processing, webhook routing, feed polling with 26 new tests.
+Last activity: 2026-03-14 - Completed 16-02: Smart Processing + Webhooks + Feeds
 
 Progress v2.0: [==========] 100% (10/10 phases complete, shipped)
 Progress v3.0: [==========] 100% (5/5 phases complete)
-Progress v4.0 (watchers): [===-------] 33% (1/3 plans complete)
+Progress v4.0 (watchers): [======----] 67% (2/3 plans complete)
 
 ## Performance Metrics
 
@@ -55,6 +55,7 @@ Progress v4.0 (watchers): [===-------] 33% (1/3 plans complete)
 | Phase 14 P02 | 14min | 2 tasks | 2 files |
 | Phase 15 P01 | 6min | 2 tasks | 3 files |
 | Phase 16 P01 | 3min | 2 tasks | 2 files |
+| Phase 16 P02 | 9min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -119,6 +120,9 @@ Recent decisions affecting current work:
 - [Phase 16]: Watcher CRUD mirrors job engine pattern exactly (same _load/_save/_lock structure)
 - [Phase 16]: string.Template.safe_substitute for passthrough, both ${var} and {{var}} syntax supported
 - [Phase 16]: Nested dict flattening provides both leaf keys and full-path keys for template access
+- [Phase 16]: Session reuse via _session_id in watcher dict prevents session accumulation (Research Pitfall 3)
+- [Phase 16]: HMAC-SHA256 with hmac.compare_digest for timing-safe webhook signature verification
+- [Phase 16]: Feed content parsing cascade: JSON > RSS/Atom > raw text, hash-based change detection
 
 ### Pending Todos
 
@@ -159,5 +163,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-03-14
-Stopped at: Completed 16-01-PLAN.md (Watcher CRUD + Passthrough). 21 new watcher tests passing.
+Stopped at: Completed 16-02-PLAN.md (Smart Processing + Webhooks + Feeds). 47 total watcher tests passing.
 Resume file: None

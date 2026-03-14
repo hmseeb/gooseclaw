@@ -46,6 +46,7 @@ import importlib.util
 import json
 import os
 import re
+import string
 import secrets
 import signal
 import socket
@@ -3750,6 +3751,36 @@ def update_watcher(watcher_id, updates):
     _save_watchers()
     print(f"[watchers] updated: {watcher.get('name', watcher_id)} ({watcher_id})")
     return dict(watcher), ""
+
+
+def _flatten_dict(d, prefix="", sep="_"):
+    """Flatten nested dict: {"a": {"b": 1}} -> {"a_b": "1", "b": "1"}."""
+    items = {}
+    for k, v in d.items():
+        key = f"{prefix}{sep}{k}" if prefix else k
+        if isinstance(v, dict):
+            items.update(_flatten_dict(v, key, sep))
+        else:
+            items[str(k)] = str(v)  # leaf key (unflattened)
+            items[key] = str(v)     # full path key
+    return items
+
+
+def _convert_double_braces(tmpl):
+    """Convert {{var}} syntax to ${var} for string.Template."""
+    return re.sub(r'\{\{(\w+)\}\}', r'${\1}', tmpl)
+
+
+def _process_passthrough(watcher, data):
+    """Tier 1: template transform, no LLM. Returns formatted string."""
+    tmpl = watcher.get("transform", "")
+    if not tmpl:
+        return json.dumps(data, indent=2)[:2000]
+
+    tmpl = _convert_double_braces(tmpl)
+    flat = _flatten_dict(data)
+    t = string.Template(tmpl)
+    return t.safe_substitute(flat)
 
 
 # ── cron scheduler (channel-agnostic, reads goose schedule.json) ─────────────

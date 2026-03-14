@@ -399,6 +399,20 @@ extensions:
     timeout: 300
     bundled: null
     available_tools: []
+  knowledge:
+    enabled: true
+    type: stdio
+    name: Knowledge
+    description: Semantic knowledge base for procedures, integrations, and facts
+    cmd: python3
+    args:
+      - /app/docker/knowledge/server.py
+    envs:
+      KNOWLEDGE_DB_PATH: /data/knowledge/chroma
+    env_keys: []
+    timeout: 300
+    bundled: null
+    available_tools: []
 EXTENSIONS
 fi
 rm -f "$EXTENSIONS_STATE_FILE"
@@ -451,6 +465,24 @@ if [ -f "$TEMPLATE_VERSION_FILE" ]; then
         echo "[upgrade] done"
     fi
 fi
+
+# ─── knowledge base (vector search for system docs) ──────────────────────
+# Re-indexes system namespace on every boot (system.md, onboarding.md, schemas/).
+# Runtime namespace (user facts, integrations) is never wiped.
+
+mkdir -p /data/knowledge/chroma
+
+echo "[knowledge] indexing system knowledge base..."
+runuser -u gooseclaw -- python3 /app/docker/knowledge/indexer.py
+
+if [ -f "$IDENTITY_DIR/memory.md" ] && [ ! -f "$DATA_DIR/knowledge/.memory_migrated" ]; then
+    echo "[knowledge] migrating memory.md to vector store..."
+    runuser -u gooseclaw -- python3 /app/docker/knowledge/migrate_memory.py
+    touch "$DATA_DIR/knowledge/.memory_migrated"
+    echo "[knowledge] memory migration complete"
+fi
+
+export KNOWLEDGE_DB_PATH="/data/knowledge/chroma"
 
 # ─── MOIM (critical rules injected every turn, slim ~100 lines) ────────────
 # Full session context (onboarding, procedures, docs) loads via .goosehints

@@ -3,22 +3,13 @@
 # identity-data is a symlink to /data/identity/ (Railway volume).
 
 # !! CRITICAL: if soul.md below contains "ONBOARDING_NEEDED", you MUST
-# !! run the Onboarding Flow from onboarding.md IMMEDIATELY.
+# !! search the knowledge base for the onboarding flow and run it IMMEDIATELY.
 # !! Do NOT respond casually. Do NOT process the user's message normally.
 # !! Start with the onboarding greeting. This is your highest priority.
-
-# system (full procedures, platform docs, file schemas — all LOCKED)
-@identity-data/system.md
 
 # identity files (agent personality + user profile — EVOLVING, clean data only)
 @identity-data/soul.md
 @identity-data/user.md
-
-# onboarding flow (only active when soul.md contains "ONBOARDING_NEEDED")
-@identity-data/onboarding.md
-
-# factual knowledge (STRUCTURE-LOCKED, clean data only)
-@identity-data/memory.md
 
 # runtime context
 gooseclaw is a personal autonomous AI agent deployed on Railway.
@@ -26,3 +17,20 @@ Identity files are in /data/identity/ (volume-persisted).
 Journal entries go to /data/identity/journal/YYYY-MM-DD.md.
 Learnings go to /data/identity/learnings/ (LEARNINGS.md, ERRORS.md, FEATURE_REQUESTS.md).
 Per-turn critical rules are in turn-rules.md (injected via MOIM, always visible).
+
+# knowledge base (semantic vector search for system docs, memory, procedures)
+# System procedures, platform docs, schemas, and runtime facts are stored in
+# a ChromaDB vector database. Use the Knowledge MCP extension to access them:
+#
+# knowledge_search(query, type?, limit?) - Semantic search across all knowledge.
+#   Types: fact, procedure, preference, integration, schema
+#   Example: knowledge_search("how to store credentials", type="procedure")
+#
+# knowledge_upsert(key, content, type, refs?) - Store or update a runtime fact.
+#   Example: knowledge_upsert("integration.slack", "Slack webhook at ...", "integration")
+#
+# knowledge_get(key) - Exact key lookup (faster than search when you know the key).
+#   Example: knowledge_get("system.rules.credentials-and-security")
+#
+# Do NOT read system.md, memory.md, or onboarding.md directly.
+# Use knowledge_search to find relevant procedures, facts, and integrations on demand.

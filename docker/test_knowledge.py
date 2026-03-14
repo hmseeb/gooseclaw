@@ -496,5 +496,33 @@ class TestMigration(unittest.TestCase):
         self.assertEqual(count, 0)
 
 
+class TestGoosehints(unittest.TestCase):
+    """KB-08: .goosehints no longer references system.md/memory.md/onboarding.md."""
+
+    @classmethod
+    def setUpClass(cls):
+        hints_path = os.path.join(os.path.dirname(__file__), "..", ".goosehints")
+        with open(hints_path) as f:
+            cls.content = f.read()
+
+    def test_no_system_md_reference(self):
+        self.assertNotIn("@identity-data/system.md", self.content)
+
+    def test_no_memory_md_reference(self):
+        self.assertNotIn("@identity-data/memory.md", self.content)
+
+    def test_no_onboarding_md_reference(self):
+        self.assertNotIn("@identity-data/onboarding.md", self.content)
+
+    def test_has_soul_md_reference(self):
+        self.assertIn("@identity-data/soul.md", self.content)
+
+    def test_has_user_md_reference(self):
+        self.assertIn("@identity-data/user.md", self.content)
+
+    def test_has_knowledge_search(self):
+        self.assertIn("knowledge_search", self.content)
+
+
 if __name__ == "__main__":
     unittest.main()

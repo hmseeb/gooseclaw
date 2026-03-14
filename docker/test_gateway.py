@@ -7121,5 +7121,50 @@ class TestUpdateWatcher(unittest.TestCase):
         assert "not found" in err
 
 
+# ── passthrough template processing tests ──────────────────────────────────
+
+class TestPassthroughProcess(unittest.TestCase):
+    """Tests for _process_passthrough()."""
+
+    def test_empty_template_returns_json_dump(self):
+        watcher = {"transform": ""}
+        data = {"repo": "foo", "action": "push"}
+        result = gateway._process_passthrough(watcher, data)
+        parsed = json.loads(result)
+        assert parsed["repo"] == "foo"
+        assert parsed["action"] == "push"
+
+    def test_simple_template(self):
+        watcher = {"transform": "${repo}: ${action}"}
+        data = {"repo": "foo", "action": "push"}
+        result = gateway._process_passthrough(watcher, data)
+        assert result == "foo: push"
+
+    def test_nested_payload_flattened(self):
+        watcher = {"transform": "${repository_name}: ${action}"}
+        data = {"repository": {"name": "foo"}, "action": "push"}
+        result = gateway._process_passthrough(watcher, data)
+        assert result == "foo: push"
+
+    def test_missing_key_safe_substitute(self):
+        watcher = {"transform": "${missing}: ${action}"}
+        data = {"action": "push"}
+        result = gateway._process_passthrough(watcher, data)
+        assert "${missing}" in result
+        assert "push" in result
+
+    def test_double_brace_syntax(self):
+        watcher = {"transform": "{{repo}}: {{action}}"}
+        data = {"repo": "foo", "action": "push"}
+        result = gateway._process_passthrough(watcher, data)
+        assert result == "foo: push"
+
+    def test_truncation(self):
+        watcher = {"transform": ""}
+        data = {"big": "x" * 3000}
+        result = gateway._process_passthrough(watcher, data)
+        assert len(result) <= 2000
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,71 @@
+"""Deploy-time re-indexer for the system namespace.
+
+Reads LOCKED markdown files (system.md, onboarding.md, schemas/*.schema.md),
+chunks them, and indexes into ChromaDB's "system" collection. Leaves the
+"runtime" collection untouched.
+"""
+import os
+import chromadb
+from knowledge.chunker import chunk_file
+
+
+def run_index(client=None, identity_dir=None):
+    """Run the indexing pipeline.
+
+    Args:
+        client: ChromaDB client (defaults to PersistentClient).
+        identity_dir: Path to identity files (defaults to IDENTITY_DIR env).
+    """
+    if identity_dir is None:
+        identity_dir = os.environ.get("IDENTITY_DIR", "/data/identity")
+    if client is None:
+        chroma_path = os.environ.get("KNOWLEDGE_DB_PATH", "/data/knowledge/chroma")
+        client = chromadb.PersistentClient(path=chroma_path)
+
+    # wipe system collection (clean rebuild)
+    try:
+        client.delete_collection("system")
+    except Exception:
+        pass  # collection doesn't exist yet
+    system_col = client.create_collection("system")
+
+    # ensure runtime collection exists (never wiped)
+    client.get_or_create_collection("runtime")
+
+    # chunk LOCKED files
+    chunks = []
+
+    system_md = os.path.join(identity_dir, "system.md")
+    if os.path.exists(system_md):
+        chunks.extend(chunk_file(system_md, "system.md"))
+
+    onboarding_md = os.path.join(identity_dir, "onboarding.md")
+    if os.path.exists(onboarding_md):
+        chunks.extend(chunk_file(onboarding_md, "onboarding.md"))
+
+    schemas_dir = os.path.join(identity_dir, "schemas")
+    if os.path.isdir(schemas_dir):
+        for fname in sorted(os.listdir(schemas_dir)):
+            if fname.endswith(".schema.md"):
+                path = os.path.join(schemas_dir, fname)
+                chunks.extend(chunk_file(path, "schemas/{}".format(fname)))
+
+    if chunks:
+        system_col.add(
+            ids=[c["id"] for c in chunks],
+            documents=[c["text"] for c in chunks],
+            metadatas=[c["metadata"] for c in chunks],
+        )
+
+    print("[knowledge] indexed {} system chunks".format(len(chunks)), flush=True)
+    return len(chunks)
+
+
+def main():
+    """Entry point for deploy-time indexing."""
+    count = run_index()
+    return count
+
+
+if __name__ == "__main__":
+    main()

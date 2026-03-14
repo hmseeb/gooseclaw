@@ -49,7 +49,7 @@ WORKDIR /app
 
 # copy dependencies first for better layer caching (these change rarely)
 COPY docker/requirements.txt /app/docker/requirements.txt
-RUN pip3 install --no-cache-dir --break-system-packages -r /app/docker/requirements.txt
+RUN pip3 install --no-cache-dir -r /app/docker/requirements.txt
 
 # copy application files using specific paths (avoids wildcard COPY)
 COPY docker/ /app/docker/

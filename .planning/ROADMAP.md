@@ -247,7 +247,7 @@ Phase 15 (reference plugin) depends on Phase 14 (outbound media).
   6. .goosehints no longer loads system.md, memory.md, or onboarding.md (token reduction)
   7. memory.md contents migrated to runtime chunks on first boot
   8. MCP extension registered in goose config.yaml and bot can call tools
-**Plans:** 3 plans
+**Plans:** 2/3 plans executed
 
 Plans:
 - [ ] 17-01-PLAN.md -- TDD: Chunker pipeline and deploy-time indexer (KB-01, KB-05, KB-06, KB-09)

@@ -5,18 +5,19 @@
 See: .planning/PROJECT.md (updated 2026-03-13)
 
 **Core value:** A user with zero DevOps knowledge can deploy and configure GooseClaw correctly on the first try
-**Current focus:** v3.0 Rich Media & Channel Flexibility
+**Current focus:** Phase 17 Vector Knowledge Base
 
 ## Current Position
 
-Phase: 16 of 17 (complete)
-Plan: 3 of 3 (done)
-Status: Phase 16 complete. Watcher engine fully integrated with CRUD API, webhook receiver, engine loop, and startup wiring. 50 total watcher tests.
-Last activity: 2026-03-14 - Completed 16-03: Gateway API Integration + Engine Loop
+Phase: 17 of 17
+Plan: 2 of 3
+Status: Plan 17-01 complete. Chunker pipeline and deploy-time indexer with 21 tests.
+Last activity: 2026-03-15 - Completed 17-01: Chunker Pipeline and Deploy-Time Indexer
 
 Progress v2.0: [==========] 100% (10/10 phases complete, shipped)
 Progress v3.0: [==========] 100% (5/5 phases complete)
 Progress v4.0 (watchers): [==========] 100% (3/3 plans complete)
+Progress v5.0 (knowledge): [===-------] 33% (1/3 plans complete)
 
 ## Performance Metrics
 
@@ -57,6 +58,7 @@ Progress v4.0 (watchers): [==========] 100% (3/3 plans complete)
 | Phase 16 P01 | 3min | 2 tasks | 2 files |
 | Phase 16 P02 | 9min | 2 tasks | 2 files |
 | Phase 16 P03 | 7min | 2 tasks | 2 files |
+| Phase 17 P01 | 3min | 1 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -128,6 +130,7 @@ Recent decisions affecting current work:
 - [Phase 16]: Webhook receiver at /api/webhooks/<name> is auth-exempt (public, HMAC per-watcher)
 - [Phase 16]: Engine tick extracted as _watcher_engine_tick() for testability, feed checks in daemon threads
 - [Phase 16]: Initial poll jitter prevents thundering herd on startup
+- [Phase 17]: Two-namespace pattern: system (wiped on deploy) vs runtime (never wiped). Chunk metadata: type/source/section/namespace/refs/key. Hierarchical dot-notation IDs.
 
 ### Pending Todos
 
@@ -170,6 +173,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-03-14
-Stopped at: Completed quick task 6 - /restart command. 4 new tests, 3 files modified.
+Last session: 2026-03-15
+Stopped at: Completed 17-01-PLAN.md
 Resume file: None

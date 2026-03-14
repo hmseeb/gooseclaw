@@ -9,14 +9,14 @@ See: .planning/PROJECT.md (updated 2026-03-13)
 
 ## Current Position
 
-Phase: 16 of 16 (in progress)
-Plan: 2 of 3 (done)
-Status: Phase 16 Plan 02 complete. Smart processing, webhook routing, feed polling with 26 new tests.
-Last activity: 2026-03-14 - Completed 16-02: Smart Processing + Webhooks + Feeds
+Phase: 16 of 16 (complete)
+Plan: 3 of 3 (done)
+Status: Phase 16 complete. Watcher engine fully integrated with CRUD API, webhook receiver, engine loop, and startup wiring. 50 total watcher tests.
+Last activity: 2026-03-14 - Completed 16-03: Gateway API Integration + Engine Loop
 
 Progress v2.0: [==========] 100% (10/10 phases complete, shipped)
 Progress v3.0: [==========] 100% (5/5 phases complete)
-Progress v4.0 (watchers): [======----] 67% (2/3 plans complete)
+Progress v4.0 (watchers): [==========] 100% (3/3 plans complete)
 
 ## Performance Metrics
 
@@ -56,6 +56,7 @@ Progress v4.0 (watchers): [======----] 67% (2/3 plans complete)
 | Phase 15 P01 | 6min | 2 tasks | 3 files |
 | Phase 16 P01 | 3min | 2 tasks | 2 files |
 | Phase 16 P02 | 9min | 2 tasks | 2 files |
+| Phase 16 P03 | 7min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -123,6 +124,10 @@ Recent decisions affecting current work:
 - [Phase 16]: Session reuse via _session_id in watcher dict prevents session accumulation (Research Pitfall 3)
 - [Phase 16]: HMAC-SHA256 with hmac.compare_digest for timing-safe webhook signature verification
 - [Phase 16]: Feed content parsing cascade: JSON > RSS/Atom > raw text, hash-based change detection
+- [Phase 16]: Watcher API endpoints follow same pattern as job API (_check_local_or_auth, handle_create/list/delete/update)
+- [Phase 16]: Webhook receiver at /api/webhooks/<name> is auth-exempt (public, HMAC per-watcher)
+- [Phase 16]: Engine tick extracted as _watcher_engine_tick() for testability, feed checks in daemon threads
+- [Phase 16]: Initial poll jitter prevents thundering herd on startup
 
 ### Pending Todos
 
@@ -164,5 +169,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-03-14
-Stopped at: Completed 16-02-PLAN.md (Smart Processing + Webhooks + Feeds). 47 total watcher tests passing.
+Stopped at: Completed 16-03-PLAN.md (Gateway API Integration + Engine Loop). 50 total watcher tests passing. Phase 16 complete.
 Resume file: None

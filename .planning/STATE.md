@@ -166,9 +166,10 @@ Recent decisions affecting current work:
 | 7 | Replace auto-generated auth token with user-set password | 2026-03-13 | 016c11f | [4-replace-auto-gen...](./quick/4-replace-auto-generated-auth-token-with-u/) |
 | 7 | Replace auto-generated auth token with password auth | 2026-03-13 | 016c11f | quick/4-.../ |
 | 8 | Add /status command showing context window, provider, session info | 2026-03-14 | 1dfacbe | [5-add-status...](./quick/5-add-status-command-showing-context-windo/) |
+| 9 | Add /restart command to bounce goosed without wiping sessions | 2026-03-14 | 1ffefc7 | [6-add-restart...](./quick/6-add-restart-command-to-bounce-goosed-wit/) |
 
 ## Session Continuity
 
 Last session: 2026-03-14
-Stopped at: Completed 16-03-PLAN.md (Gateway API Integration + Engine Loop). 50 total watcher tests passing. Phase 16 complete.
+Stopped at: Completed quick task 6 - /restart command. 4 new tests, 3 files modified.
 Resume file: None

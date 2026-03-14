@@ -13,7 +13,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # python3-yaml pinned via apt; see docker/requirements.txt for pip-based version tracking
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-      curl git python3 python3-yaml ca-certificates jq bzip2 libgomp1 tzdata libssl3 && \
+      curl git python3 python3-pip python3-yaml ca-certificates jq bzip2 libgomp1 tzdata libssl3 && \
     rm -rf /var/lib/apt/lists/*
 
 # install node 20 LTS (ubuntu 22.04 apt ships v12, MCP tools need 18+)

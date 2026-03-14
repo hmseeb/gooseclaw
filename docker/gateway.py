@@ -232,19 +232,21 @@ class ChannelState:
         self._user_locks_lock = threading.Lock()
         self._prewarm_events = {}      # user_id -> Event
         self._greeting_events = {}     # user_id -> Event (set when kick_greeting done)
-        self._queued_messages = {}     # user_id -> list of queued message texts
+        self._queued_messages = {}     # user_id -> list of (text, replay_fn)
         self._queue_lock = threading.Lock()
 
-    def queue_message(self, user_id, text):
-        """Queue a message for processing after the current relay completes."""
+    def queue_message(self, user_id, text, replay_fn=None):
+        """Queue a message for processing after the current relay completes.
+        replay_fn: optional callable() that re-runs the relay for this message.
+        """
         uid = str(user_id)
         with self._queue_lock:
             if uid not in self._queued_messages:
                 self._queued_messages[uid] = []
-            self._queued_messages[uid].append(text)
+            self._queued_messages[uid].append((text, replay_fn))
 
-    def pop_queued_message(self, user_id):
-        """Pop the next queued message for a user, or None if empty."""
+    def pop_queued_replay(self, user_id):
+        """Pop the next queued (text, replay_fn) for a user, or None if empty."""
         uid = str(user_id)
         with self._queue_lock:
             msgs = self._queued_messages.get(uid)
@@ -388,7 +390,9 @@ class BotInstance:
             _pending_greet.wait(timeout=30)
         _chat_lock = self.state.get_user_lock(chat_id)
         if not _chat_lock.acquire(timeout=2):
-            send_telegram_message(bot_token, chat_id, "Still thinking... send /stop to cancel.")
+            _replay = lambda _t=text, _c=chat_id, _bt=bot_token: self._do_message_relay(_c, _t, _bt)
+            self.state.queue_message(chat_id, text, replay_fn=_replay)
+            send_telegram_message(bot_token, chat_id, "got it, i'll get to this next")
             return
         try:
             # download media in relay thread (not poll loop) to keep poll responsive
@@ -509,6 +513,12 @@ class BotInstance:
         finally:
             self.state.pop_active_relay(chat_id)
             _chat_lock.release()
+            # process queued messages
+            _queued = self.state.pop_queued_replay(chat_id)
+            if _queued:
+                _, _replay_fn = _queued
+                if _replay_fn:
+                    threading.Thread(target=_replay_fn, daemon=True).start()
 
     def _poll_loop(self):
         """Long-poll Telegram for updates and relay messages to goose web.
@@ -814,6 +824,8 @@ _telegram_running = False  # True while the Python polling thread is active
 _session_manager = SessionManager(persist_dir=DATA_DIR)
 _telegram_state = ChannelState()
 _legacy_greeting_events = {}  # chat_id -> Event (legacy path kick_greeting sync)
+_media_group_buffer = {}  # media_group_id -> {"chat_id", "text", "refs": [], "timer": Timer, "ts": float}
+_media_group_lock = threading.Lock()
 _command_router = CommandRouter()
 _bot_manager = BotManager()
 
@@ -3893,7 +3905,64 @@ class MediaContent:
     def to_content_block(self):
         if self.kind == "image":
             return {"type": "image", "data": self.to_base64(), "mimeType": self.mime_type}
+        if self.kind == "document":
+            return self._document_content_block()
         return None
+
+    def _document_content_block(self):
+        """Build a content block for document attachments."""
+        fname = self.filename or "file"
+        mime = self.mime_type or "application/octet-stream"
+
+        # text-based files: extract content directly
+        _TEXT_MIMES = {
+            "text/plain", "text/csv", "text/markdown", "text/html",
+            "text/x-python", "text/x-script.python",
+            "application/json", "application/xml", "text/xml",
+            "application/x-yaml", "text/yaml",
+            "application/javascript", "text/javascript",
+        }
+        _TEXT_EXTENSIONS = {
+            ".txt", ".py", ".md", ".csv", ".json", ".yaml", ".yml",
+            ".xml", ".html", ".js", ".ts", ".sh", ".toml", ".ini",
+            ".cfg", ".conf", ".log", ".rst", ".rb", ".go", ".rs",
+            ".java", ".c", ".cpp", ".h", ".hpp", ".css", ".sql",
+        }
+        ext = os.path.splitext(fname)[1].lower() if fname else ""
+        is_text = mime in _TEXT_MIMES or ext in _TEXT_EXTENSIONS or mime.startswith("text/")
+
+        if is_text and self.data:
+            try:
+                text_content = self.data.decode("utf-8", errors="replace")
+                return {"type": "text", "text": f"[File: {fname}]\n```\n{text_content}\n```"}
+            except Exception:
+                pass
+
+        # PDFs: send as base64 document block
+        if mime == "application/pdf" and self.data:
+            return {
+                "type": "document",
+                "source": {
+                    "type": "base64",
+                    "media_type": "application/pdf",
+                    "data": self.to_base64(),
+                },
+            }
+
+        # archives: acknowledge but note file type
+        _ARCHIVE_MIMES = {
+            "application/zip", "application/x-tar", "application/gzip",
+            "application/x-gzip", "application/x-bzip2",
+            "application/x-7z-compressed", "application/x-rar-compressed",
+        }
+        _ARCHIVE_EXTENSIONS = {".zip", ".tar", ".gz", ".bz2", ".7z", ".rar", ".tar.gz", ".tgz"}
+        if mime in _ARCHIVE_MIMES or ext in _ARCHIVE_EXTENSIONS:
+            size_kb = round(self.size / 1024, 1)
+            return {"type": "text", "text": f"[File received: {fname} ({mime}, {size_kb} KB) - archive file, contents not extracted]"}
+
+        # fallback: describe the file
+        size_kb = round(self.size / 1024, 1)
+        return {"type": "text", "text": f"[File received: {fname} ({mime}, {size_kb} KB)]"}
 
 
 class ChannelCapabilities:
@@ -3904,6 +3973,7 @@ class ChannelCapabilities:
         self.supports_files = kwargs.get("supports_files", False)
         self.supports_buttons = kwargs.get("supports_buttons", False)
         self.supports_streaming = kwargs.get("supports_streaming", False)
+        self.typing = kwargs.get("typing", True)
         self.max_file_size = kwargs.get("max_file_size", 0)
         self.max_text_length = kwargs.get("max_text_length", 0)
 
@@ -3932,6 +4002,11 @@ class OutboundAdapter:
     def send_file(self, data, filename="", **kwargs):
         fallback = f"[File: {filename}]" if filename else "[file]"
         return self.send_text(fallback)
+
+    def send_typing(self, chat_id, **kwargs):
+        """Send a typing indicator for the given chat/user. No-op by default.
+        Override in subclasses to provide channel-specific typing feedback."""
+        return None
 
     def send_buttons(self, text, buttons):
         lines = [text, ""]
@@ -3978,6 +4053,10 @@ class TelegramOutboundAdapter(OutboundAdapter):
     def send_file(self, file_bytes, filename="file", mime_type="application/octet-stream"):
         return self._send_media("sendDocument", "document", file_bytes,
                                 filename, mime_type, "")
+
+    def send_typing(self, chat_id, **kwargs):
+        """Send typing indicator via Telegram Bot API."""
+        _send_typing_action(self.bot_token, chat_id)
 
     def _send_media(self, method, field, data, filename, mime_type, caption):
         """Internal: upload media to Telegram via multipart/form-data."""
@@ -4089,10 +4168,11 @@ class ChannelRelay:
     """Relay function wrapper for channel plugins. Manages per-channel sessions,
     command interception, and active relay tracking for /stop cancellation."""
 
-    def __init__(self, channel_name, typing_cb=None):
+    def __init__(self, channel_name, typing_cb=None, adapter=None):
         self._name = channel_name
         self._state = ChannelState()
         self._typing_cb = typing_cb
+        self._adapter = adapter
         # Load any persisted sessions for this channel
         _session_manager.load(channel_name)
 
@@ -4137,17 +4217,25 @@ class ChannelRelay:
         lock_timeout = 2 if send_fn else 120  # can't notify user without send_fn
         if not user_lock.acquire(timeout=lock_timeout):
             if send_fn:
-                send_fn("Still thinking... send /stop to cancel.")
+                _replay = lambda _uid=user_id_or_msg, _t=text, _sf=send_fn: self(_uid, _t, _sf)
+                self._state.queue_message(user_key, text, replay_fn=_replay)
+                send_fn("got it, i'll get to this next")
             return ""
 
         try:
             # Typing indicator loop (CHAN-06)
             typing_stop = threading.Event()
-            if self._typing_cb:
+            # Resolve typing callback: explicit cb > adapter.send_typing > none
+            _typing_fn = self._typing_cb
+            if not _typing_fn and self._adapter:
+                _caps = self._adapter.capabilities()
+                if getattr(_caps, "typing", False):
+                    _typing_fn = lambda uid: self._adapter.send_typing(uid)
+            if _typing_fn:
                 def _typing_loop():
                     while not typing_stop.is_set():
                         try:
-                            self._typing_cb(user_key)
+                            _typing_fn(user_key)
                         except Exception:
                             pass  # buggy callback must not crash relay
                         typing_stop.wait(4)
@@ -4228,6 +4316,12 @@ class ChannelRelay:
         finally:
             typing_stop.set()  # stop typing loop
             user_lock.release()
+            # process queued messages
+            _queued = self._state.pop_queued_replay(user_key)
+            if _queued:
+                _, _replay_fn = _queued
+                if _replay_fn:
+                    threading.Thread(target=_replay_fn, daemon=True).start()
 
     def reset_session(self, user_id):
         """Reset a user's session (for /clear command)."""
@@ -4321,7 +4415,7 @@ def _load_channel(filepath):
             if typing_cb and not callable(typing_cb):
                 print(f"[channels] warn: {name} typing is not callable, ignoring")
                 typing_cb = None
-            relay_fn = ChannelRelay(name, typing_cb=typing_cb)
+            relay_fn = ChannelRelay(name, typing_cb=typing_cb, adapter=adapter)
 
             def _poll_wrapper(_fn, _relay, _stop, _creds):
                 try:
@@ -5961,7 +6055,9 @@ def _telegram_poll_loop(bot_token):
                                 _pending_greet.wait(timeout=30)
                             _chat_lock = _get_chat_lock(_chat_id)
                             if not _chat_lock.acquire(timeout=2):
-                                send_telegram_message(_bt, _chat_id, "Still thinking... send /stop to cancel.")
+                                _mreplay = lambda: _do_media_relay(_text, _chat_id, _bt, _refs)
+                                _telegram_state.queue_message(_chat_id, _text, replay_fn=_mreplay)
+                                send_telegram_message(_bt, _chat_id, "got it, i'll get to this next")
                                 return
                             try:
                                 # download media in relay thread
@@ -6003,6 +6099,12 @@ def _telegram_poll_loop(bot_token):
                                 print(f"[telegram] media relay exception for chat {_chat_id}: {exc}")
                             finally:
                                 _chat_lock.release()
+                                # process queued messages
+                                _mq = _telegram_state.pop_queued_replay(_chat_id)
+                                if _mq:
+                                    _, _mq_fn = _mq
+                                    if _mq_fn:
+                                        threading.Thread(target=_mq_fn, daemon=True).start()
                         threading.Thread(target=_do_media_relay, daemon=True).start()
                     continue
 
@@ -6047,7 +6149,9 @@ def _telegram_poll_loop(bot_token):
                         _chat_lock = _get_chat_lock(_chat_id)
                         if not _chat_lock.acquire(timeout=2):
                             # another relay is running for this chat
-                            send_telegram_message(_bt, _chat_id, "Still thinking... send /stop to cancel.")
+                            _rreplay = lambda: _do_relay(_text, _chat_id, _bt, _media_refs)
+                            _telegram_state.queue_message(_chat_id, _text, replay_fn=_rreplay)
+                            send_telegram_message(_bt, _chat_id, "got it, i'll get to this next")
                             return
                         try:
                             # download media in relay thread
@@ -6168,6 +6272,12 @@ def _telegram_poll_loop(bot_token):
                         finally:
                             _telegram_state.pop_active_relay(_chat_id)
                             _chat_lock.release()
+                            # process queued messages
+                            _rq = _telegram_state.pop_queued_replay(_chat_id)
+                            if _rq:
+                                _, _rq_fn = _rq
+                                if _rq_fn:
+                                    threading.Thread(target=_rq_fn, daemon=True).start()
 
                     threading.Thread(target=_do_relay, daemon=True).start()
                 else:

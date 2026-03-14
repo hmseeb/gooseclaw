@@ -9,7 +9,7 @@ See: .planning/PROJECT.md (updated 2026-03-13)
 
 ## Current Position
 
-Phase: 15 of 15 (complete)
+Phase: 15 of 16 (complete)
 Plan: 1 of 1 (done)
 Status: Phase 15 complete, Discord channel plugin with full media support proves v2 contract
 Last activity: 2026-03-14 - Completed quick task 8: /status command
@@ -125,6 +125,11 @@ Recent decisions affecting current work:
 - Hide internal file references and tool usage from user-facing LLM output (general)
 - Support file attachments and multi-image messages in channels (general)
 - Add typing indicator support to OutboundAdapter for all channels (general)
+- LLM-aware schedules and crons (general)
+
+### Roadmap Evolution
+
+- Phase 16 added: Watcher Engine — Real-time event subscriptions with two-tier architecture (passthrough + smart/LLM)
 
 ### Blockers/Concerns
 

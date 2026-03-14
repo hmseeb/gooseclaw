@@ -39,6 +39,7 @@ import base64
 import collections
 import glob
 import hashlib
+import hmac
 import mimetypes
 import http.client
 import http.server
@@ -60,6 +61,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+import xml.etree.ElementTree as ET
 from http.server import ThreadingHTTPServer
 
 # ── rate limiting ────────────────────────────────────────────────────────────
@@ -3841,6 +3843,172 @@ def _fire_watcher(watcher, data):
         print(f"[watchers] error firing {watcher.get('name', '?')}: {e}")
 
     _save_watchers()
+
+
+def _verify_webhook_signature(secret, body_bytes, signature_header):
+    """Verify HMAC-SHA256 webhook signature. Returns True if valid."""
+    if not signature_header or not signature_header.startswith("sha256="):
+        return False
+    expected = hmac.new(secret.encode(), body_bytes, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(f"sha256={expected}", signature_header)
+
+
+def _handle_webhook_incoming(webhook_name, body, headers=None):
+    """Route incoming webhook to matching watchers. Returns count of matched watchers."""
+    # Parse body
+    if isinstance(body, bytes):
+        body_str = body.decode("utf-8", errors="replace")
+    else:
+        body_str = body
+    body_bytes = body_str.encode("utf-8") if isinstance(body_str, str) else body
+
+    try:
+        payload = json.loads(body_str)
+    except (json.JSONDecodeError, ValueError):
+        payload = {"raw": body_str}
+
+    headers = headers or {}
+
+    # Find matching watchers
+    with _watchers_lock:
+        candidates = [w for w in _watchers
+                      if w.get("type") == "webhook"
+                      and w.get("enabled", True)
+                      and w.get("source", "").endswith(webhook_name)]
+
+    matched = []
+    for w in candidates:
+        # HMAC verification if secret is set
+        secret = w.get("webhook_secret", "")
+        if secret:
+            sig = headers.get("X-Hub-Signature-256", "")
+            if not _verify_webhook_signature(secret, body_bytes, sig):
+                print(f"[watchers] webhook HMAC mismatch for {w.get('name')}")
+                continue
+        matched.append(w)
+
+    # Fire each in a daemon thread
+    for w in matched:
+        t = threading.Thread(target=_fire_watcher, args=(w, payload), daemon=True)
+        t.start()
+
+    return len(matched)
+
+
+def _parse_rss(content):
+    """Parse RSS 2.0 or Atom feed content into list of item dicts."""
+    try:
+        if isinstance(content, bytes):
+            root = ET.fromstring(content.decode("utf-8", errors="replace"))
+        else:
+            root = ET.fromstring(content)
+    except ET.ParseError:
+        return []
+
+    items = []
+
+    # RSS 2.0: channel/item elements
+    for item in root.iter("item"):
+        entry = {}
+        title_el = item.find("title")
+        if title_el is not None and title_el.text:
+            entry["title"] = title_el.text
+        link_el = item.find("link")
+        if link_el is not None and link_el.text:
+            entry["link"] = link_el.text
+        desc_el = item.find("description")
+        if desc_el is not None and desc_el.text:
+            entry["description"] = desc_el.text[:500]
+        if entry:
+            items.append(entry)
+
+    # Atom: entry elements (if no RSS items found)
+    if not items:
+        ns = {"atom": "http://www.w3.org/2005/Atom"}
+        for entry_el in root.iter("{http://www.w3.org/2005/Atom}entry"):
+            entry = {}
+            title_el = entry_el.find("atom:title", ns)
+            if title_el is None:
+                title_el = entry_el.find("{http://www.w3.org/2005/Atom}title")
+            if title_el is not None and title_el.text:
+                entry["title"] = title_el.text
+            link_el = entry_el.find("atom:link", ns)
+            if link_el is None:
+                link_el = entry_el.find("{http://www.w3.org/2005/Atom}link")
+            if link_el is not None:
+                entry["link"] = link_el.get("href", "")
+            summary_el = entry_el.find("atom:summary", ns)
+            if summary_el is None:
+                summary_el = entry_el.find("{http://www.w3.org/2005/Atom}summary")
+            if summary_el is not None and summary_el.text:
+                entry["description"] = summary_el.text[:500]
+            if entry:
+                items.append(entry)
+
+    return items
+
+
+def _parse_feed_content(content, url=""):
+    """Parse feed content: try JSON, then RSS/Atom, then raw text."""
+    if isinstance(content, bytes):
+        text = content.decode("utf-8", errors="replace")
+    else:
+        text = content
+
+    # Try JSON
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Try RSS/Atom
+    rss_items = _parse_rss(content)
+    if rss_items:
+        return rss_items
+
+    # Fall back to raw text
+    return {"text": text[:2000]}
+
+
+def _check_feed_watcher(watcher):
+    """Check a feed watcher for content changes. Fires if hash differs."""
+    url = watcher.get("source", "")
+    if not url:
+        return
+
+    try:
+        resp = urllib.request.urlopen(url, timeout=30)
+        content = resp.read()
+    except Exception as e:
+        watcher["last_error"] = str(e)
+        watcher["last_check"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        _save_watchers()
+        print(f"[watchers] feed error {watcher.get('name')}: {e}")
+        return
+
+    content_hash = hashlib.sha256(content).hexdigest()
+    watcher["last_check"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    if content_hash == watcher.get("last_hash", ""):
+        _save_watchers()
+        return
+
+    watcher["last_hash"] = content_hash
+
+    # Parse content
+    data = _parse_feed_content(content, url)
+
+    # Apply regex filter on list items
+    filter_pattern = watcher.get("filter", "")
+    if filter_pattern and isinstance(data, list):
+        try:
+            pattern = re.compile(filter_pattern, re.IGNORECASE)
+            data = [item for item in data
+                    if pattern.search(json.dumps(item) if isinstance(item, dict) else str(item))]
+        except re.error:
+            pass  # invalid regex, skip filtering
+
+    _fire_watcher(watcher, data)
 
 
 # ── cron scheduler (channel-agnostic, reads goose schedule.json) ─────────────

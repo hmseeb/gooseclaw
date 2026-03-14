@@ -7353,8 +7353,8 @@ class TestWebhookRouting(unittest.TestCase):
     @patch.object(gateway, "_fire_watcher")
     def test_multiple_watchers_same_webhook(self, mock_fire):
         w1 = self._make_webhook_watcher("gh-prs", id="w1")
-        w2 = self._make_webhook_watcher("gh-prs", id="w2", name="gh-prs-2")
-        w2["source"] = "/api/webhooks/gh-prs"
+        w2 = self._make_webhook_watcher("gh-prs", id="w2")
+        w2["name"] = "gh-prs-2"
         with patch.object(gateway, "_watchers", [w1, w2]):
             count = gateway._handle_webhook_incoming("gh-prs", '{"a":1}')
         assert count == 2

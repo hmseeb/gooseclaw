@@ -945,7 +945,12 @@ class TestFireCronJobStripping(unittest.TestCase):
     @patch("gateway.notify_all")
     @patch("gateway._do_rest_relay")
     @patch("gateway._load_recipe", return_value="do the thing")
-    def test_cron_output_strips_goose_banner(self, _recipe, mock_relay, mock_notify):
+    def test_cron_output_not_relayed_as_notification(self, _recipe, mock_relay, mock_notify):
+        """Cron job goose response should NOT be sent via notify_all.
+
+        The recipe handles its own delivery via the `notify` CLI. The goose
+        response text is just confirmation noise.
+        """
         raw = (
             "   __( O)>  banner\n"
             "   \\____)\tsession\n"
@@ -956,23 +961,35 @@ class TestFireCronJobStripping(unittest.TestCase):
         )
         mock_relay.return_value = (raw, None, [])
         gateway._fire_cron_job({"id": "test-cron", "source": "/test"})
-        # check that notify_all was called without the banner
-        call_args = mock_notify.call_args[0][0]
-        assert "__( O)>" not in call_args
-        assert "goose is ready" not in call_args
-        assert "Actual report content" in call_args
+        # notify_all should NOT be called -- recipe delivers via notify CLI
+        mock_notify.assert_not_called()
 
     @patch("gateway.notify_all")
     @patch("gateway._do_rest_relay")
     @patch("gateway._load_recipe", return_value="do the thing")
-    def test_cron_output_not_truncated_at_4000(self, _recipe, mock_relay, mock_notify):
-        """Cron output should allow long content (chunking handled by TG sender)."""
-        long_report = "x" * 10000
-        mock_relay.return_value = (long_report, None, [])
+    def test_cron_job_does_not_send_delivery_confirmation(self, _recipe, mock_relay, mock_notify):
+        """Cron job should NOT send goose's response text as a second notification.
+
+        The recipe already delivers output via the `notify` CLI. The goose
+        response (e.g. "I've delivered the notification") is implementation
+        noise and should be suppressed.
+        """
+        # goose returns a confirmation-style response after running the recipe
+        mock_relay.return_value = ("I've sent the notification to the channel.", None, [])
         gateway._fire_cron_job({"id": "test-cron", "source": "/test"})
+        # notify_all should NOT be called -- the recipe handles its own delivery
+        mock_notify.assert_not_called()
+
+    @patch("gateway.notify_all")
+    @patch("gateway._do_rest_relay")
+    @patch("gateway._load_recipe", return_value="do the thing")
+    def test_cron_job_still_notifies_on_error(self, _recipe, mock_relay, mock_notify):
+        """Cron job should still notify on errors so failures are visible."""
+        mock_relay.return_value = (None, "connection failed", [])
+        gateway._fire_cron_job({"id": "test-cron", "source": "/test"})
+        mock_notify.assert_called_once()
         call_args = mock_notify.call_args[0][0]
-        # should contain the full content, not truncated at 4000
-        assert len(call_args) > 9000
+        assert "failed" in call_args
 
 
 # ── update_job ──────────────────────────────────────────────────────────────
@@ -2545,13 +2562,11 @@ class TestCronNotifyChannel(unittest.TestCase):
     @patch("gateway.notify_all")
     @patch("gateway._do_rest_relay")
     @patch("gateway._load_recipe", return_value="do the thing")
-    def test_cron_job_passes_notify_channel(self, _recipe, mock_relay, mock_notify):
-        """Cron job with notify_channel passes it to notify_all on success."""
+    def test_cron_job_success_does_not_notify(self, _recipe, mock_relay, mock_notify):
+        """Cron job success should NOT call notify_all (recipe handles its own delivery)."""
         mock_relay.return_value = ("output text", None, [])
         gateway._fire_cron_job({"id": "test-cron", "source": "/test", "notify_channel": "telegram"})
-        mock_notify.assert_called_once()
-        _, kwargs = mock_notify.call_args
-        self.assertEqual(kwargs.get("channel"), "telegram")
+        mock_notify.assert_not_called()
 
     @patch("gateway.notify_all")
     @patch("gateway._do_rest_relay")
@@ -2567,13 +2582,11 @@ class TestCronNotifyChannel(unittest.TestCase):
     @patch("gateway.notify_all")
     @patch("gateway._do_rest_relay")
     @patch("gateway._load_recipe", return_value="do the thing")
-    def test_cron_job_no_notify_channel_broadcasts(self, _recipe, mock_relay, mock_notify):
-        """Cron job without notify_channel passes channel=None (broadcast)."""
+    def test_cron_job_success_no_notify_channel_no_broadcast(self, _recipe, mock_relay, mock_notify):
+        """Cron job success without notify_channel should NOT broadcast response."""
         mock_relay.return_value = ("output text", None, [])
         gateway._fire_cron_job({"id": "test-cron", "source": "/test"})
-        mock_notify.assert_called_once()
-        _, kwargs = mock_notify.call_args
-        self.assertIsNone(kwargs.get("channel"))
+        mock_notify.assert_not_called()
 
 
 # ── BotInstance tests ────────────────────────────────────────────────────────

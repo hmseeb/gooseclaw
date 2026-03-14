@@ -179,10 +179,30 @@ Plans:
 **Success Criteria** (what must be TRUE):
   1. Plugin implements OutboundAdapter with send_text, send_image, send_voice, send_file
   2. Plugin declares ChannelCapabilities accurately for the platform
-  3. Media flows end-to-end (user sends image on platform → goose sees it → goose responds with image → user sees it)
+  3. Media flows end-to-end (user sends image on platform -> goose sees it -> goose responds with image -> user sees it)
   4. Adding this plugin required zero changes to gateway core code
   5. Plugin serves as a template for other channels
 **Plans:** 1/1 plans complete
+
+### Phase 16: Watcher Engine
+**Goal**: External events (webhooks, RSS feeds) trigger notifications through a two-tier processing pipeline: passthrough (template substitution) or smart (LLM analysis), delivered to targeted channels via the existing notification bus
+**Depends on**: Phase 15
+**Requirements**: WATCH-01, WATCH-02, WATCH-03, WATCH-04, WATCH-05, WATCH-06, WATCH-07, WATCH-08, WATCH-09, WATCH-10
+**Success Criteria** (what must be TRUE):
+  1. User can create/list/update/delete watchers via /api/watchers CRUD endpoints
+  2. Webhook watchers receive external POSTs at /api/webhooks/<name> and route to matching watchers
+  3. Feed watchers poll URLs at configurable intervals and fire only on content change (SHA-256 hash diff)
+  4. Passthrough tier renders string.Template with safe_substitute on flattened payload (supports both ${var} and {{var}} syntax)
+  5. Smart tier creates a goose session, relays data with user-defined prompt, and delivers LLM response
+  6. All watcher fires deliver via notify_all with optional channel targeting
+  7. Watcher engine background loop polls feed watchers at their configured intervals
+  8. Watchers persist to watchers.json and reload on startup
+**Plans:** 3 plans
+
+Plans:
+- [ ] 16-01-PLAN.md -- TDD: Watcher CRUD, persistence, and passthrough template processing (WATCH-01, WATCH-02, WATCH-03, WATCH-04)
+- [ ] 16-02-PLAN.md -- TDD: Smart processing, fire dispatch, webhook routing, and feed polling (WATCH-05, WATCH-06, WATCH-07, WATCH-08)
+- [ ] 16-03-PLAN.md -- TDD: API endpoints, webhook receiver, engine loop, and startup wiring (WATCH-09, WATCH-10)
 
 ## Progress
 
@@ -211,3 +231,4 @@ Phase 15 (reference plugin) depends on Phase 14 (outbound media).
 | 13. Relay Protocol Upgrade | 2/2 | Complete   | 2026-03-13 | - |
 | 14. Outbound Rich Media | v3.0 | 2/2 | Complete | 2026-03-13 |
 | 15. Reference Channel Plugin | 1/1 | Complete   | 2026-03-13 | - |
+| 16. Watcher Engine | - | 0/3 | Planning | - |

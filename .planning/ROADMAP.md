@@ -197,7 +197,7 @@ Plans:
   6. All watcher fires deliver via notify_all with optional channel targeting
   7. Watcher engine background loop polls feed watchers at their configured intervals
   8. Watchers persist to watchers.json and reload on startup
-**Plans:** 3 plans
+**Plans:** 1/3 plans executed
 
 Plans:
 - [ ] 16-01-PLAN.md -- TDD: Watcher CRUD, persistence, and passthrough template processing (WATCH-01, WATCH-02, WATCH-03, WATCH-04)
@@ -231,4 +231,4 @@ Phase 15 (reference plugin) depends on Phase 14 (outbound media).
 | 13. Relay Protocol Upgrade | 2/2 | Complete   | 2026-03-13 | - |
 | 14. Outbound Rich Media | v3.0 | 2/2 | Complete | 2026-03-13 |
 | 15. Reference Channel Plugin | 1/1 | Complete   | 2026-03-13 | - |
-| 16. Watcher Engine | - | 0/3 | Planning | - |
+| 16. Watcher Engine | 1/3 | In Progress|  | - |

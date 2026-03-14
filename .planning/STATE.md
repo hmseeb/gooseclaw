@@ -9,13 +9,14 @@ See: .planning/PROJECT.md (updated 2026-03-13)
 
 ## Current Position
 
-Phase: 15 of 16 (complete)
-Plan: 1 of 1 (done)
-Status: Phase 15 complete, Discord channel plugin with full media support proves v2 contract
-Last activity: 2026-03-14 - Completed quick task 8: /status command
+Phase: 16 of 16 (in progress)
+Plan: 1 of 3 (done)
+Status: Phase 16 Plan 01 complete. Watcher CRUD + passthrough processing with 21 tests.
+Last activity: 2026-03-14 - Completed 16-01: Watcher CRUD + Passthrough
 
 Progress v2.0: [==========] 100% (10/10 phases complete, shipped)
 Progress v3.0: [==========] 100% (5/5 phases complete)
+Progress v4.0 (watchers): [===-------] 33% (1/3 plans complete)
 
 ## Performance Metrics
 
@@ -53,6 +54,7 @@ Progress v3.0: [==========] 100% (5/5 phases complete)
 | Phase 14 P01 | 4min | 2 tasks | 2 files |
 | Phase 14 P02 | 14min | 2 tasks | 2 files |
 | Phase 15 P01 | 6min | 2 tasks | 3 files |
+| Phase 16 P01 | 3min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -114,6 +116,9 @@ Recent decisions affecting current work:
 - [Phase 14]: Media routing placed after text delivery in all relay paths, own try/except prevents media errors from crashing text delivery
 - [Phase 15]: Import gateway classes via sys.modules __main__ then direct import then fallback stubs for cross-context compatibility
 - [Phase 15]: v2 channel plugin pattern: CHANNEL dict with name, version=2, send, adapter, poll, credentials, setup
+- [Phase 16]: Watcher CRUD mirrors job engine pattern exactly (same _load/_save/_lock structure)
+- [Phase 16]: string.Template.safe_substitute for passthrough, both ${var} and {{var}} syntax supported
+- [Phase 16]: Nested dict flattening provides both leaf keys and full-path keys for template access
 
 ### Pending Todos
 
@@ -153,6 +158,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-03-13
-Stopped at: Completed quick task 4 (password auth). 472 tests passing. Password login page, cookie sessions, no more auto-generated tokens.
+Last session: 2026-03-14
+Stopped at: Completed 16-01-PLAN.md (Watcher CRUD + Passthrough). 21 new watcher tests passing.
 Resume file: None

@@ -2155,6 +2155,9 @@ class TestCustomCommandRegistration(unittest.TestCase):
         self._saved_help = dict(gateway._command_router._help_text)
         # Save loaded channels
         self._saved_channels = dict(gateway._loaded_channels)
+        # Clear router so custom commands don't conflict with built-ins
+        gateway._command_router._handlers.clear()
+        gateway._command_router._help_text.clear()
 
     def tearDown(self):
         # Restore command router state
@@ -2286,6 +2289,16 @@ class TestCustomCommandConflicts(unittest.TestCase):
         self._saved_handlers = dict(gateway._command_router._handlers)
         self._saved_help = dict(gateway._command_router._help_text)
         self._saved_channels = dict(gateway._loaded_channels)
+        # Reset router to only the built-in commands that conflict tests need
+        # (help is built-in, status/ping should NOT be pre-registered)
+        gateway._command_router._handlers = {
+            k: v for k, v in self._saved_handlers.items()
+            if k in ("help", "stop", "clear", "restart", "compact")
+        }
+        gateway._command_router._help_text = {
+            k: v for k, v in self._saved_help.items()
+            if k in ("help", "stop", "clear", "restart", "compact")
+        }
 
     def tearDown(self):
         gateway._command_router._handlers = self._saved_handlers
@@ -3000,6 +3013,17 @@ class TestBotNotification(unittest.TestCase):
 
 class TestBotPairing(unittest.TestCase):
     """Tests for per-bot pairing."""
+
+    def setUp(self):
+        # Save and clear pairing cache to prevent cross-test contamination
+        with gateway._pairing_cache_lock:
+            self._saved_pairing_cache = dict(gateway._pairing_cache)
+            gateway._pairing_cache.clear()
+
+    def tearDown(self):
+        with gateway._pairing_cache_lock:
+            gateway._pairing_cache.clear()
+            gateway._pairing_cache.update(self._saved_pairing_cache)
 
     def test_add_pairing_default_platform(self):
         """_add_pairing_to_config with platform='telegram' writes platform: telegram."""

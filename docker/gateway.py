@@ -4011,6 +4011,74 @@ def _check_feed_watcher(watcher):
     _fire_watcher(watcher, data)
 
 
+# ── watcher engine loop ──────────────────────────────────────────────────────
+
+_WATCHER_TICK_SECONDS = 30
+
+
+def _watcher_engine_tick():
+    """One iteration of the watcher engine: check due feed watchers."""
+    import random as _random
+    try:
+        now = time.time()
+        with _watchers_lock:
+            candidates = [w for w in _watchers
+                          if w.get("type") == "feed"
+                          and w.get("enabled", True)]
+
+        for w in candidates:
+            poll_seconds = w.get("poll_seconds", 300)
+            last_ts = w.get("last_check_ts", 0)
+
+            # Jitter on first poll: stagger initial checks
+            if last_ts == 0:
+                jitter = _random.randint(0, min(poll_seconds, 60))
+                w["last_check_ts"] = now - poll_seconds + jitter
+                last_ts = w["last_check_ts"]
+
+            if now - last_ts >= poll_seconds:
+                w["last_check_ts"] = now
+                t = threading.Thread(target=_check_feed_watcher, args=(w,), daemon=True)
+                t.start()
+    except Exception as e:
+        print(f"[watchers] engine tick error: {e}", file=sys.stderr)
+
+
+def _watcher_engine_loop():
+    """Background loop that periodically ticks the watcher engine."""
+    global _watcher_engine_running
+    _watcher_engine_running = True
+    print("[watchers] engine started")
+    while _watcher_engine_running:
+        _watcher_engine_tick()
+        # Sleep in short increments so we can stop promptly
+        for _ in range(6):
+            if not _watcher_engine_running:
+                break
+            time.sleep(5)
+    print("[watchers] engine stopped")
+
+
+def start_watcher_engine():
+    """Start the watcher engine background thread."""
+    global _watcher_engine_running
+    if _watcher_engine_running:
+        return
+    with _watchers_lock:
+        count = len(_watchers)
+    if count == 0:
+        return
+    t = threading.Thread(target=_watcher_engine_loop, daemon=True)
+    t.start()
+    print(f"[watchers] engine started with {count} watcher(s)")
+
+
+def stop_watcher_engine():
+    """Stop the watcher engine background thread."""
+    global _watcher_engine_running
+    _watcher_engine_running = False
+
+
 # ── cron scheduler (channel-agnostic, reads goose schedule.json) ─────────────
 #
 # Replaces goose's built-in scheduler (which only runs inside `goose gateway`,
@@ -7664,6 +7732,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                 start_job_engine()
                 start_cron_scheduler()
                 start_memory_writer()
+                _load_watchers()
+                start_watcher_engine()
             threading.Thread(target=_restart, daemon=True).start()
 
             resp = {"success": True, "message": "saved. agent is restarting..."}
@@ -7729,6 +7799,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             start_job_engine()
             start_cron_scheduler()
             start_memory_writer()
+            _load_watchers()
+            start_watcher_engine()
         threading.Thread(target=_restart, daemon=True).start()
         return True
 
@@ -8883,6 +8955,10 @@ def main():
         # start memory writer (end-of-session learning)
         start_memory_writer()
 
+        # load watchers and start watcher engine
+        _load_watchers()
+        start_watcher_engine()
+
         # load channel plugins from /data/channels/
         _load_all_channels()
 
@@ -8920,10 +8996,11 @@ def main():
         _remove_pid("goosed")
         # stop all telegram bots via BotManager
         _bot_manager.stop_all()
-        # stop session watcher, job engine, cron scheduler
+        # stop session watcher, job engine, cron scheduler, watcher engine
         _session_watcher_running = False
         _job_engine_running = False
         _cron_scheduler_running = False
+        stop_watcher_engine()
         print("[gateway] shutdown complete")
 
     signal.signal(signal.SIGTERM, shutdown)

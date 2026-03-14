@@ -7606,6 +7606,136 @@ class TestWatcherAPI(unittest.TestCase):
         self.assertIn("error", resp)
 
 
+class TestWatcherEngineLoop(unittest.TestCase):
+    """Tests for watcher engine tick logic."""
+
+    def _make_feed_watcher(self, **overrides):
+        w = {
+            "id": "f1", "name": "test-feed", "type": "feed",
+            "source": "https://example.com/feed.json", "smart": False,
+            "channel": "telegram", "enabled": True, "transform": "",
+            "prompt": "", "filter": "", "poll_seconds": 60,
+            "last_hash": "", "last_check": None, "last_check_ts": 0,
+            "last_fired": None, "fire_count": 0, "last_error": None,
+        }
+        w.update(overrides)
+        return w
+
+    def _make_webhook_watcher(self, **overrides):
+        w = {
+            "id": "wh1", "name": "test-hook", "type": "webhook",
+            "source": "/api/webhooks/test", "smart": False,
+            "channel": "telegram", "enabled": True, "transform": "",
+            "prompt": "", "filter": "", "poll_seconds": 300,
+            "last_hash": "", "last_check": None, "last_check_ts": 0,
+            "last_fired": None, "fire_count": 0, "last_error": None,
+        }
+        w.update(overrides)
+        return w
+
+    def setUp(self):
+        self._orig = list(gateway._watchers)
+
+    def tearDown(self):
+        with gateway._watchers_lock:
+            gateway._watchers[:] = self._orig
+
+    @patch("gateway._check_feed_watcher")
+    def test_engine_checks_feed_at_interval(self, mock_check):
+        """Feed watcher past its poll interval should be checked."""
+        # Set last_check_ts far in the past (clearly due)
+        w = self._make_feed_watcher(poll_seconds=60, last_check_ts=time.time() - 120)
+        with gateway._watchers_lock:
+            gateway._watchers[:] = [w]
+        gateway._watcher_engine_tick()
+        # Thread spawned by tick, give it a moment
+        time.sleep(0.1)
+        mock_check.assert_called_once()
+
+    @patch("gateway._check_feed_watcher")
+    def test_engine_skips_feed_before_interval(self, mock_check):
+        """Feed watcher recently checked should be skipped."""
+        w = self._make_feed_watcher(poll_seconds=300, last_check_ts=time.time())
+        with gateway._watchers_lock:
+            gateway._watchers[:] = [w]
+        gateway._watcher_engine_tick()
+        mock_check.assert_not_called()
+
+    @patch("gateway._check_feed_watcher")
+    def test_engine_skips_disabled_feed(self, mock_check):
+        """Disabled feed watcher should be skipped."""
+        w = self._make_feed_watcher(enabled=False, last_check_ts=0)
+        with gateway._watchers_lock:
+            gateway._watchers[:] = [w]
+        gateway._watcher_engine_tick()
+        mock_check.assert_not_called()
+
+    @patch("gateway._check_feed_watcher")
+    def test_engine_skips_webhook_watchers(self, mock_check):
+        """Webhook watchers should not be polled."""
+        w = self._make_webhook_watcher(last_check_ts=0)
+        with gateway._watchers_lock:
+            gateway._watchers[:] = [w]
+        gateway._watcher_engine_tick()
+        mock_check.assert_not_called()
+
+
+class TestWatcherStartupWiring(unittest.TestCase):
+    """Tests that startup loads watchers and starts engine."""
+
+    @patch("gateway.start_telegram_gateway")
+    @patch("gateway._load_all_channels")
+    @patch("gateway.start_memory_writer")
+    @patch("gateway.start_cron_scheduler")
+    @patch("gateway.start_job_engine")
+    @patch("gateway.start_session_watcher")
+    @patch("gateway.start_goose_web")
+    @patch("gateway.goose_health_monitor")
+    @patch("gateway.start_watcher_engine")
+    @patch("gateway._load_watchers")
+    @patch("gateway.is_configured", return_value=True)
+    @patch("gateway.load_setup", return_value={"provider": "openai"})
+    @patch("gateway.apply_config")
+    def test_startup_calls_load_watchers(self, _apply, _load_setup, _is_conf,
+                                          mock_load_w, _start_we, _health,
+                                          _goose, _sess, _job, _cron, _mem,
+                                          _channels, _tg):
+        """main() should call _load_watchers during startup."""
+        with patch("gateway.ThreadingHTTPServer"):
+            with patch("signal.signal"):
+                try:
+                    gateway.main()
+                except (SystemExit, Exception):
+                    pass
+        mock_load_w.assert_called_once()
+
+    @patch("gateway.start_telegram_gateway")
+    @patch("gateway._load_all_channels")
+    @patch("gateway.start_memory_writer")
+    @patch("gateway.start_cron_scheduler")
+    @patch("gateway.start_job_engine")
+    @patch("gateway.start_session_watcher")
+    @patch("gateway.start_goose_web")
+    @patch("gateway.goose_health_monitor")
+    @patch("gateway.start_watcher_engine")
+    @patch("gateway._load_watchers")
+    @patch("gateway.is_configured", return_value=True)
+    @patch("gateway.load_setup", return_value={"provider": "openai"})
+    @patch("gateway.apply_config")
+    def test_startup_calls_start_watcher_engine(self, _apply, _load_setup, _is_conf,
+                                                 _load_w, mock_start_we, _health,
+                                                 _goose, _sess, _job, _cron, _mem,
+                                                 _channels, _tg):
+        """main() should call start_watcher_engine during startup."""
+        with patch("gateway.ThreadingHTTPServer"):
+            with patch("signal.signal"):
+                try:
+                    gateway.main()
+                except (SystemExit, Exception):
+                    pass
+        mock_start_we.assert_called_once()
+
+
 class TestWebhookEndpoint(unittest.TestCase):
     """Tests for webhook receiver endpoint."""
 

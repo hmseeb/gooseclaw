@@ -135,6 +135,7 @@ Recent decisions affecting current work:
 - Support file attachments and multi-image messages in channels (general)
 - Add typing indicator support to OutboundAdapter for all channels (general)
 - LLM-aware schedules and crons (general)
+- Investigate Goose multi-agent spawning with goosed (general)
 
 ### Roadmap Evolution
 

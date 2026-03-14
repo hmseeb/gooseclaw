@@ -1688,6 +1688,79 @@ class TestGeneralizedCommandHandlers(unittest.TestCase):
         send_fn.assert_called_once()
         self.assertIn("/help", send_fn.call_args[0][0])
 
+    def test_restart_calls_restart_without_session_pop(self):
+        """_handle_cmd_restart restarts engine, kills relay, but keeps session."""
+        state = gateway.ChannelState()
+        mock_sock = MagicMock()
+        cancel_event = threading.Event()
+        state.set_active_relay("user1", [mock_sock, cancel_event])
+        gateway._session_manager.set("slack", "user1", "sid_1")
+
+        send_fn = MagicMock()
+        ctx = {
+            "channel": "slack",
+            "user_id": "user1",
+            "send_fn": send_fn,
+            "channel_state": state,
+        }
+        with patch("gateway._restart_goose_and_prewarm") as mock_restart:
+            gateway._handle_cmd_restart(ctx)
+
+        # restart was triggered
+        mock_restart.assert_not_called()  # called via Thread, not directly
+        # relay was killed
+        self.assertIsNone(state.pop_active_relay("user1"))
+        # send_fn called with a message about restarting
+        send_fn.assert_called_once()
+        self.assertIn("restart", send_fn.call_args[0][0].lower())
+        # session is STILL there (NOT popped)
+        self.assertEqual(gateway._session_manager.get("slack", "user1"), "sid_1")
+
+    def test_restart_does_not_pop_session(self):
+        """Contrast: /restart keeps session, /clear removes it."""
+        gateway._session_manager.set("slack", "user_r", "sid_r")
+        send_fn = MagicMock()
+        ctx = {
+            "channel": "slack",
+            "user_id": "user_r",
+            "send_fn": send_fn,
+            "channel_state": gateway.ChannelState(),
+        }
+        # /restart preserves session
+        with patch("gateway._restart_goose_and_prewarm"):
+            gateway._handle_cmd_restart(ctx)
+        self.assertEqual(gateway._session_manager.get("slack", "user_r"), "sid_r")
+
+        # /clear removes session
+        with patch("gateway._restart_goose_and_prewarm"):
+            gateway._handle_cmd_clear(ctx)
+        self.assertIsNone(gateway._session_manager.get("slack", "user_r"))
+
+    def test_restart_registered_on_router(self):
+        """_command_router recognizes /restart."""
+        self.assertTrue(gateway._command_router.is_command("/restart"))
+
+    def test_restart_falls_back_to_telegram(self):
+        """_handle_cmd_restart falls back to _telegram_state when no ctx keys."""
+        mock_sock = MagicMock()
+        cancel_event = threading.Event()
+        gateway._telegram_state.set_active_relay("user_t", [mock_sock, cancel_event])
+        gateway._session_manager.set("telegram", "user_t", "sid_t")
+
+        send_fn = MagicMock()
+        ctx = {
+            "user_id": "user_t",
+            "send_fn": send_fn,
+        }
+        with patch("gateway._restart_goose_and_prewarm"):
+            gateway._handle_cmd_restart(ctx)
+
+        # used _telegram_state
+        self.assertIsNone(gateway._telegram_state.pop_active_relay("user_t"))
+        # session preserved
+        self.assertEqual(gateway._session_manager.get("telegram", "user_t"), "sid_t")
+        send_fn.assert_called_once()
+
 
 # ── ChannelRelay Command Interception (CHAN-01) ──────────────────────────────
 

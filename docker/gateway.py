@@ -7465,10 +7465,6 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(302)
             self.send_header("Location", "/setup")
             self.end_headers()
-        elif path.startswith("/web"):
-            # strip /web prefix and proxy to goosed
-            self.path = path[4:] or "/"
-            self.proxy_to_goose()
         else:
             self.proxy_to_goose()
 

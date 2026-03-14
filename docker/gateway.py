@@ -5988,6 +5988,100 @@ def _generate_and_store_pair_code():
 
 # ── telegram polling loop ───────────────────────────────────────────────────
 
+def _flush_media_group(group_id, bot_token):
+    """Flush a buffered media group: combine all refs and relay as one message."""
+    with _media_group_lock:
+        group = _media_group_buffer.pop(group_id, None)
+    if not group:
+        return
+
+    chat_id = group["chat_id"]
+    text = group["text"]
+    refs = group["refs"]
+
+    paired_ids = get_paired_chat_ids()
+    if chat_id not in paired_ids:
+        return
+
+    def _do_group_relay(_text=text, _chat_id=chat_id, _bt=bot_token, _refs=refs):
+        _memory_touch(_chat_id)
+        _pending_greet = _legacy_greeting_events.get(str(_chat_id))
+        if _pending_greet:
+            _pending_greet.wait(timeout=30)
+        _chat_lock = _get_chat_lock(_chat_id)
+        if not _chat_lock.acquire(timeout=2):
+            _mreplay = lambda: _do_group_relay(_text, _chat_id, _bt, _refs)
+            _telegram_state.queue_message(_chat_id, _text, replay_fn=_mreplay)
+            send_telegram_message(_bt, _chat_id, "got it, i'll get to this next")
+            return
+        try:
+            downloaded = []
+            for ref in _refs:
+                file_bytes, file_path = _download_telegram_file(_bt, ref["file_id"])
+                if file_bytes is not None:
+                    mc = _make_media_content(
+                        ref.get("media_key", "document"),
+                        file_bytes, file_path,
+                        mime_hint=ref.get("mime_hint"),
+                        filename=ref.get("filename"),
+                    )
+                    downloaded.append(mc)
+                else:
+                    print(f"[telegram] media group download failed for {ref.get('media_key')}: {file_path}")
+            _send_typing_action(_bt, _chat_id)
+            session_id = _get_session_id(_chat_id)
+            _inbound = InboundMessage(user_id=_chat_id, text=_text, channel="telegram")
+            _inbound.media = downloaded
+            _leg_cb = _build_content_blocks(_text, _inbound) if _inbound.has_media else None
+
+            _cancelled = threading.Event()
+            _sock_ref = [None, _cancelled]
+            _telegram_state.set_active_relay(_chat_id, _sock_ref)
+
+            _tg_setup = load_setup()
+            _tg_verbosity = get_verbosity_for_channel(_tg_setup, "telegram") if _tg_setup else "balanced"
+
+            typing_stop = threading.Event()
+            def _typing_loop():
+                while not typing_stop.is_set():
+                    _send_typing_action(_bt, _chat_id)
+                    typing_stop.wait(4)
+            typing_thread = threading.Thread(target=_typing_loop, daemon=True)
+            typing_thread.start()
+
+            try:
+                response_text, error, _resp_media = _relay_to_goose_web(
+                    _text, session_id, chat_id=_chat_id, channel="telegram",
+                    content_blocks=_leg_cb, sock_ref=_sock_ref,
+                )
+                if _cancelled.is_set():
+                    pass
+                elif error:
+                    send_telegram_message(_bt, _chat_id, f"Error: {error}")
+                elif response_text:
+                    send_telegram_message(_bt, _chat_id, response_text)
+                if _resp_media:
+                    try:
+                        _adapter = TelegramOutboundAdapter(_bt, _chat_id)
+                        _route_media_blocks(_resp_media, _adapter)
+                    except Exception as _media_exc:
+                        print(f"[telegram] media routing error: {_media_exc}")
+            finally:
+                typing_stop.set()
+                _telegram_state.pop_active_relay(_chat_id)
+        except Exception as exc:
+            print(f"[telegram] media group relay exception for chat {_chat_id}: {exc}")
+        finally:
+            _chat_lock.release()
+            _mq = _telegram_state.pop_queued_replay(_chat_id)
+            if _mq:
+                _, _mq_fn = _mq
+                if _mq_fn:
+                    threading.Thread(target=_mq_fn, daemon=True).start()
+
+    threading.Thread(target=_do_group_relay, daemon=True).start()
+
+
 def _telegram_poll_loop(bot_token):
     """Long-poll telegram for updates and relay messages to goose web.
 
@@ -6041,6 +6135,34 @@ def _telegram_poll_loop(bot_token):
                                     "mime_hint": mime_hint,
                                     "filename": fname,
                                 })
+
+                # ── media group buffering ──
+                # Telegram sends multi-image messages as separate updates with
+                # the same media_group_id. Buffer them and flush after ~1s.
+                mg_id = msg.get("media_group_id")
+                if mg_id and has_media and media_refs:
+                    with _media_group_lock:
+                        if mg_id in _media_group_buffer:
+                            # add refs to existing group, reset timer
+                            group = _media_group_buffer[mg_id]
+                            group["refs"].extend(media_refs)
+                            if not group["text"] and text:
+                                group["text"] = text
+                            if group.get("timer"):
+                                group["timer"].cancel()
+                        else:
+                            _media_group_buffer[mg_id] = {
+                                "chat_id": chat_id,
+                                "text": text or msg.get("caption", "").strip(),
+                                "refs": list(media_refs),
+                            }
+                            group = _media_group_buffer[mg_id]
+                        # set/reset 1s flush timer
+                        timer = threading.Timer(1.0, _flush_media_group, args=(mg_id, bot_token))
+                        timer.daemon = True
+                        group["timer"] = timer
+                        timer.start()
+                    continue
 
                 # media-only from paired users: relay (no MEDIA_REPLY)
                 # unpaired users with media: silently ignore

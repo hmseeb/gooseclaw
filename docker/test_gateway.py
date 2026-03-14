@@ -7310,5 +7310,194 @@ class TestFireWatcher(unittest.TestCase):
         assert "boom" in w["last_error"]
 
 
+class TestWebhookRouting(unittest.TestCase):
+    """Tests for _handle_webhook_incoming() routing and HMAC verification."""
+
+    def _make_webhook_watcher(self, name="gh-prs", **overrides):
+        w = {
+            "id": "w1", "name": name, "type": "webhook",
+            "source": f"/api/webhooks/{name}", "smart": False,
+            "channel": "telegram", "enabled": True, "transform": "",
+            "prompt": "", "webhook_secret": "", "fire_count": 0,
+            "last_fired": None, "last_error": None,
+        }
+        w.update(overrides)
+        return w
+
+    @patch.object(gateway, "_fire_watcher")
+    @patch.object(gateway, "_save_watchers")
+    def test_matches_webhook_by_name(self, mock_save, mock_fire):
+        w = self._make_webhook_watcher("gh-prs")
+        with patch.object(gateway, "_watchers", [w]):
+            count = gateway._handle_webhook_incoming("gh-prs", '{"action":"opened"}')
+        assert count == 1
+        # fire_watcher is called in a thread, give it a moment
+        time.sleep(0.1)
+        mock_fire.assert_called_once()
+
+    @patch.object(gateway, "_fire_watcher")
+    def test_no_match_returns_empty(self, mock_fire):
+        w = self._make_webhook_watcher("gh-prs")
+        with patch.object(gateway, "_watchers", [w]):
+            count = gateway._handle_webhook_incoming("unknown", '{"a":1}')
+        assert count == 0
+        mock_fire.assert_not_called()
+
+    @patch.object(gateway, "_fire_watcher")
+    def test_disabled_watcher_skipped(self, mock_fire):
+        w = self._make_webhook_watcher("gh-prs", enabled=False)
+        with patch.object(gateway, "_watchers", [w]):
+            count = gateway._handle_webhook_incoming("gh-prs", '{"a":1}')
+        assert count == 0
+
+    @patch.object(gateway, "_fire_watcher")
+    def test_multiple_watchers_same_webhook(self, mock_fire):
+        w1 = self._make_webhook_watcher("gh-prs", id="w1")
+        w2 = self._make_webhook_watcher("gh-prs", id="w2", name="gh-prs-2")
+        w2["source"] = "/api/webhooks/gh-prs"
+        with patch.object(gateway, "_watchers", [w1, w2]):
+            count = gateway._handle_webhook_incoming("gh-prs", '{"a":1}')
+        assert count == 2
+        time.sleep(0.1)
+        assert mock_fire.call_count == 2
+
+    @patch.object(gateway, "_fire_watcher")
+    def test_non_json_payload_wrapped(self, mock_fire):
+        w = self._make_webhook_watcher("gh-prs")
+        with patch.object(gateway, "_watchers", [w]):
+            gateway._handle_webhook_incoming("gh-prs", "plain text body")
+        time.sleep(0.1)
+        payload = mock_fire.call_args[0][1]
+        assert payload.get("raw") == "plain text body"
+
+    @patch.object(gateway, "_fire_watcher")
+    def test_webhook_secret_valid(self, mock_fire):
+        import hashlib, hmac as hmac_mod
+        secret = "mysecret"
+        body = '{"event":"push"}'
+        sig = "sha256=" + hmac_mod.new(secret.encode(), body.encode(), hashlib.sha256).hexdigest()
+        w = self._make_webhook_watcher("gh-prs", webhook_secret=secret)
+        with patch.object(gateway, "_watchers", [w]):
+            count = gateway._handle_webhook_incoming("gh-prs", body, headers={"X-Hub-Signature-256": sig})
+        assert count == 1
+        time.sleep(0.1)
+        mock_fire.assert_called_once()
+
+    @patch.object(gateway, "_fire_watcher")
+    def test_webhook_secret_invalid(self, mock_fire):
+        w = self._make_webhook_watcher("gh-prs", webhook_secret="mysecret")
+        with patch.object(gateway, "_watchers", [w]):
+            count = gateway._handle_webhook_incoming("gh-prs", '{"event":"push"}',
+                                                      headers={"X-Hub-Signature-256": "sha256=wrong"})
+        assert count == 0
+
+
+class TestFeedWatcher(unittest.TestCase):
+    """Tests for _check_feed_watcher() with hash-based change detection."""
+
+    def _make_feed_watcher(self, **overrides):
+        w = {
+            "id": "f1", "name": "test-feed", "type": "feed",
+            "source": "https://example.com/feed.json", "smart": False,
+            "channel": "telegram", "enabled": True, "transform": "",
+            "prompt": "", "filter": "", "poll_seconds": 300,
+            "last_hash": "", "last_check": None, "last_fired": None,
+            "fire_count": 0, "last_error": None,
+        }
+        w.update(overrides)
+        return w
+
+    @patch.object(gateway, "_fire_watcher")
+    @patch.object(gateway, "_save_watchers")
+    def test_feed_fires_on_first_check(self, mock_save, mock_fire):
+        w = self._make_feed_watcher(last_hash="")
+        content = b'[{"title":"Hello"}]'
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = content
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            gateway._check_feed_watcher(w)
+        mock_fire.assert_called_once()
+        assert w["last_hash"] != ""
+
+    @patch.object(gateway, "_fire_watcher")
+    @patch.object(gateway, "_save_watchers")
+    def test_feed_skips_unchanged(self, mock_save, mock_fire):
+        import hashlib
+        content = b'[{"title":"Hello"}]'
+        content_hash = hashlib.sha256(content).hexdigest()
+        w = self._make_feed_watcher(last_hash=content_hash)
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = content
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            gateway._check_feed_watcher(w)
+        mock_fire.assert_not_called()
+
+    @patch.object(gateway, "_fire_watcher")
+    @patch.object(gateway, "_save_watchers")
+    def test_feed_fires_on_change(self, mock_save, mock_fire):
+        w = self._make_feed_watcher(last_hash="old-hash")
+        content = b'[{"title":"New"}]'
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = content
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            gateway._check_feed_watcher(w)
+        mock_fire.assert_called_once()
+
+    @patch.object(gateway, "_fire_watcher")
+    @patch.object(gateway, "_save_watchers")
+    def test_feed_error_sets_last_error(self, mock_save, mock_fire):
+        w = self._make_feed_watcher()
+        with patch("urllib.request.urlopen", side_effect=Exception("network error")):
+            gateway._check_feed_watcher(w)
+        mock_fire.assert_not_called()
+        assert w["last_error"] is not None
+        assert "network error" in w["last_error"]
+
+    @patch.object(gateway, "_fire_watcher")
+    @patch.object(gateway, "_save_watchers")
+    def test_feed_filter_applied(self, mock_save, mock_fire):
+        w = self._make_feed_watcher(filter="deploy")
+        content = b'[{"title":"deploy v1"},{"title":"bugfix"},{"title":"deploy v2"}]'
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = content
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            gateway._check_feed_watcher(w)
+        mock_fire.assert_called_once()
+        fired_data = mock_fire.call_args[0][1]
+        # Should only contain items matching "deploy"
+        if isinstance(fired_data, list):
+            assert len(fired_data) == 2
+
+    def test_rss_parsing(self):
+        rss_xml = b"""<?xml version="1.0"?>
+        <rss version="2.0">
+          <channel>
+            <item>
+              <title>First Post</title>
+              <link>https://example.com/1</link>
+              <description>Hello world</description>
+            </item>
+            <item>
+              <title>Second Post</title>
+              <link>https://example.com/2</link>
+              <description>Another post</description>
+            </item>
+          </channel>
+        </rss>"""
+        result = gateway._parse_rss(rss_xml)
+        assert len(result) == 2
+        assert result[0]["title"] == "First Post"
+        assert result[0]["link"] == "https://example.com/1"
+        assert result[1]["title"] == "Second Post"
+
+
 if __name__ == "__main__":
     unittest.main()

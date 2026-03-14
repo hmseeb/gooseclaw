@@ -106,9 +106,11 @@ class TestKnowledgeSearch(_ServerTestBase):
         self.assertTrue(has_system or has_runtime, "Should find results from at least one collection")
 
     def test_search_no_results(self):
-        # Use an empty ephemeral client
-        self.system_col.delete(ids=["sys.platform", "sys.rules.security", "sys.tools.jobs"])
-        self.runtime_col.delete(ids=["rt.fireflies"])
+        # Use uniquely-named empty collections (EphemeralClient shares state by collection name)
+        import docker.knowledge.server as srv
+        empty_client = chromadb.EphemeralClient()
+        srv.system_col = empty_client.get_or_create_collection("system_empty_test")
+        srv.runtime_col = empty_client.get_or_create_collection("runtime_empty_test")
 
         from docker.knowledge.server import knowledge_search
 

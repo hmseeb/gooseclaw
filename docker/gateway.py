@@ -4373,6 +4373,8 @@ def _fire_cron_job(job):
     # The recipe delivers its own output via the `notify` CLI.
     # Do NOT relay the goose response text, it's just delivery confirmation noise
     # (e.g. "I've sent the notification") that leaks implementation details.
+    if response_text:
+        print(f"[cron] {job_id} response (not relayed): {response_text[:200]}")
 
     print(f"[cron] job {job_id} completed")
 

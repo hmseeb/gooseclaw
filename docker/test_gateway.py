@@ -991,6 +991,18 @@ class TestFireCronJobStripping(unittest.TestCase):
         call_args = mock_notify.call_args[0][0]
         assert "failed" in call_args
 
+    @patch("gateway.notify_all")
+    @patch("gateway._do_rest_relay")
+    @patch("gateway._load_recipe", return_value="do the thing")
+    def test_cron_job_logs_response_for_debugging(self, _recipe, mock_relay, mock_notify):
+        """Cron job should print the response text for debug visibility."""
+        mock_relay.return_value = ("I sent the notification.", None, [])
+        with patch("builtins.print") as mock_print:
+            gateway._fire_cron_job({"id": "test-cron", "source": "/test"})
+        # check that the debug line was printed
+        printed = [str(c) for c in mock_print.call_args_list]
+        assert any("response (not relayed)" in s for s in printed)
+
 
 # ── update_job ──────────────────────────────────────────────────────────────
 

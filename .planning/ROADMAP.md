@@ -69,9 +69,10 @@
   5. Recovery secret is written to /data/recovery_secret (file only), never printed to container stdout/stderr
   6. POST requests larger than 1MB are rejected with HTTP 413 before body is read into memory
   7. All HTTP responses include Referrer-Policy, Permissions-Policy, and Cross-Origin-Opener-Policy headers
-**Plans**: 3 plans
+**Plans**: 4 plans
 
 Plans:
+- [ ] 18-00: Test scaffolding with failing tests for all 8 requirements (Wave 0)
 - [ ] 18-01: Shell injection fixes across secret.sh, entrypoint.sh, and gateway.py _run_script (SEC-01, SEC-02, SEC-03)
 - [ ] 18-02: PBKDF2 password hashing with lazy SHA-256 migration (SEC-04, SEC-05)
 - [ ] 18-03: Recovery secret leak fix, request body limits, HTTP security headers (SEC-06, SEC-07, HARD-04)
@@ -151,7 +152,7 @@ Security fixes first (18), then tests validate fixed code (19), then hardening w
 | 15. Reference Channel Plugin | v3.0 | 1/1 | Complete | 2026-03-13 |
 | 16. Watcher Engine | v3.0 | 3/3 | Complete | 2026-03-14 |
 | 17. Vector Knowledge Base | v3.0 | 3/3 | Complete | 2026-03-15 |
-| 18. Security Foundations | v4.0 | 0/3 | Not started | - |
+| 18. Security Foundations | v4.0 | 0/4 | Not started | - |
 | 19. Test Infrastructure and Coverage | v4.0 | 0/4 | Not started | - |
 | 20. Infrastructure Hardening | v4.0 | 0/3 | Not started | - |
 | 21. End-to-End Validation | v4.0 | 0/1 | Not started | - |

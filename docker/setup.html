@@ -1892,25 +1892,28 @@ body::after {
   <!-- auth recovery (shown via /setup?recover) -->
   <div class="step" id="step-recover">
     <div class="step-title">Account Recovery</div>
-    <p style="color:var(--text-secondary);margin-bottom:20px;font-size:14px">
-      Lost your password? Enter the recovery secret to reset your password.<br>
-      <span style="color:var(--text-tertiary);font-size:12px">
-        The recovery secret is the GOOSECLAW_RECOVERY_SECRET environment variable set in your deployment.
-      </span>
-    </p>
-    <div class="input-group" style="margin-bottom:16px">
-      <label class="input-label">Recovery Secret</label>
+    <div class="field-hint" style="margin-bottom:20px;font-size:14px;color:var(--text-secondary)">
+      Lost your password? Enter the recovery secret to reset your password.
+    </div>
+    <div class="field">
+      <label>Recovery Secret</label>
       <div class="secret-field-wrapper">
-        <input type="password" id="recoverySecret" class="text-input" placeholder="Enter your recovery secret">
+        <input type="password" id="recoverySecret" placeholder="Enter your recovery secret">
         <button type="button" class="secret-toggle-btn" onclick="toggleSecretVisibility(this)" title="Toggle visibility">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
         </button>
       </div>
+      <div class="field-hint">The <code>GOOSECLAW_RECOVERY_SECRET</code> environment variable set in your deployment.</div>
     </div>
     <div id="recoveryResult" style="display:none"></div>
     <div class="btn-row">
+      <a class="btn btn-ghost" href="/login" style="text-decoration:none">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M8.5 3L4.5 7L8.5 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Back to Login
+      </a>
       <button class="btn btn-primary" onclick="submitRecovery()">
         Reset Password
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5.5 3L9.5 7L5.5 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
     </div>
   </div>

@@ -3334,6 +3334,12 @@ def update_job(job_id, updates):
         for key, val in updates.items():
             if key in allowed:
                 job[key] = val
+        # re-enabling an escalated job resets auto-fix state
+        if updates.get("enabled") is True and job.get("human_attention_required"):
+            job["human_attention_required"] = False
+            job["failure_count"] = 0
+            job["auto_fix_attempts"] = 0
+            job["auto_fix_history"] = []
     _save_jobs()
     print(f"[jobs] updated: {job.get('name', job_id)} ({job_id})")
     return dict(job), ""
@@ -3645,6 +3651,25 @@ def get_schedule_context(hours=24):
         lines.append(line)
 
     lines.append(f"\nTotal: {len(upcoming)} job(s) upcoming")
+
+    # include failed/attention-required jobs
+    with _jobs_lock:
+        troubled = [j for j in _jobs if j.get("failure_count", 0) > 0 or j.get("human_attention_required")]
+    if troubled:
+        lines.append("\nTroubled jobs:")
+        for j in troubled:
+            name = j.get("name", j.get("id", "?"))
+            fc = j.get("failure_count", 0)
+            fix_attempts = j.get("auto_fix_attempts", 0)
+            last_out = j.get("last_output", "")[:200]
+            status_str = "NEEDS HUMAN" if j.get("human_attention_required") else f"failing ({fc} consecutive)"
+            line = f"  - {name}: {status_str}"
+            if fix_attempts > 0:
+                line += f", {fix_attempts} auto-fix attempt(s)"
+            if last_out:
+                line += f"\n    last error: {last_out}"
+            lines.append(line)
+
     return "\n".join(lines)
 
 
@@ -3842,6 +3867,158 @@ def _fire_reminder(job):
         return "error", str(e)
 
 
+def _handle_job_failure(job, status, output):
+    """Auto-fix pipeline: retry with backoff, then LLM fix, then escalate.
+
+    All state reads and mutations happen under a single _jobs_lock acquisition
+    to prevent race conditions from concurrent failures.
+    """
+    job_id = job.get("id", "unknown")
+    job_name = job.get("name", job_id)
+    max_retries = job.get("max_retries", 3)
+    max_fix_attempts = job.get("max_fix_attempts", 3)
+
+    # single lock for the entire decision to prevent races
+    backoff = 0
+    with _jobs_lock:
+        fc = job.get("failure_count", 0) + 1
+        job["failure_count"] = fc
+        fix_attempts = job.get("auto_fix_attempts", 0)
+
+        if fc <= max_retries:
+            # tier 1: auto-retry with exponential backoff
+            tier = 1
+            backoff = 30 * (2 ** (fc - 1))  # 30s, 60s, 120s
+            job["fire_at"] = time.time() + backoff
+            job["fired"] = False
+        elif fix_attempts < max_fix_attempts:
+            # tier 2: LLM auto-fix via isolated session
+            tier = 2
+            job["auto_fix_attempts"] = fix_attempts + 1
+        elif not job.get("human_attention_required"):
+            # tier 3: escalate to human
+            tier = 3
+            job["human_attention_required"] = True
+            job["enabled"] = False
+        else:
+            # already escalated, nothing to do
+            tier = 0
+
+    if tier == 0:
+        return
+
+    _save_jobs()
+
+    if tier == 1:
+        print(f"[autofix] {job_name}: retry {fc}/{max_retries} in {backoff}s")
+    elif tier == 2:
+        print(f"[autofix] {job_name}: LLM fix attempt {fix_attempts + 1}/{max_fix_attempts}")
+        threading.Thread(
+            target=_inject_fix_request,
+            args=(job, status, output, fix_attempts + 1),
+            daemon=True,
+        ).start()
+    elif tier == 3:
+        history = job.get("auto_fix_history", [])
+        history_text = "\n".join(
+            f"  attempt {h['attempt']}: {h.get('diagnosis', 'n/a')}"
+            for h in history
+        )
+        msg = (
+            f"[ESCALATION] Job '{job_name}' needs human attention.\n"
+            f"Failed {fc} times, {fix_attempts} auto-fix attempts exhausted.\n"
+            f"Last error: {output[:300]}\n"
+            f"Fix history:\n{history_text}\n"
+            f"Job disabled until manual intervention."
+        )
+        print(f"[autofix] {job_name}: ESCALATED to human")
+        notify_all(msg)
+
+
+def _handle_job_success(job):
+    """Reset failure tracking on successful run."""
+    fc = job.get("failure_count", 0)
+    fix_attempts = job.get("auto_fix_attempts", 0)
+    if fc > 0 or fix_attempts > 0:
+        job_name = job.get("name", job.get("id", "unknown"))
+        with _jobs_lock:
+            job["failure_count"] = 0
+            job["auto_fix_attempts"] = 0
+            job["human_attention_required"] = False
+            if fix_attempts > 0:
+                job["auto_fix_history"] = []
+            # clear retry fire_at for cron jobs so they return to normal schedule
+            if job.get("cron") and job.get("fire_at"):
+                del job["fire_at"]
+        _save_jobs()
+        if fix_attempts > 0:
+            notify_all(f"[autofix] Job '{job_name}' recovered after {fix_attempts} fix attempt(s)")
+            print(f"[autofix] {job_name}: recovered")
+
+
+def _inject_fix_request(job, status, output, attempt_num):
+    """Create an isolated goosed session to diagnose and fix a failed job."""
+    job_id = job.get("id", "unknown")
+    job_name = job.get("name", job_id)
+    command = job.get("command", "")
+    working_dir = job.get("working_dir", "/data")
+
+    session_id = f"autofix_{job_id}_{int(time.time())}"
+
+    prompt = (
+        f"[AUTOFIX] Job '{job_name}' has failed and needs investigation.\n\n"
+        f"Job command: {command}\n"
+        f"Working directory: {working_dir}\n"
+        f"Status: {status}\n"
+        f"Output:\n{output[:2000]}\n\n"
+        f"Fix attempt: {attempt_num}/{job.get('max_fix_attempts', 3)}\n\n"
+        f"Instructions:\n"
+        f"1. Investigate WHY this command failed\n"
+        f"2. Check the relevant files, logs, and system state\n"
+        f"3. Fix the root cause (edit files, fix configs, etc.)\n"
+        f"4. Summarize what you found and what you changed in 2-3 sentences\n\n"
+        f"Be autonomous. Fix the problem, don't just diagnose it."
+    )
+
+    print(f"[autofix] starting fix session {session_id}")
+    response_text, error, _media = _do_rest_relay(prompt, session_id)
+
+    # record what happened
+    history_entry = {
+        "attempt": attempt_num,
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "diagnosis": (response_text or error or "no response")[:500],
+    }
+    with _jobs_lock:
+        if "auto_fix_history" not in job:
+            job["auto_fix_history"] = []
+        job["auto_fix_history"].append(history_entry)
+        # schedule re-run to verify the fix (reset failure_count for clean retry)
+        job["failure_count"] = 0
+        job["fire_at"] = time.time() + 10  # re-run in 10s
+        job["fired"] = False
+    _save_jobs()
+
+    if error:
+        print(f"[autofix] fix session failed: {error}")
+        # don't count this attempt if goosed was unavailable
+        if "Connection" in error or "not ready" in error.lower():
+            with _jobs_lock:
+                job["auto_fix_attempts"] = max(0, job.get("auto_fix_attempts", 1) - 1)
+                # remove the failed history entry
+                if job.get("auto_fix_history"):
+                    job["auto_fix_history"].pop()
+            _save_jobs()
+            print(f"[autofix] goosed unavailable, not counting attempt")
+        notify_all(f"[autofix] Fix attempt {attempt_num} for '{job_name}' failed: {error}")
+    else:
+        print(f"[autofix] fix session complete: {response_text[:200]}")
+        notify_all(
+            f"[autofix] Fix attempt {attempt_num} for '{job_name}' applied. "
+            f"Verifying in 10s.\nDiagnosis: {response_text[:300]}"
+        )
+
+
 def _job_engine_loop():
     """Background loop: check jobs every 10s, fire when due."""
     global _job_engine_running
@@ -3900,11 +4077,14 @@ def _job_engine_loop():
                                 pass
                         should_fire = True
 
-                # check fire_at (timer-based)
+                # check fire_at (timer-based, also used for auto-fix retries on cron jobs)
                 fire_at = job.get("fire_at")
-                if fire_at and not cron_expr:
+                if fire_at:
                     if fire_at <= now:
                         should_fire = True
+                    elif cron_expr:
+                        # cron job has a pending retry timer, skip cron schedule until retry fires
+                        should_fire = False
 
                 if not should_fire:
                     continue
@@ -3920,20 +4100,29 @@ def _job_engine_loop():
                     save_needed = True
 
                     def _run_threaded(j):
+                        status = "error"
+                        output = ""
                         try:
                             status, output = _run_script(j)
-                            j["last_status"] = status
-                            j["last_output"] = output[:500]
+                            with _jobs_lock:
+                                j["last_status"] = status
+                                j["last_output"] = output[:500]
                         finally:
-                            j["currently_running"] = False
-                            j["last_run"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                            # handle scheduling for next run
-                            if j.get("recurring_seconds") and j.get("fire_at"):
-                                while j["fire_at"] <= time.time():
-                                    j["fire_at"] += j["recurring_seconds"]
-                            elif j.get("fire_at") and not j.get("cron"):
-                                j["fired"] = True
+                            with _jobs_lock:
+                                j["currently_running"] = False
+                                j["last_run"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                                # handle scheduling for next run
+                                if j.get("recurring_seconds") and j.get("fire_at"):
+                                    while j["fire_at"] <= time.time():
+                                        j["fire_at"] += j["recurring_seconds"]
+                                elif j.get("fire_at") and not j.get("cron"):
+                                    j["fired"] = True
                             _save_jobs()
+                            # auto-fix pipeline for failed jobs
+                            if status in ("error", "timeout"):
+                                _handle_job_failure(j, status, output)
+                            elif status == "ok":
+                                _handle_job_success(j)
 
                     threading.Thread(target=_run_threaded, args=(job,), daemon=True).start()
 
@@ -3952,6 +4141,12 @@ def _job_engine_loop():
                         job["fired"] = True
 
                     save_needed = True
+
+                    # auto-fix pipeline for reminders
+                    if status == "error":
+                        _handle_job_failure(job, status, output)
+                    elif status == "ok":
+                        _handle_job_success(job)
 
             if save_needed:
                 _save_jobs()

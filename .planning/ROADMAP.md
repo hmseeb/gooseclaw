@@ -122,10 +122,10 @@ Plans:
   2. Test completes the setup wizard flow (provider config, password set) via HTTP
   3. Test verifies goosed starts and /api/health returns 200 with healthy status
   4. Test runs in CI without manual intervention
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
-- [ ] 21-01: E2e container integration test (TEST-08)
+- [ ] 21-01-PLAN.md — E2e container integration test (TEST-08)
 
 ## Progress
 

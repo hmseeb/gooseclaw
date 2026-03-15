@@ -471,6 +471,7 @@ fi
 # Runtime namespace (user facts, integrations) is never wiped.
 
 mkdir -p /data/knowledge/chroma
+chown -R gooseclaw:gooseclaw /data/knowledge
 
 echo "[knowledge] indexing system knowledge base..."
 runuser -u gooseclaw -- env PYTHONPATH=/app/docker python3 /app/docker/knowledge/indexer.py

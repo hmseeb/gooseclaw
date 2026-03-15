@@ -147,7 +147,7 @@ class TestAuthRateLimiting:
         max_reqs = gateway_module.auth_limiter.max_requests
         # Send max_requests + 1 wrong password attempts
         last_status = None
-        for i in range(max_reqs + 1):
+        for _ in range(max_reqs + 1):
             resp = requests.post(
                 f"{live_gateway}/api/auth/login",
                 json={"password": "wrongpassword"},

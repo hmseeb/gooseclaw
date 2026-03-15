@@ -347,6 +347,8 @@ class BotInstance:
                 {"command": "clear", "description": "Wipe conversation and start fresh"},
                 {"command": "compact", "description": "Summarize history to save tokens"},
                 {"command": "help", "description": "Show available commands"},
+                {"command": "restart", "description": "Restart the engine without clearing history"},
+                {"command": "status", "description": "Show session and provider info"},
             ]
             payload = json.dumps({"commands": commands}).encode()
             req = urllib.request.Request(

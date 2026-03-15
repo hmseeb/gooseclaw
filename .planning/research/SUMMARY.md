@@ -1,175 +1,180 @@
 # Project Research Summary
 
-**Project:** GooseClaw v2.0 Multi-Channel & Multi-Bot Support
-**Domain:** AI agent gateway with multi-platform messaging and multi-bot routing
-**Researched:** 2026-03-13
+**Project:** GooseClaw v4.0 Production Hardening
+**Domain:** Security hardening and test coverage for self-hosted Docker AI agent platform
+**Researched:** 2026-03-16
 **Confidence:** HIGH
 
 ## Executive Summary
 
-GooseClaw v2.0 is a refactoring story, not a greenfield build. The existing gateway already has the core patterns needed for multi-channel and multi-bot support: session isolation via goose web sessions, per-user locks and cancellation for Telegram, a channel plugin system with hot-reload, and per-channel model routing. The problem is that these capabilities are hardcoded in the Telegram poll loop rather than extracted into shared infrastructure. Channel plugins have zero command routing, no per-user locks, and no cancellation support. The v2 goal is to extract Telegram's battle-tested patterns into shared components (SessionManager, CommandRouter) that both Telegram and channel plugins can use, then layer multi-bot on top.
+GooseClaw is a single-user self-hosted AI agent platform running a Python stdlib HTTP gateway (~9800 lines) inside Docker on Railway. The v4.0 milestone is a hardening sprint, not a feature sprint. Research confirms the system has several active security vulnerabilities (not theoretical ones) that must be fixed before this can be called production-ready: SHA-256 password storage with no salt, shell injection in 3 separate locations, recovery secret leaking to container stdout on first boot, and no request body size limits. None of these require architectural changes, just surgical fixes to existing files.
 
-The recommended approach is a strict extraction-first strategy. No new libraries are needed (Python stdlib only). The architecture stays single-process, multi-threaded, with one goose web instance providing session isolation via session IDs. Multi-bot support means N Telegram polling loops, each with its own token and model route, sharing the same SessionManager and CommandRouter infrastructure. The config schema extends naturally: a `bots` array in setup.json, backward-compatible with the existing single `telegram_bot_token` field.
+The stack decision is resolved: stay stdlib-only for gateway.py. This means PBKDF2 via `hashlib.pbkdf2_hmac()` (600K iterations, 16-byte random salt) for password hashing, `os.environ`-based data passing for injection fixes across shell scripts, and a custom `JSONFormatter` on top of stdlib `logging` for structured logs. No new pip dependencies for the runtime path. The only new pip packages are dev-only: pytest, requests, pytest-cov for the test infrastructure.
 
-The top risks are concurrency-related. The codebase has 17 threading locks with no documented ordering hierarchy. The recent deadlock bug (commit `071fb00`) proves this is a real threat, not theoretical. Additionally, `/clear` currently restarts the entire goose web process, nuking ALL sessions across ALL channels. This must be scoped to per-user session clearing before multi-bot ships, or one user's `/clear` will destroy every other user's conversation. Session model state is also fragile: it lives in memory and is lost on goose web restarts, causing silent model misrouting.
+The main risk is the migration path, not the fixes themselves. The password hash format must be versioned (`$pbkdf2$salt$hash` prefix) and `verify_token()` must support lazy migration from bare SHA-256. If this is skipped or tested only against freshly-generated hashes rather than pre-existing ones on disk, deployed users get locked out on upgrade. The second risk is testing the monolith: gateway.py is 400KB and not designed for unit testing. The correct approach is HTTP-level integration tests against a real server, not function-level tests patching module globals.
 
 ## Key Findings
 
 ### Recommended Stack
 
-No new dependencies. The entire v2 is built with Python stdlib already in use. The "stack" is three new internal abstractions: a `CommandRouter` (function registry dispatching /help, /stop, /clear, /compact), a `SessionManager` (unified session lifecycle with composite `(channel, user_id)` keys, per-user locks, relay tracking, and cancellation), and a `BotInstance`/`BotManager` pair for multi-bot lifecycle.
+The existing stack stays intact. All security fixes use Python stdlib, maintaining the gateway.py stdlib-only constraint. New additions are exclusively dev-only. See [STACK.md](STACK.md) for full details.
 
-**Core technologies (all already in use):**
-- `threading` (stdlib): multi-bot polling loops, per-user locks. Already handles single Telegram loop. Each bot gets a daemon thread.
-- `json` (stdlib): session and config persistence. setup.json schema extends to `bots` array.
-- `http.client` (stdlib): WebSocket relay to goose web. Sessions are the isolation boundary.
-- `dataclasses` (stdlib): BotInstance/SessionKey structs. Cleaner than raw dicts for multi-bot state.
-
-**Critical version requirement:** Python 3.10+ (Ubuntu 22.04 default). All stdlib features used are available since 3.7.
+**Core technologies:**
+- `hashlib.pbkdf2_hmac()` (stdlib): password hashing — OWASP-approved, 600K iterations, no pip dependency, replaces SHA-256
+- `hashlib.scrypt()` (stdlib): alternative KDF if PBKDF2 proves too slow on Railway CPU — memory-hard, slightly stronger
+- `logging` + `json` (stdlib): structured logging — custom JSONFormatter replaces 252+ print() calls incrementally
+- `shlex.quote()` + `os.environ` (stdlib): shell injection prevention — mechanical fix across secret.sh, entrypoint.sh, gateway.py
+- `pytest` 8.3.x (dev-only): test runner — runs existing unittest tests unchanged, better output and fixtures
+- `requests` 2.32.5 (dev-only): HTTP client for integration tests against a running gateway instance
+- `pytest-cov` 6.x (dev-only): coverage reporting
 
 ### Expected Features
 
-**Must have (table stakes):**
-- Shared command router: extract /help, /stop, /clear, /compact from Telegram poll loop into a reusable module. Foundation for everything else.
-- Per-user session locks in ChannelRelay: copy pattern from Telegram's `_telegram_chat_locks`. Without this, channel plugins race under any real load.
-- Cancellation support for all channels: track active WebSocket refs per user in ChannelRelay, wire to shared /stop command.
-- Multi-bot Telegram instances: N poll loops, each with own token, paired users, and session scope. The headline feature.
-- Per-bot provider/model config: extend `channel_routes` to `telegram:bot_name` keys.
-- Dynamic notification bus channel validation: make `valid_channels` read from loaded plugins.
-- Channel plugin command registration: optional `commands` key in CHANNEL dict.
-- Typing indicators for plugins: optional `typing` callback in CHANNEL dict.
+See [FEATURES.md](FEATURES.md) for full prioritization matrix and dependency graph.
 
-**Should have (differentiators):**
-- Per-bot personality/system prompt (soul.md per bot)
-- Hot-add/remove bots without restart
-- Channel-aware memory writer (learn from ALL channels)
+**Must have (table stakes, v4.0):**
+- Fix shell injection in secret.sh, entrypoint.sh, gateway.py `_run_script` — active RCE vectors
+- Upgrade password hashing from SHA-256 to PBKDF2 with lazy migration — crackable in milliseconds on GPU
+- Remove recovery secret from container stdout logs — credential leak on every first boot
+- Add request body size limits (1MB max, 413 response) — DoS via memory exhaustion
+- Pin dependency versions with exact hashes in requirements.lock — supply chain risk
+- Add graceful shutdown timeout (30s hard deadline, SIGKILL after 10s for goosed) — container hangs on Railway restart
+- Complete HTTP security headers (add HSTS, verify headers applied to ALL response types)
+- Gateway HTTP endpoint tests covering auth, setup, jobs, health — zero coverage on core paths
+- Shell script tests for secret.sh, job.sh, remind.sh, notify.sh — untested user-facing scripts
+- Entrypoint bootstrap tests — untested first-boot and upgrade logic
+- CVE scanning in CI via trivy or pip-audit — no vulnerability monitoring
 
-**Defer to v2+:**
-- Cross-channel session continuity (requires user identity layer that doesn't exist)
-- Webhook mode for Telegram (only matters at 5+ bots)
-- Plugin marketplace / community plugins (content work, not architecture)
-- Cross-channel message bridging (anti-feature: GooseClaw is not Matterbridge)
-- Platform-specific rich UI abstraction (anti-feature: keep abstraction text-only)
-- Per-message provider switching (anti-feature: breaks session state)
+**Should have (v4.x after validation):**
+- Structured JSON logging (migrate 252+ print() calls component by component with LOG_FORMAT toggle)
+- CSRF protection on state-changing POST endpoints
+- Audit logging (config changes, auth events, vault operations) — reuses JSON log format
+- Security audit endpoint (`/api/security/audit`) returning pass/fail per check
+- End-to-end integration tests (boot container, complete setup, verify goose starts)
+- Container health dashboard enhancements
+
+**Defer (v5+):**
+- Secrets rotation support — complex, provider-specific flows
+- Dependency auto-update bot (Dependabot/Renovate)
+
+**Anti-features (do not build):**
+- TLS termination in container — Railway handles it at load balancer
+- WAF inside container — wrong layer for a single-user stdlib server
+- Encrypted vault at rest — key management problem negates benefit, file permissions are sufficient
+- MFA — overkill for single-user PaaS deployment
+- Comprehensive RBAC — no multi-user use case exists yet
 
 ### Architecture Approach
 
-The architecture is extraction-based: pull existing Telegram patterns into shared components, wire both Telegram and ChannelRelay to use them, then layer multi-bot on top. Single goose web process remains the constraint. Session isolation via session IDs, model routing via per-session `_update_goose_session_provider`. No asyncio migration, no process-per-bot, no ABC inheritance. Telegram stays as built-in code (not a plugin file) but uses shared abstractions.
+All hardening integrates in-place within the existing monolith. No new modules, no restructuring. gateway.py gets surgical changes to `hash_token()`, `verify_token()`, body reading, `SECURITY_HEADERS`, and signal handlers. secret.sh and entrypoint.sh get mechanical variable-passing fixes. See [ARCHITECTURE.md](ARCHITECTURE.md) for exact line references and drafted implementation code for every fix.
 
-**Major components:**
-1. **SessionManager** (NEW): unified per-user session lifecycle. Replaces `_telegram_sessions`, `_telegram_chat_locks`, `_telegram_active_relays`. Composite key `(channel, user_id)`.
-2. **CommandRouter** (NEW): function registry for slash commands. Replaces hardcoded if/elif chain in `_telegram_poll_loop`. Returns `(text, should_relay)` for channel-agnostic dispatch.
-3. **ChannelRelay v2** (MODIFIED): wraps channel plugins with full parity. Commands, locks, cancellation, model routing. Plugin code unchanged.
-4. **BotInstance + BotManager** (NEW): per-bot config + polling loop. `BotManager` reads `bots` array from setup.json, manages N `BotInstance` objects.
-5. **_relay_to_goose_web** (UNCHANGED): already channel-agnostic. Handles model routing via channel param.
+**Major components and hardening touchpoints:**
+1. `gateway.py` (~9800 lines) — password hashing (lines 1086-1095), body limits (new `_read_body()` helper), security headers (lines 858-866), shutdown (lines 9805-9828), structured logging (all 252+ print() calls)
+2. `entrypoint.sh` (~700 lines) — recovery secret leak (line 39), password reset injection (lines 59-73), SHA-256 reset path (line 66)
+3. `secret.sh` (~124 lines) — inline Python injection (lines 37-116, all 4 CRUD commands via `'$VARIABLE'` pattern)
+4. `Dockerfile` + CI — requirements.lock generation, CVE scanning integration, test runner setup
+5. Test infrastructure (new) — `docker/tests/` directory with conftest.py, HTTP-level test fixtures, focused test files per concern
 
 ### Critical Pitfalls
 
-1. **Lock re-entrancy deadlocks** -- `threading.Lock` is NOT reentrant. Already caused a production deadlock (commit `071fb00`). Use `RLock` for any lock where nested acquisition is possible. Add `timeout=5` to all `.acquire()` calls.
-2. **Global /clear nukes all channels** -- `/clear` restarts goose web, killing ALL sessions across ALL channels and bots. Must scope to per-user session clearing. Drain active relays before restart.
-3. **Session model state lost on restart** -- `_session_model_cache` is in-memory only. After goose web restart, all sessions fall back to wrong model. Persist model cache to disk. Re-apply model routing before accepting messages post-restart.
-4. **Telegram-hardcoded globals leak into shared layer** -- 132 references to `_telegram_` in gateway.py. Functions like `_relay_to_goose_web` do `_telegram_sessions[chat_id]` internally. Must parameterize before abstracting.
-5. **Lock ordering violations with multi-channel locks** -- 17 module-level locks with no documented ordering. Define hierarchy, enforce acquisition order, use timeouts everywhere.
+See [PITFALLS.md](PITFALLS.md) for full details, recovery strategies, and "looks done but isn't" checklist.
+
+1. **Password migration locks out existing users** — version new hashes with `$pbkdf2$` prefix, implement lazy migration in `verify_token()`, test with actual SHA-256 hashes from a live setup.json not freshly generated ones
+2. **stdlib constraint rules out argon2/bcrypt** — use `hashlib.pbkdf2_hmac()` only, never add argon2-cffi or bcrypt even though Dockerfile has other pip packages; the runtime stdlib constraint on gateway.py is firm
+3. **Shell injection via `shell=True` in job execution** — switch to explicit `["/bin/sh", "-c", command]` for job runner, add command validation on job creation; naively setting `shell=False` breaks legitimate pipe commands
+4. **Inline Python injection in bash scripts** — convert every `'$VARIABLE'` pattern in python3 -c calls to `os.environ` reads; this is a mechanical grep-and-fix, job.sh cmd_create already shows the correct pattern
+5. **Fragile test mocks on 400KB monolith** — test at HTTP level (real server on random port, real HTTP requests) not function level (patching module globals); one focused test file per concern, not one giant test_gateway.py
 
 ## Implications for Roadmap
 
-Based on combined research, the dependency graph dictates a strict 5-phase structure. Each phase is independently deployable and testable.
+Based on the dependency graph in FEATURES.md and build order in ARCHITECTURE.md, a 4-phase structure is right. Security fixes have no upstream dependencies and must come first. Everything else flows from there.
 
-### Phase 1: Extract Shared Infrastructure
+### Phase 1: Security Foundations
 
-**Rationale:** Every subsequent phase depends on SessionManager and CommandRouter existing. This phase changes zero behavior. Pure extraction refactor. Lowest risk, highest unlock.
-**Delivers:** SessionManager class, CommandRouter class, both used by Telegram (existing behavior preserved).
-**Addresses:** Foundation for shared command router (table stakes), per-user session locks (table stakes).
-**Avoids:** Pitfall 4 (telegram-hardcoded globals) by parameterizing session access. Pitfall 1 (lock re-entrancy) by switching to RLock during extraction. Pitfall 5 (lock ordering) by documenting hierarchy.
-**Notes:** Write threading tests BEFORE this refactor (Pitfall 13). Add concurrency tests for relay + clear, relay + stop paths.
+**Rationale:** All security fixes are independent of each other and have no upstream dependencies. They represent the highest risk (active RCE and credential leak vectors) at the lowest implementation cost. Auth must work correctly before anything else can be tested or built. These are the fixes most likely to be discovered and exploited.
+**Delivers:** Production-safe auth with lazy migration, no injection vectors across 3 files, no credential leaks on startup, DoS protection via body limits, supply chain integrity via pinned hashes, complete security headers
+**Addresses:** Shell injection (3 locations), PBKDF2 password hashing with lazy SHA-256 migration, recovery secret leak removal, request body limits (1MB), dependency pinning (requirements.lock), HSTS header
+**Avoids:** Pitfall 1 (migration lockout), Pitfall 2 (stdlib constraint), Pitfall 3 (job injection), Pitfall 4 (bash injection), Pitfall 5 (secret in logs)
 
-### Phase 2: Channel Plugin Parity
+### Phase 2: Test Infrastructure
 
-**Rationale:** Depends on Phase 1 (shared components must exist). Channel plugins currently lack commands, locks, and cancellation. This makes them usable under real load.
-**Delivers:** ChannelRelay v2 with full Telegram parity. Channel plugins gain /help, /stop, /clear, /compact without code changes.
-**Addresses:** Per-user session locks in ChannelRelay (table stakes), cancellation support (table stakes), channel plugin command registration (table stakes), typing indicators (table stakes).
-**Avoids:** Pitfall 8 (hot-reload breaks sessions) by draining relays before channel unload.
+**Rationale:** Tests must be written against the fixed code, not the broken code. Establishing the correct testing pattern (HTTP-level, not function-level) before writing hundreds of tests prevents the fragile-mock technical debt trap. The test suite is the safety net for Phases 3 and 4.
+**Delivers:** pytest setup with pyproject.toml/pytest.ini, conftest.py with HTTP-level fixtures (real server on random port), test_auth.py, test_security.py, test_gateway_http.py, test_jobs.py, shell script test framework, entrypoint bootstrap tests
+**Uses:** pytest 8.3.x, requests 2.32.5, pytest-cov (all dev-only, requirements-dev.txt)
+**Avoids:** Pitfall 6 (fragile test mocks), monolith testing anti-patterns (HTTP-level over function-level)
+**Research flag:** Standard patterns, no research phase needed
 
-### Phase 3: Multi-Bot Telegram Support
+### Phase 3: Observability and Defense-in-Depth
 
-**Rationale:** Depends on Phase 1+2 (shared SessionManager handles composite keys, CommandRouter dispatches for any channel name). This is the headline feature.
-**Delivers:** BotInstance, BotManager, `bots` array in setup.json, per-bot polling loops, backward-compatible single-bot mode.
-**Addresses:** Multi-bot Telegram instances (table stakes), per-bot provider/model config (table stakes).
-**Avoids:** Pitfall 2 (global restart) by scoping /clear to per-user. Pitfall 3 (session pollution) by persisting model cache and using composite keys. Pitfall 7 (notification bus) by adding bot scope to handlers.
+**Rationale:** Structured logging is additive (doesn't change behavior) but is a large diff touching all 252+ print() calls. Having Phase 2 tests in place means regressions are caught. CSRF protection and audit logging add defense-in-depth beyond the Phase 1 critical fixes. Structured logging must precede audit logging (same JSON format).
+**Delivers:** JSONFormatter class with `GOOSECLAW_LOG_FORMAT` env var toggle, incremental print() migration component-by-component, CSRF tokens on state-changing endpoints, audit logging to /data/audit.log, graceful shutdown with 30s hard deadline
+**Implements:** `logging.Formatter` subclass in gateway.py, `_shutdown_event` + timeout thread in signal handlers, append-only audit log
+**Avoids:** Big bang logging migration anti-pattern (one component at a time), security headers blocking setup.html (test CSP against setup.html before deploying)
 
-### Phase 4: Multi-Bot Ecosystem
+### Phase 4: Docker Hardening and CI
 
-**Rationale:** Depends on Phase 3 (bots must exist before they can have personalities, hot-reload, or scoped memory). These are differentiators, not blockers.
-**Delivers:** Per-bot personality/system prompt, hot-add/remove bots, notification bus multi-bot targeting, scoped memory writer.
-**Addresses:** Per-bot personality (differentiator), hot-add/remove bots (differentiator), channel-aware memory writer (differentiator).
-**Avoids:** Pitfall 10 (memory writer cross-bot bleed) by scoping learnings directory by bot_id. Pitfall 9 (config quadratic growth) by using hierarchical config with defaults + overrides.
-
-### Phase 5: Admin and Observability
-
-**Rationale:** Polish phase. The system works without this, but operators need visibility. Can be done in parallel with Phase 4.
-**Delivers:** Admin dashboard channel/bot status, dynamic notification bus validation, per-bot rate limiting, bot token masking in logs.
-**Addresses:** Dynamic notification bus validation (table stakes), admin dashboard (differentiator).
-**Avoids:** Pitfall 11 (token exposure) by masking in logs. Pitfall 12 (rate limiter scope) by adding per-bot limits.
+**Rationale:** Infrastructure changes are lowest risk and don't affect runtime behavior. CVE scanning has no correctness dependencies on code changes. Docker resource documentation is pure docs. E2e tests validate the whole system and require all prior phases to exist.
+**Delivers:** requirements.lock with pip hash verification, trivy/pip-audit CVE scanning in CI with result caching, Railway resource limit documentation, docker-compose.yml with recommended limits for self-hosting, e2e integration tests, security audit endpoint
+**Uses:** GitHub Actions or Railway CI config, Docker build pipeline
+**Avoids:** CVE scan blocking deployment (cache results, only re-scan on Dockerfile/requirements changes)
+**Research flag:** Railway-specific CI configuration syntax needs validation during planning
 
 ### Phase Ordering Rationale
 
-- **Phase 1 before everything:** SessionManager and CommandRouter are the dependency root. Every other phase uses them. Doing this as a zero-behavior-change extraction means it's safe to ship independently.
-- **Phase 2 before Phase 3:** Channel plugin parity validates the shared abstractions with a simpler use case (upgrading existing ChannelRelay) before tackling multi-bot (adding entirely new BotInstance/BotManager). If the abstractions are wrong, Phase 2 reveals it cheaply.
-- **Phase 3 is the value delivery:** Multi-bot is the headline feature. Phases 1-2 are infrastructure that enables it. Don't let Phases 4-5 block the Phase 3 ship.
-- **Phases 4-5 are incremental:** Each feature in these phases is independently valuable and can ship as individual PRs.
+- Security fixes first: no dependencies, highest risk, auth must work before anything else is testable
+- Tests before observability: logging migration is a large diff, tests catch regressions; also establishes patterns before volume lands
+- Structured logging before audit logging: audit log reuses JSON format, must exist first
+- Docker hardening last: infrastructure changes don't affect application correctness, CVE scan on a broken app is still a broken app
 
 ### Research Flags
 
-Phases likely needing deeper research during planning:
-- **Phase 1:** Needs careful lock audit of all 17 locks before refactoring. Map every function's lock acquisition path. This is tedious but prevents deadlocks.
-- **Phase 3:** The `/clear` scoping problem needs investigation. How does goose web handle session-level clearing vs process restart? Check goose Discussion #4389 for per-session isolation progress.
-- **Phase 3:** Telegram 409 Conflict behavior with multiple tokens polling simultaneously needs validation (documented in theory, untested in this codebase).
-
 Phases with standard patterns (skip research-phase):
-- **Phase 2:** Straightforward upgrade of ChannelRelay. The target API is fully designed in ARCHITECTURE.md. Copy patterns from Telegram's existing implementation.
-- **Phase 5:** Standard observability work. No novel patterns needed.
+- **Phase 1 (Security):** All fixes have specific line references and implementation code already drafted in ARCHITECTURE.md
+- **Phase 2 (Testing):** pytest and HTTP-level testing patterns are well-documented, fixtures already sketched
+- **Phase 3 (Observability):** Python stdlib logging with custom Formatter is standard practice, migration strategy is clear
+
+Phases likely needing deeper research during planning:
+- **Phase 4 (CI):** Railway's CI/CD configuration and CVE scan caching patterns need validation. Research recommends trivy or pip-audit but Railway-specific integration steps are unconfirmed.
 
 ## Confidence Assessment
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | HIGH | No new dependencies. All recommendations are internal abstractions using existing stdlib. Verified against 6207-line gateway.py source. |
-| Features | HIGH | Feature list derived from established multi-channel frameworks (Hubot, Matterbridge, Matrix bridges) cross-referenced with actual codebase gaps. Anti-features clearly identified. |
-| Architecture | HIGH | Component design based on direct code analysis. Every proposed extraction maps to specific line ranges in gateway.py. Migration path is incremental with zero behavior changes in Phase 1. |
-| Pitfalls | HIGH | Top pitfalls sourced from actual production bugs (commit `071fb00` deadlock, commit `caab970` /clear hang). Threading risks verified against Python docs and established concurrency literature. |
+| Stack | HIGH | All decisions confirmed against Python 3.10 stdlib docs and OWASP guidelines. PBKDF2 vs scrypt debate resolved in favor of PBKDF2 (simpler, equally valid per OWASP 2023). Primary source: actual codebase. |
+| Features | HIGH | Derived from direct codebase analysis with specific file and line number references. Not speculation. Competitor comparison (Dify, Open WebUI, LocalAI) confirms what security-conscious users expect. |
+| Architecture | HIGH | All implementation code drafted with exact line references. Every fix maps to a specific location. Migration paths designed. Primary source: gateway.py, entrypoint.sh, secret.sh analysis. |
+| Pitfalls | HIGH | Based on codebase analysis plus verified security research (OWASP, Bandit, OpenStack). Migration lockout pitfall is specific to this codebase's bare-hex hash format with no algorithm prefix. |
 
 **Overall confidence:** HIGH
 
-All four research files are based on primary source analysis of the actual codebase rather than hypothetical patterns. The recommendations are conservative (extract, don't rewrite) which reduces risk.
-
 ### Gaps to Address
 
-- **/clear scoping:** The exact mechanism for per-user session clearing (vs global goose web restart) is unresolved. Goose upstream may or may not support per-session provider cleanup. Needs investigation during Phase 3 planning.
-- **Goose web concurrent session limits:** Unknown how many concurrent WebSocket sessions goose web handles before degradation. With multi-bot, this could be 10-20+ concurrent sessions. Needs load testing during Phase 3.
-- **Setup wizard UI for multi-bot:** The single-HTML-file constraint makes multi-bot configuration UI design non-trivial. No research was done on the setup wizard changes needed.
-- **Backward compatibility testing:** The migration from single-bot to multi-bot config schema needs a concrete migration function. Pattern exists (`migrate_config_models()`) but the specific migration logic hasn't been designed.
-- **Pairing flow per-bot:** Each bot needs its own pairing flow. Current pairing generates a code, user sends it to "the" bot. With multi-bot, each bot has its own pair code namespace. The UX for this is undesigned.
+- **PBKDF2 iteration count on Railway CPU:** 600K iterations takes ~250ms on fast hardware but could reach 1-2s on throttled Railway containers. Benchmark on actual Railway deployment in Phase 1 and reduce to 300K if needed. Still vastly better than bare SHA-256.
+- **Railway CI configuration:** Research confirms what to do (CVE scan, hash-pinned deps) but not the exact Railway CI syntax. Validate during Phase 4 planning.
+- **Security headers vs setup.html:** CSP headers could block setup.html's inline JavaScript, locking users out of setup. Needs manual testing against actual setup.html before Phase 3 ships. May require per-path CSP rules.
+- **bats-core vs Python subprocess for shell script tests:** STACK.md says Python subprocess tests are sufficient; ARCHITECTURE.md recommends bats-core. Resolve during Phase 2 planning. Either works, just pick one and commit.
+- **Rate limiter ordering relative to PBKDF2:** Rate limit check must happen BEFORE hash computation in the auth handler code path. Verify the existing code path order before Phase 1 ships. A brute-force attack consuming 250ms CPU per attempt even when rate-limited is a DoS vector.
 
 ## Sources
 
 ### Primary (HIGH confidence)
-- `/Users/haseeb/nix-template/docker/gateway.py` (6207 lines) -- all architectural claims verified against source
-- `/Users/haseeb/nix-template/docker/test_gateway.py` (969 lines) -- test coverage assessment
-- `/Users/haseeb/nix-template/.planning/PROJECT.md` -- project constraints, scope boundaries
-- `/Users/haseeb/nix-template/.planning/REQUIREMENTS.md` -- v1/v2 requirements
-- Git history (commits `071fb00`, `caab970`, `a369dfc`, `d45d9fe`) -- production bug patterns
+- Codebase analysis: gateway.py (406KB, 9700+ lines), entrypoint.sh (700+ lines), secret.sh, job.sh, Dockerfile — all line references verified against source
+- [Python hashlib documentation](https://docs.python.org/3/library/hashlib.html) — pbkdf2_hmac and scrypt stdlib availability confirmed
+- [OWASP Docker Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Docker_Security_Cheat_Sheet.html) — container hardening requirements
+- [Docker Official Security Docs](https://docs.docker.com/engine/security/) — resource constraints, HEALTHCHECK patterns
+- [argon2-cffi documentation](https://argon2-cffi.readthedocs.io/) — confirmed as non-stdlib, rules it out for gateway.py
 
 ### Secondary (MEDIUM confidence)
-- [Matterbridge](https://github.com/42wim/matterbridge) -- multi-protocol bridge design patterns
-- [Hubot adapter pattern](https://hubot.github.com/docs/) -- channel abstraction, command routing
-- [Matrix bridge types](https://matrix.org/docs/older/types-of-bridging/) -- bridging architecture patterns
-- [Botpress multi-channel](https://botpress.com/blog/botpress-vs-rasa) -- table stakes for channel abstraction
-- [Rasa custom connectors](https://rasa.com/docs/reference/channels/custom-connectors/) -- plugin contract design
+- [Password Hashing Guide: Argon2 vs Bcrypt vs Scrypt vs PBKDF2 (2026)](https://guptadeepak.com/the-complete-guide-to-password-hashing-argon2-vs-bcrypt-vs-scrypt-vs-pbkdf2-2026/) — algorithm comparison, iteration count recommendations
+- [OpenStack: Avoid shell=True](https://security.openstack.org/guidelines/dg_avoid-shell-true.html) — shell injection avoidance patterns for subprocess
+- [Snyk: Command Injection in Python](https://snyk.io/blog/command-injection-python-prevention-examples/) — injection prevention patterns and os.environ approach
+- [New Relic: Structured Logging in Python](https://newrelic.com/blog/log/python-structured-logging) — JSON logging migration patterns
+- [Why Retrofitting Tests Is Hard](https://modelephant.medium.com/software-engineering-why-retrofitting-tests-is-hard-9ea4e7af3e48) — monolith testing strategy justification
 
 ### Tertiary (LOW confidence)
-- [Goose Discussion #4389](https://github.com/block/goose/discussions/4389) -- per-session agent isolation (upstream, unverified timeline)
-- [AI Gateway architecture patterns 2026](https://www.truefoundry.com/blog/a-definitive-guide-to-ai-gateways-in-2026-competitive-landscape-comparison) -- general AI gateway patterns
+- [Python Security Best Practices](https://arjancodes.com/blog/best-practices-for-securing-python-applications/) — general guidance, not GooseClaw-specific
+- [Web Application Security Best Practices 2026](https://www.radware.com/cyberpedia/application-security/web-application-security-best-practices/) — industry overview
 
 ---
-*Research completed: 2026-03-13*
+*Research completed: 2026-03-16*
 *Ready for roadmap: yes*

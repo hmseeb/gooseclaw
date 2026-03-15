@@ -984,6 +984,12 @@ _MAX_CONCURRENT_JOBS = 5
 _jobs = []             # list of job dicts
 _jobs_lock = threading.Lock()
 _job_engine_running = False
+_job_engine_last_tick = 0.0          # time.time() of last successful tick
+_job_engine_tick_count = 0           # total ticks completed
+_job_engine_stalled_notified = False # prevent alert spam
+_JOB_ENGINE_STALE_THRESHOLD = 30    # seconds before considered stalled
+# TODO: add external dead man's switch (healthchecks.io) via JOB_ENGINE_HEALTHCHECK_URL env var
+#       ping on each tick so external service alerts if pings stop
 
 # ── watcher engine state ──────────────────────────────────────────────────────
 _WATCHERS_FILE = os.path.join(DATA_DIR, "watchers.json")
@@ -3839,12 +3845,15 @@ def _fire_reminder(job):
 def _job_engine_loop():
     """Background loop: check jobs every 10s, fire when due."""
     global _job_engine_running
+    global _job_engine_last_tick, _job_engine_tick_count
     _job_engine_running = True
     print(f"[jobs] engine started ({_JOBS_TICK_SECONDS}s tick)")
 
     while _job_engine_running:
         try:
             now = time.time()
+            _job_engine_last_tick = now
+            _job_engine_tick_count += 1
             now_local = time.localtime(now)
             save_needed = False
 
@@ -3962,6 +3971,7 @@ def _job_engine_loop():
 
         except Exception as e:
             print(f"[jobs] error: {e}")
+            _job_engine_last_tick = time.time()  # tick attempted, engine alive
 
         # sleep 10s, checking shutdown every 2s
         for _ in range(5):
@@ -3972,6 +3982,28 @@ def _job_engine_loop():
     print("[jobs] engine stopped")
 
 
+def _job_engine_stall_monitor():
+    """Background: alert if job engine hasn't ticked in > threshold seconds."""
+    global _job_engine_stalled_notified
+    while _job_engine_running:
+        time.sleep(_JOB_ENGINE_STALE_THRESHOLD)
+        if not _job_engine_running:
+            break
+        if _job_engine_last_tick == 0.0:
+            continue  # engine hasn't started ticking yet
+        stale = time.time() - _job_engine_last_tick
+        if stale > _JOB_ENGINE_STALE_THRESHOLD:
+            if not _job_engine_stalled_notified:
+                msg = f"[CRITICAL] Job engine stalled, last tick {stale:.0f}s ago"
+                print(f"[jobs] STALL ALERT: {msg}")
+                notify_all(msg)
+                _job_engine_stalled_notified = True
+        elif _job_engine_stalled_notified and stale < _JOBS_TICK_SECONDS * 2:
+            # recovered
+            print("[jobs] stall recovered")
+            _job_engine_stalled_notified = False
+
+
 def start_job_engine():
     """Start the job engine daemon thread."""
     global _job_engine_running
@@ -3980,6 +4012,7 @@ def start_job_engine():
     _load_jobs()
     _migrate_legacy_files()
     threading.Thread(target=_job_engine_loop, daemon=True).start()
+    threading.Thread(target=_job_engine_stall_monitor, daemon=True).start()
 
 
 # ── watcher engine (event subscriptions: webhook, feed, stream) ──────────────
@@ -7716,6 +7749,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.handle_health()
         elif path == "/api/health/ready":
             self.handle_health_ready()
+        elif path == "/api/health/jobs":
+            self.handle_health_jobs()
         elif path == "/api/debug/relay":
             # temporary: test non-streaming relay directly
             try:
@@ -7958,9 +7993,31 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         else:
             status["status"] = "degraded"
 
+        # job engine health
+        if _job_engine_last_tick > 0:
+            je_stale = time.time() - _job_engine_last_tick
+            je_healthy = _job_engine_running and je_stale < _JOB_ENGINE_STALE_THRESHOLD
+            status["job_engine"] = {"healthy": je_healthy, "last_tick_ago": round(je_stale, 1)}
+            if not je_healthy and status["status"] == "ok":
+                status["status"] = "degraded"
+
         # 200 for ok/setup_required (healthy enough to serve traffic), 503 for degraded
         code = 200 if status["status"] in ("ok", "setup_required") else 503
         self.send_json(code, status)
+
+    def handle_health_jobs(self):
+        """GET /api/health/jobs — job engine heartbeat status."""
+        now = time.time()
+        stale = now - _job_engine_last_tick if _job_engine_last_tick > 0 else -1
+        healthy = _job_engine_running and 0 <= stale < _JOB_ENGINE_STALE_THRESHOLD
+        status = {
+            "engine_running": _job_engine_running,
+            "last_tick_ago": round(stale, 1),
+            "tick_count": _job_engine_tick_count,
+            "stale_threshold": _JOB_ENGINE_STALE_THRESHOLD,
+            "healthy": healthy,
+        }
+        self.send_json(200 if healthy else 503, status)
 
     def handle_health_ready(self):
         """GET /api/health/ready — readiness probe: 200 only when goosed is up and responding."""
@@ -8185,6 +8242,16 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             threading.Thread(target=_restart, daemon=True).start()
 
             resp = {"success": True, "message": "saved. agent is restarting..."}
+            # include recovery secret so user can save it
+            recovery = os.environ.get("GOOSECLAW_RECOVERY_SECRET", "")
+            if not recovery:
+                try:
+                    with open(os.path.join(DATA_DIR, ".recovery_secret")) as f:
+                        recovery = f.read().strip()
+                except Exception:
+                    pass
+            if recovery:
+                resp["recovery_secret"] = recovery
             # include pairing code if a telegram bot is configured
             tg_token = config.get("telegram_bot_token", "")
             if tg_token:

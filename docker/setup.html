@@ -1750,6 +1750,21 @@ body::after {
         </div>
       </div>
       <!-- token box removed: password-based auth, no one-time token display -->
+      <div id="recoveryBox" style="display:none; max-width:400px">
+        <div class="pair-card">
+          <div class="pair-card-header">
+            <span class="dot green"></span>
+            Recovery Secret
+          </div>
+          <div class="pair-card-code" id="recoveryCode" style="font-size:12px;word-break:break-all"></div>
+          <div class="pair-card-hint">
+            Save this somewhere safe. You'll need it to reset your password if you forget it.
+          </div>
+          <div class="pair-card-actions">
+            <button class="pair-card-btn primary" onclick="copyRecoverySecret()">Copy secret</button>
+          </div>
+        </div>
+      </div>
       <div id="pairBox" style="display:none; max-width:400px">
         <div class="pair-card">
           <div class="pair-card-header">
@@ -3287,6 +3302,15 @@ function validateTelegramFormat(input) {
 
 /* ── clipboard helpers ── */
 
+function copyRecoverySecret() {
+  const code = document.getElementById('recoveryCode')?.textContent?.trim();
+  if (!code) return;
+  const btn = document.querySelector('#recoveryBox .pair-card-btn.primary');
+  navigator.clipboard.writeText(code).then(() => {
+    if (btn) { btn.textContent = 'Copied!'; setTimeout(() => { btn.textContent = 'Copy secret'; }, 2000); }
+  }).catch(() => {});
+}
+
 function copyPairCode() {
   const code = document.getElementById('pairCode')?.textContent?.trim();
   if (!code) return;
@@ -4623,6 +4647,15 @@ async function saveConfig() {
     if (data.success) {
       goToStep('success');
       pollStartupStatus();
+      /* show recovery secret if returned */
+      if (data.recovery_secret) {
+        const recoveryBox = document.getElementById('recoveryBox');
+        const recoveryCodeEl = document.getElementById('recoveryCode');
+        if (recoveryBox && recoveryCodeEl) {
+          recoveryCodeEl.textContent = data.recovery_secret;
+          recoveryBox.style.display = 'block';
+        }
+      }
       /* show pairing code: prefer inline response, fall back to polling */
       if (data.pairing_code) {
         const pairBox = document.getElementById('pairBox');

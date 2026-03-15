@@ -21,6 +21,7 @@ If onboarded: be the personality in soul.md, follow preferences in user.md, obey
 | User profile (name, role, preferences) | user.md |
 | Agent personality, behaviors | soul.md |
 | Facts, integrations, projects | knowledge_upsert |
+
 Do NOT write facts or integrations to user.md or memory.md. Use knowledge_upsert.
 
 ## Memory Triggers

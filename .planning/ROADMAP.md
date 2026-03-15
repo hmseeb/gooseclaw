@@ -53,7 +53,7 @@
 - [x] **Phase 18: Security Foundations** - Eliminate injection vectors, upgrade password hashing with lazy migration, seal credential leaks, add body limits and missing headers (completed 2026-03-15)
 - [x] **Phase 19: Test Infrastructure and Coverage** - Establish pytest + HTTP-level test framework and cover all gateway endpoints, shell scripts, and entrypoint bootstrap (completed 2026-03-15)
 - [x] **Phase 20: Infrastructure Hardening** - Pin dependencies, add CVE scanning, structured JSON logging, and graceful shutdown (completed 2026-03-15)
-- [ ] **Phase 21: End-to-End Validation** - Container-level integration test proving the whole system boots and works
+- [x] **Phase 21: End-to-End Validation** - Container-level integration test proving the whole system boots and works (completed 2026-03-15)
 
 ## Phase Details
 
@@ -155,4 +155,4 @@ Security fixes first (18), then tests validate fixed code (19), then hardening w
 | 18. Security Foundations | 4/4 | Complete    | 2026-03-15 | - |
 | 19. Test Infrastructure and Coverage | 4/4 | Complete    | 2026-03-15 | - |
 | 20. Infrastructure Hardening | 3/3 | Complete    | 2026-03-15 | - |
-| 21. End-to-End Validation | v4.0 | 0/1 | Not started | - |
+| 21. End-to-End Validation | 1/1 | Complete    | 2026-03-15 | - |

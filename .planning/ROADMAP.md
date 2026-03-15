@@ -88,13 +88,13 @@ Plans:
   4. Security headers and CORS are verified across all response paths (setup, API, proxy, error)
   5. Shell scripts (job.sh, remind.sh, notify.sh, secret.sh) have tests validating argument parsing and output
   6. Entrypoint bootstrap logic (directory creation, config generation, env rehydration, provider detection) is tested
-**Plans**: TBD
+**Plans**: 4 plans
 
 Plans:
-- [ ] 19-01: pytest infrastructure setup with HTTP-level test fixtures (TEST-09)
-- [ ] 19-02: Auth and security header tests (TEST-01, TEST-05)
-- [ ] 19-03: Setup, job, and health endpoint tests (TEST-02, TEST-03, TEST-04)
-- [ ] 19-04: Shell script and entrypoint bootstrap tests (TEST-06, TEST-07)
+- [ ] 19-01-PLAN.md — pytest infrastructure with live_gateway fixture and health smoke tests (TEST-09)
+- [ ] 19-02-PLAN.md — Auth endpoint and security header HTTP tests (TEST-01, TEST-05)
+- [ ] 19-03-PLAN.md — Setup, job, and health endpoint HTTP tests (TEST-02, TEST-03, TEST-04)
+- [ ] 19-04-PLAN.md — Shell script and entrypoint bootstrap tests (TEST-06, TEST-07)
 
 ### Phase 20: Infrastructure Hardening
 **Goal**: The deployment pipeline catches vulnerabilities automatically, the application logs structured JSON for observability, and the container shuts down gracefully

@@ -106,12 +106,12 @@ Plans:
   3. Container shutdown completes within 5 seconds, force-killing hung processes after grace period
   4. Security-sensitive operations (auth attempts, config changes, errors) emit structured JSON log lines
   5. GOOSECLAW_LOG_FORMAT=json enables JSON logging across gateway, with print() calls migrated incrementally
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 20-01: Dependency pinning with hash verification and CVE scanning setup (HARD-01, HARD-02)
-- [ ] 20-02: Graceful shutdown with timeout and force-kill (HARD-03)
-- [ ] 20-03: Structured JSON logging with incremental migration (HARD-05, HARD-06)
+- [ ] 20-01-PLAN.md — Dependency pinning with hash verification and CVE scanning setup (HARD-01, HARD-02)
+- [ ] 20-02-PLAN.md — Graceful shutdown with timeout and force-kill (HARD-03)
+- [ ] 20-03-PLAN.md — Structured JSON logging with incremental migration (HARD-05, HARD-06)
 
 ### Phase 21: End-to-End Validation
 **Goal**: A single automated test proves the entire system works from container boot to healthy goose session

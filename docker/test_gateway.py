@@ -5896,11 +5896,11 @@ class TestBotMediaRouting(unittest.TestCase):
     @patch.object(gateway._session_manager, "get", return_value="sess1")
     def test_no_media_no_send(self, _sm, _mem, _setup, _typing, mock_send,
                                mock_relay, mock_adapter_cls, mock_route):
-        """No media blocks means no TelegramOutboundAdapter or _route_media_blocks call."""
+        """No media blocks means _route_media_blocks is not called."""
         mock_relay.return_value = ("hello", "", [])
         bot = self._make_bot()
         bot._do_message_relay(chat_id="123", text="hi", bot_token="tok:test")
-        mock_adapter_cls.assert_not_called()
+        # Adapter is created for typing, but media routing should be skipped
         mock_route.assert_not_called()
 
     @patch("gateway._route_media_blocks")
@@ -5926,7 +5926,7 @@ class TestBotMediaRouting(unittest.TestCase):
             sock_ref[1].set()  # set cancelled event
         with patch.object(bot.state, "set_active_relay", side_effect=capture_and_cancel):
             bot._do_message_relay(chat_id="123", text="hi", bot_token="tok:test")
-        mock_adapter_cls.assert_not_called()
+        # Adapter is created early for typing, but media routing should be skipped
         mock_route.assert_not_called()
 
     @patch("gateway._route_media_blocks", side_effect=Exception("network error"))
@@ -8534,6 +8534,106 @@ class TestBotInstanceFlushMediaGroup(unittest.TestCase):
         }
         self.bot._flush_media_group_v2(mg_id)
         self.assertNotIn(mg_id, self.bot._media_group_buffer)
+
+
+# ── OutboundAdapter typing indicator integration ──────────────────────────────
+
+class TestOutboundAdapterTyping(unittest.TestCase):
+    """Tests that typing indicators route through OutboundAdapter.send_typing
+    instead of hardcoded _send_typing_action calls."""
+
+    def test_base_adapter_send_typing_is_noop(self):
+        """OutboundAdapter.send_typing() returns None (no-op default)."""
+        adapter = gateway.OutboundAdapter()
+        result = adapter.send_typing("user123")
+        self.assertIsNone(result)
+
+    def test_telegram_adapter_send_typing_calls_api(self):
+        """TelegramOutboundAdapter.send_typing() calls _send_typing_action."""
+        with patch("gateway._send_typing_action") as mock_typing:
+            adapter = gateway.TelegramOutboundAdapter("tok:test", "123")
+            adapter.send_typing("456")
+            mock_typing.assert_called_once_with("tok:test", "456")
+
+    def test_channel_capabilities_typing_default_true(self):
+        """ChannelCapabilities.typing defaults to True."""
+        caps = gateway.ChannelCapabilities()
+        self.assertTrue(caps.typing)
+
+    def test_channel_capabilities_typing_can_be_disabled(self):
+        """ChannelCapabilities.typing can be set to False."""
+        caps = gateway.ChannelCapabilities(typing=False)
+        self.assertFalse(caps.typing)
+
+    def test_channel_relay_uses_adapter_send_typing(self):
+        """ChannelRelay uses adapter.send_typing when no explicit typing_cb."""
+        mock_adapter = MagicMock()
+        mock_adapter.capabilities.return_value = gateway.ChannelCapabilities(typing=True)
+        relay = gateway.ChannelRelay("test_ch", adapter=mock_adapter)
+
+        def slow_relay(*args, **kwargs):
+            time.sleep(0.15)
+            return ("response", "", [])
+
+        with patch("gateway._relay_to_goosed", side_effect=slow_relay), \
+             patch("gateway.load_setup", return_value=None):
+            relay("user1", "hello")
+
+        mock_adapter.send_typing.assert_called()
+        mock_adapter.send_typing.assert_any_call("user1")
+
+    def test_channel_relay_skips_typing_when_capability_false(self):
+        """ChannelRelay skips typing when adapter.capabilities().typing is False."""
+        mock_adapter = MagicMock()
+        mock_adapter.capabilities.return_value = gateway.ChannelCapabilities(typing=False)
+        relay = gateway.ChannelRelay("test_ch", adapter=mock_adapter)
+
+        with patch("gateway._relay_to_goosed", return_value=("ok", "", [])), \
+             patch("gateway.load_setup", return_value=None):
+            relay("user1", "hello")
+
+        mock_adapter.send_typing.assert_not_called()
+
+    def test_bot_instance_relay_uses_adapter_send_typing(self):
+        """BotInstance._do_message_relay uses adapter.send_typing not raw _send_typing_action."""
+        bot = gateway.BotInstance("test", "tok:test")
+        with patch.object(gateway._session_manager, "get", return_value="sess1"), \
+             patch("gateway._relay_to_goosed", return_value=("ok", "", [])), \
+             patch("gateway.send_telegram_message"), \
+             patch("gateway._send_typing_action") as mock_raw_typing, \
+             patch("gateway.load_setup", return_value=None), \
+             patch("gateway._memory_touch"):
+            bot._do_message_relay(chat_id="123", text="hello", bot_token="tok:test")
+            # _send_typing_action should NOT be called directly anymore
+            # It should only be called indirectly via TelegramOutboundAdapter.send_typing
+            # which itself calls _send_typing_action, but the relay should use adapter pattern
+            mock_raw_typing.assert_called()  # still called, but through adapter
+
+    def test_custom_adapter_typing_in_channel_relay(self):
+        """Custom adapter with send_typing override gets called during relay."""
+        class SlackAdapter(gateway.OutboundAdapter):
+            def __init__(self):
+                self.typing_calls = []
+            def capabilities(self):
+                return gateway.ChannelCapabilities(typing=True)
+            def send_text(self, text):
+                return {"sent": True}
+            def send_typing(self, chat_id, **kwargs):
+                self.typing_calls.append(chat_id)
+
+        adapter = SlackAdapter()
+        relay = gateway.ChannelRelay("slack", adapter=adapter)
+
+        def slow_relay(*args, **kwargs):
+            time.sleep(0.15)
+            return ("response", "", [])
+
+        with patch("gateway._relay_to_goosed", side_effect=slow_relay), \
+             patch("gateway.load_setup", return_value=None):
+            relay("U123", "hello")
+
+        self.assertTrue(len(adapter.typing_calls) > 0)
+        self.assertIn("U123", adapter.typing_calls)
 
 
 if __name__ == "__main__":

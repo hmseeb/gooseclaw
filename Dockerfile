@@ -51,6 +51,9 @@ WORKDIR /app
 COPY docker/requirements.txt /app/docker/requirements.txt
 RUN pip3 install --no-cache-dir -r /app/docker/requirements.txt
 
+# pre-download ChromaDB ONNX embedding model so it doesn't download on every boot
+RUN python3 -c "import chromadb; c=chromadb.Client(); col=c.create_collection('warmup'); col.add(ids=['1'],documents=['warmup']); c.delete_collection('warmup')"
+
 # copy application files using specific paths (avoids wildcard COPY)
 COPY docker/ /app/docker/
 COPY scripts/ /app/scripts/

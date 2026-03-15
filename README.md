@@ -58,7 +58,6 @@ the setup wizard handles provider configuration, so no env vars are required for
 |----------|---------|-------------|
 | `GOOSE_MODEL` | provider default | model override |
 | `TZ` | `UTC` | timezone |
-| `GOOSE_WEB_AUTH_TOKEN` | auto-generated | stable auth token for web UI across deploys |
 | `TELEGRAM_BOT_TOKEN` | — | Telegram bot token from @BotFather |
 | `GITHUB_PAT` | — | GitHub PAT for git-based state persistence |
 | `GITHUB_REPO` | — | repo for git persistence (e.g. `username/my-agent`) |

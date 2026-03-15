@@ -152,7 +152,7 @@ Security fixes first (18), then tests validate fixed code (19), then hardening w
 | 15. Reference Channel Plugin | v3.0 | 1/1 | Complete | 2026-03-13 |
 | 16. Watcher Engine | v3.0 | 3/3 | Complete | 2026-03-14 |
 | 17. Vector Knowledge Base | v3.0 | 3/3 | Complete | 2026-03-15 |
-| 18. Security Foundations | 1/4 | In Progress|  | - |
+| 18. Security Foundations | 2/4 | In Progress|  | - |
 | 19. Test Infrastructure and Coverage | v4.0 | 0/4 | Not started | - |
 | 20. Infrastructure Hardening | v4.0 | 0/3 | Not started | - |
 | 21. End-to-End Validation | v4.0 | 0/1 | Not started | - |

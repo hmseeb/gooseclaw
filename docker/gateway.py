@@ -2793,6 +2793,14 @@ def fetch_provider_models(provider, credentials):
             except Exception:
                 return {"models": [], "fallback": True}
 
+        if provider == "claude-code":
+            return {"models": [
+                {"id": "default", "name": "default"},
+                {"id": "claude-opus-4-6", "name": "claude-opus-4-6"},
+                {"id": "claude-sonnet-4-6", "name": "claude-sonnet-4-6"},
+                {"id": "claude-haiku-4-5", "name": "claude-haiku-4-5"},
+            ]}
+
         # Providers with no list endpoint
         return {"models": [], "fallback": True}
 

@@ -473,11 +473,11 @@ fi
 mkdir -p /data/knowledge/chroma
 
 echo "[knowledge] indexing system knowledge base..."
-runuser -u gooseclaw -- python3 /app/docker/knowledge/indexer.py
+runuser -u gooseclaw -- env PYTHONPATH=/app/docker python3 /app/docker/knowledge/indexer.py
 
 if [ -f "$IDENTITY_DIR/memory.md" ] && [ ! -f "$DATA_DIR/knowledge/.memory_migrated" ]; then
     echo "[knowledge] migrating memory.md to vector store..."
-    runuser -u gooseclaw -- python3 /app/docker/knowledge/migrate_memory.py
+    runuser -u gooseclaw -- env PYTHONPATH=/app/docker python3 /app/docker/knowledge/migrate_memory.py
     touch "$DATA_DIR/knowledge/.memory_migrated"
     echo "[knowledge] memory migration complete"
 fi

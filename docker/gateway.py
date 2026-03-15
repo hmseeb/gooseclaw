@@ -327,6 +327,12 @@ class BotInstance:
     def stop(self):
         """Stop this bot's poll loop and wait for thread to finish."""
         self.running = False
+        with self._media_group_lock:
+            for group in self._media_group_buffer.values():
+                timer = group.get("timer")
+                if timer is not None:
+                    timer.cancel()
+            self._media_group_buffer.clear()
         if self._thread:
             self._thread.join(timeout=5)
             self._thread = None

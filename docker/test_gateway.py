@@ -2969,6 +2969,29 @@ class TestBotStartStop(unittest.TestCase):
         self.assertIs(thread1, thread2)
         bot.stop()
 
+    def test_stop_cancels_media_group_timers(self):
+        """stop() should cancel pending media group timers and clear the buffer."""
+        bot = gateway.BotInstance("test", "tok")
+        timer_a = MagicMock()
+        timer_b = MagicMock()
+        bot._media_group_buffer = {
+            "mg_1": {"chat_id": 1, "text": "", "refs": [], "timer": timer_a},
+            "mg_2": {"chat_id": 2, "text": "", "refs": [], "timer": timer_b},
+        }
+        bot.stop()
+        timer_a.cancel.assert_called_once()
+        timer_b.cancel.assert_called_once()
+        self.assertEqual(bot._media_group_buffer, {})
+
+    def test_stop_handles_none_timer(self):
+        """stop() should not crash when a buffered group has timer=None."""
+        bot = gateway.BotInstance("test", "tok")
+        bot._media_group_buffer = {
+            "mg_1": {"chat_id": 1, "text": "", "refs": [], "timer": None},
+        }
+        bot.stop()  # should not raise
+        self.assertEqual(bot._media_group_buffer, {})
+
 
 class TestBotNotification(unittest.TestCase):
     """Tests for per-bot notification handlers."""

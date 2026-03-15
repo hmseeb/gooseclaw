@@ -5,6 +5,9 @@
 - [x] **v1.0 Setup Wizard** - Phases 1-5 (shipped 2026-03-11)
 - [x] **v2.0 Multi-Channel & Multi-Bot** - Phases 6-10 (shipped 2026-03-13)
 - [x] **v3.0 Rich Media & Channel Flexibility** - Phases 11-15 (shipped 2026-03-13)
+- [x] **Watcher Engine** - Phase 16 (shipped 2026-03-14)
+- [x] **Vector Knowledge Base** - Phase 17 (shipped 2026-03-15)
+- [ ] **v4.0 Production Hardening** - Phases 18-21 (in progress)
 
 ## Phases
 
@@ -19,9 +22,8 @@
 
 </details>
 
-### v2.0 Multi-Channel & Multi-Bot
-
-**Milestone Goal:** Make channel plugins first-class citizens with full parity to Telegram, and support multiple Telegram bots with independent provider/model configs on a single gateway.
+<details>
+<summary>v2.0 Multi-Channel & Multi-Bot (Phases 6-10) - SHIPPED 2026-03-13</summary>
 
 - [x] **Phase 6: Shared Infrastructure Extraction** - Extract SessionManager and CommandRouter from Telegram-specific code into shared abstractions (completed 2026-03-13)
 - [x] **Phase 7: Channel Plugin Parity** - Wire channel plugins to shared infrastructure for commands, locks, cancellation, and typing indicators (completed 2026-03-13)
@@ -29,190 +31,106 @@
 - [x] **Phase 9: Multi-Bot Core** - Multiple Telegram bots on one gateway with independent sessions, provider routing, and backward-compatible config (completed 2026-03-13)
 - [x] **Phase 10: Multi-Bot Lifecycle** - Hot-add and hot-remove bots via API without container restart (completed 2026-03-13)
 
+</details>
+
+<details>
+<summary>v3.0 Rich Media & Channel Flexibility (Phases 11-17) - SHIPPED 2026-03-15</summary>
+
+- [x] **Phase 11: Channel Contract v2** - InboundMessage envelope, OutboundAdapter interface, ChannelCapabilities (completed 2026-03-13)
+- [x] **Phase 12: Inbound Media Pipeline** - Download + normalize incoming media from Telegram (completed 2026-03-13)
+- [x] **Phase 13: Relay Protocol Upgrade** - REST /reply with multimodal content blocks (completed 2026-03-13)
+- [x] **Phase 14: Outbound Rich Media** - send_image, send_voice, send_file on Telegram adapter (completed 2026-03-13)
+- [x] **Phase 15: Reference Channel Plugin** - Discord plugin with full rich media (completed 2026-03-13)
+- [x] **Phase 16: Watcher Engine** - Event subscriptions with passthrough + smart processing (completed 2026-03-14)
+- [x] **Phase 17: Vector Knowledge Base** - Semantic retrieval MCP extension (completed 2026-03-15)
+
+</details>
+
+### v4.0 Production Hardening (In Progress)
+
+**Milestone Goal:** Eliminate active security vulnerabilities, harden infrastructure for production, and establish comprehensive test coverage across gateway, shell scripts, and container lifecycle.
+
+- [ ] **Phase 18: Security Foundations** - Eliminate injection vectors, upgrade password hashing with lazy migration, seal credential leaks, add body limits and missing headers
+- [ ] **Phase 19: Test Infrastructure and Coverage** - Establish pytest + HTTP-level test framework and cover all gateway endpoints, shell scripts, and entrypoint bootstrap
+- [ ] **Phase 20: Infrastructure Hardening** - Pin dependencies, add CVE scanning, structured JSON logging, and graceful shutdown
+- [ ] **Phase 21: End-to-End Validation** - Container-level integration test proving the whole system boots and works
+
 ## Phase Details
 
-### Phase 6: Shared Infrastructure Extraction
-**Goal**: Telegram's session management, command routing, and concurrency primitives are extracted into reusable shared components with zero behavior change
-**Depends on**: Phase 5 (v1.0 complete)
-**Requirements**: INFRA-01, INFRA-02, INFRA-03, INFRA-04
+### Phase 18: Security Foundations
+**Goal**: All known security vulnerabilities are eliminated. Users authenticate with production-grade password hashing, no code path allows injection, and no secrets leak to logs.
+**Depends on**: Phase 17
+**Requirements**: SEC-01, SEC-02, SEC-03, SEC-04, SEC-05, SEC-06, SEC-07, HARD-04
 **Success Criteria** (what must be TRUE):
-  1. SessionManager class exists with composite key (channel:user_id) and all Telegram sessions are managed through it
-  2. CommandRouter class dispatches /help, /stop, /clear, /compact and Telegram's command handling delegates to it
-  3. Telegram globals (_telegram_sessions, _telegram_active_relays, _telegram_chat_locks) no longer exist as module-level dicts -- they live as per-instance state
-  4. /clear clears only the requesting channel's sessions, not all sessions across all channels (or this limitation is documented with a scoping decision)
-  5. All existing Telegram behavior passes existing tests -- zero functional regression
-**Plans:** 3 plans
+  1. Shell scripts (secret.sh, entrypoint.sh) pass user input via environment variables, never via string interpolation into inline Python
+  2. gateway.py _run_script uses list-based subprocess execution, never shell=True with unsanitized input
+  3. Existing users with SHA-256 password hashes can log in and their hash is transparently upgraded to PBKDF2 (lazy migration)
+  4. New passwords are stored as PBKDF2 with 600K iterations and random salt, never as bare SHA-256
+  5. Recovery secret is written to /data/recovery_secret (file only), never printed to container stdout/stderr
+  6. POST requests larger than 1MB are rejected with HTTP 413 before body is read into memory
+  7. All HTTP responses include Referrer-Policy, Permissions-Policy, and Cross-Origin-Opener-Policy headers
+**Plans**: TBD
 
 Plans:
-- [ ] 06-01-PLAN.md -- TDD: SessionManager and ChannelState classes (INFRA-01, INFRA-03)
-- [ ] 06-02-PLAN.md -- TDD: CommandRouter class (INFRA-02)
-- [ ] 06-03-PLAN.md -- Wire classes into gateway, remove globals, fix /clear scoping (INFRA-03, INFRA-04)
+- [ ] 18-01: Shell injection fixes across secret.sh, entrypoint.sh, and gateway.py _run_script (SEC-01, SEC-02, SEC-03)
+- [ ] 18-02: PBKDF2 password hashing with lazy SHA-256 migration (SEC-04, SEC-05)
+- [ ] 18-03: Recovery secret leak fix, request body limits, HTTP security headers (SEC-06, SEC-07, HARD-04)
 
-### Phase 7: Channel Plugin Parity
-**Goal**: Channel plugins have identical capabilities to Telegram for commands, per-user concurrency safety, cancellation, and activity indicators
-**Depends on**: Phase 6
-**Requirements**: CHAN-01, CHAN-02, CHAN-03, CHAN-04, CHAN-05, CHAN-06
+### Phase 19: Test Infrastructure and Coverage
+**Goal**: Every gateway HTTP endpoint, shell script, and entrypoint bootstrap path has automated test coverage running against real server instances
+**Depends on**: Phase 18
+**Requirements**: TEST-01, TEST-02, TEST-03, TEST-04, TEST-05, TEST-06, TEST-07, TEST-09
 **Success Criteria** (what must be TRUE):
-  1. A channel plugin user can send /help, /stop, /clear, /compact and get the same behavior as Telegram users
-  2. Two messages from the same user on a channel plugin are serialized (second waits for first relay to complete)
-  3. A channel plugin user can cancel an in-flight request via /stop and the active WebSocket relay is closed
-  4. A channel plugin can register custom commands via the `commands` field in its CHANNEL dict and users can invoke them
-  5. Notification bus validates channel names from loaded plugins dynamically, not from a hardcoded list
-  6. Channel plugins can signal typing/activity indicators via optional `typing` callback in CHANNEL dict
-**Plans:** 3 plans
+  1. `pytest` runs from project root with requirements-dev.txt dependencies and produces a pass/fail result
+  2. Auth endpoints (login, session, rate limiting, password reset) have tests that exercise real HTTP requests against a running gateway
+  3. Setup, job, and health endpoints each have dedicated test files exercising their HTTP contracts
+  4. Security headers and CORS are verified across all response paths (setup, API, proxy, error)
+  5. Shell scripts (job.sh, remind.sh, notify.sh, secret.sh) have tests validating argument parsing and output
+  6. Entrypoint bootstrap logic (directory creation, config generation, env rehydration, provider detection) is tested
+**Plans**: TBD
 
 Plans:
-- [ ] 07-01-PLAN.md -- TDD: Generalize command handlers + ChannelRelay command interception and relay tracking (CHAN-01, CHAN-03)
-- [ ] 07-02-PLAN.md -- TDD: Per-user locks and typing indicators in ChannelRelay (CHAN-02, CHAN-06)
-- [ ] 07-03-PLAN.md -- TDD: Custom command registration and dynamic channel validation (CHAN-04, CHAN-05)
+- [ ] 19-01: pytest infrastructure setup with HTTP-level test fixtures (TEST-09)
+- [ ] 19-02: Auth and security header tests (TEST-01, TEST-05)
+- [ ] 19-03: Setup, job, and health endpoint tests (TEST-02, TEST-03, TEST-04)
+- [ ] 19-04: Shell script and entrypoint bootstrap tests (TEST-06, TEST-07)
 
-### Phase 8: Notification Channel Targeting
-**Goal**: The notification pipeline (API, cron, remind.sh) can deliver to specific channels instead of broadcasting to all
-**Depends on**: Phase 7
-**Requirements**: CHAN-07, CHAN-08, CHAN-09
+### Phase 20: Infrastructure Hardening
+**Goal**: The deployment pipeline catches vulnerabilities automatically, the application logs structured JSON for observability, and the container shuts down gracefully
+**Depends on**: Phase 19
+**Requirements**: HARD-01, HARD-02, HARD-03, HARD-05, HARD-06
 **Success Criteria** (what must be TRUE):
-  1. POST /api/notify with a `channel` parameter delivers only to that channel, not all channels
-  2. A cron job with `notify_channel` set delivers its output to only that channel
-  3. remind.sh accepts --notify-channel flag and the reminder is delivered to the specified channel only
-**Plans:** 1 plan
+  1. requirements.lock exists with exact versions and hashes, pip install uses --require-hashes
+  2. CVE scanning runs on dependency changes and reports known vulnerabilities
+  3. Container shutdown completes within 5 seconds, force-killing hung processes after grace period
+  4. Security-sensitive operations (auth attempts, config changes, errors) emit structured JSON log lines
+  5. GOOSECLAW_LOG_FORMAT=json enables JSON logging across gateway, with print() calls migrated incrementally
+**Plans**: TBD
 
 Plans:
-- [x] 08-01-PLAN.md -- Wire channel targeting through API, cron scheduler, and remind.sh (CHAN-07, CHAN-08, CHAN-09)
+- [ ] 20-01: Dependency pinning with hash verification and CVE scanning setup (HARD-01, HARD-02)
+- [ ] 20-02: Graceful shutdown with timeout and force-kill (HARD-03)
+- [ ] 20-03: Structured JSON logging with incremental migration (HARD-05, HARD-06)
 
-### Phase 9: Multi-Bot Core
-**Goal**: Users can run multiple Telegram bots on a single GooseClaw gateway, each with its own sessions, provider, and model
-**Depends on**: Phase 6
-**Requirements**: BOT-01, BOT-02, BOT-03, BOT-04, BOT-07
+### Phase 21: End-to-End Validation
+**Goal**: A single automated test proves the entire system works from container boot to healthy goose session
+**Depends on**: Phase 18, Phase 19, Phase 20
+**Requirements**: TEST-08
 **Success Criteria** (what must be TRUE):
-  1. User can configure multiple bots in setup.json with distinct names, tokens, and optional provider/model overrides
-  2. Each bot runs its own poll loop and maintains independent session stores and pair codes
-  3. Per-user session locks and active relay tracking are scoped per-bot (one bot's lock does not block another bot's users)
-  4. Each bot routes to its own LLM provider/model via extended channel_routes keyed by bot name
-  5. Existing single-bot `telegram_bot_token` config continues to work as the default bot with no migration required
-**Plans:** 3 plans
+  1. Test builds and boots a GooseClaw container from the project Dockerfile
+  2. Test completes the setup wizard flow (provider config, password set) via HTTP
+  3. Test verifies goosed starts and /api/health returns 200 with healthy status
+  4. Test runs in CI without manual intervention
+**Plans**: TBD
 
 Plans:
-- [x] 09-01-PLAN.md -- TDD: BotInstance and BotManager classes, config resolution, validation (BOT-01, BOT-02, BOT-03, BOT-07)
-- [x] 09-02-PLAN.md -- TDD: Poll loop refactor into BotInstance, notification handlers, per-bot pairing (BOT-02, BOT-03, BOT-04)
-- [x] 09-03-PLAN.md -- TDD: Wire BotManager into startup, shutdown, and API endpoints (BOT-04, BOT-07)
-
-### Phase 10: Multi-Bot Lifecycle
-**Goal**: Operators can dynamically add and remove bots without restarting the container
-**Depends on**: Phase 9
-**Requirements**: BOT-05, BOT-06
-**Success Criteria** (what must be TRUE):
-  1. User can add a new bot via API call and it begins polling immediately without container restart
-  2. User can remove a bot via API call and its poll loop stops, sessions are cleaned up, without affecting other bots
-  3. Adding or removing a bot does not interrupt active conversations on other bots
-**Plans:** 1 plan
-
-Plans:
-- [x] 10-01-PLAN.md -- TDD: Hot-add and hot-remove bot API endpoints with setup.json persistence (BOT-05, BOT-06)
-
-### v3.0 Rich Media & Channel Flexibility
-
-**Milestone Goal:** Make channels truly flexible for rich media. Images, voice, files flow seamlessly in both directions across any channel. The agent is channel-agnostic. Adding a new channel with full media support requires only implementing adapter methods.
-
-- [x] **Phase 11: Channel Contract v2** - Define InboundMessage envelope, OutboundAdapter interface, ChannelCapabilities. Refactor existing send(text) to send_text() with backward compatibility. (completed 2026-03-13)
-- [x] **Phase 12: Inbound Media Pipeline** - Download + normalize incoming media from Telegram (getFile API). MediaContent class. Base64 encoding for images. Replace MEDIA_REPLY with actual processing. (completed 2026-03-13)
-- [x] **Phase 13: Relay Protocol Upgrade** - Switch from custom WS text-only to goosed REST /reply with multimodal content blocks. Parse typed content blocks in responses. (completed 2026-03-13)
-- [x] **Phase 14: Outbound Rich Media** - Implement send_image, send_voice, send_file on Telegram adapter. Graceful degradation. Media-aware notify_all. (completed 2026-03-13)
-- [x] **Phase 15: Reference Channel Plugin** - Build Slack or Discord plugin with full rich media using the v2 contract. Validates the abstraction. (completed 2026-03-13)
-
-## Phase Details (v3.0)
-
-### Phase 11: Channel Contract v2
-**Goal**: The channel plugin interface supports rich media (images, voice, files) with declarative capabilities and graceful degradation, while remaining backward-compatible with text-only plugins
-**Depends on**: Phase 10 (v2.0 complete)
-**Requirements**: MEDIA-01, MEDIA-02, MEDIA-03, MEDIA-04, MEDIA-05
-**Success Criteria** (what must be TRUE):
-  1. InboundMessage dataclass normalizes text + media + metadata from any platform into one format
-  2. OutboundAdapter protocol defines send_text (required), send_image, send_voice, send_file (optional)
-  3. ChannelCapabilities dict declares what each channel supports (images, voice, files, buttons, max sizes)
-  4. If a channel doesn't implement send_image, sending an image gracefully falls back to text (URL or description)
-  5. Existing channel plugins with only send(text) continue to work with zero changes
-**Plans:** 2/2 plans complete
-
-### Phase 12: Inbound Media Pipeline
-**Goal**: Media messages from users (photos, voice, documents, videos) are downloaded, normalized into MediaContent, and prepared for relay to goose
-**Depends on**: Phase 11
-**Requirements**: MEDIA-06, MEDIA-07, MEDIA-09
-**Success Criteria** (what must be TRUE):
-  1. Telegram adapter calls getFile API and downloads media bytes for all 8 media types
-  2. MediaContent(kind, mime_type, data, filename) is populated correctly for each media type
-  3. Images are base64-encoded and packaged as goose-compatible content blocks
-  4. Media with captions preserves both the text and media content
-  5. Download failures are handled gracefully (user gets error message, not silence)
-**Plans:** 2/2 plans complete
-
-### Phase 13: Relay Protocol Upgrade
-**Goal**: The gateway relay supports multimodal content (images, audio) in both directions instead of text-only strings
-**Depends on**: Phase 12
-**Requirements**: MEDIA-10, MEDIA-11, MEDIA-12
-**Success Criteria** (what must be TRUE):
-  1. Gateway sends multimodal content blocks to goosed /reply endpoint (text + image in content array)
-  2. Gateway parses typed content blocks in goose responses and separates text from media
-  3. Text-only messages relay identically to current behavior (zero regression)
-  4. Goose receives and processes user-sent images (vision model sees the image)
-  5. Tool responses containing images/audio are captured and routed to outbound adapter
-**Plans:** 2/2 plans complete
-
-Plans:
-- [x] 13-01-PLAN.md -- TDD: REST relay helpers (SSE parser, content blocks, _do_rest_relay) (MEDIA-10, MEDIA-11, MEDIA-12)
-- [x] 13-02-PLAN.md -- Wire REST relay into _relay_to_goose_web, update all callers, remove WS code (MEDIA-10, MEDIA-11, MEDIA-12)
-
-### Phase 14: Outbound Rich Media
-**Goal**: The agent can send images, voice notes, and files back to users through any channel that supports them
-**Depends on**: Phase 13
-**Requirements**: MEDIA-13, MEDIA-14, MEDIA-15
-**Success Criteria** (what must be TRUE):
-  1. Telegram adapter sends images via sendPhoto, voice via sendVoice, files via sendDocument
-  2. Agent-generated media (from goose tools or TTS) routes through the correct send method
-  3. notify_all supports optional media attachment alongside text
-  4. Channels without media support get graceful text fallback (not errors)
-**Plans:** 2/2 plans complete
-
-### Phase 15: Reference Channel Plugin
-**Goal**: A non-Telegram channel plugin (Slack or Discord) ships with full rich media support, validating the v2 contract
-**Depends on**: Phase 14
-**Requirements**: MEDIA-15, MEDIA-16
-**Success Criteria** (what must be TRUE):
-  1. Plugin implements OutboundAdapter with send_text, send_image, send_voice, send_file
-  2. Plugin declares ChannelCapabilities accurately for the platform
-  3. Media flows end-to-end (user sends image on platform -> goose sees it -> goose responds with image -> user sees it)
-  4. Adding this plugin required zero changes to gateway core code
-  5. Plugin serves as a template for other channels
-**Plans:** 1/1 plans complete
-
-### Phase 16: Watcher Engine
-**Goal**: External events (webhooks, RSS feeds) trigger notifications through a two-tier processing pipeline: passthrough (template substitution) or smart (LLM analysis), delivered to targeted channels via the existing notification bus
-**Depends on**: Phase 15
-**Requirements**: WATCH-01, WATCH-02, WATCH-03, WATCH-04, WATCH-05, WATCH-06, WATCH-07, WATCH-08, WATCH-09, WATCH-10
-**Success Criteria** (what must be TRUE):
-  1. User can create/list/update/delete watchers via /api/watchers CRUD endpoints
-  2. Webhook watchers receive external POSTs at /api/webhooks/<name> and route to matching watchers
-  3. Feed watchers poll URLs at configurable intervals and fire only on content change (SHA-256 hash diff)
-  4. Passthrough tier renders string.Template with safe_substitute on flattened payload (supports both ${var} and {{var}} syntax)
-  5. Smart tier creates a goose session, relays data with user-defined prompt, and delivers LLM response
-  6. All watcher fires deliver via notify_all with optional channel targeting
-  7. Watcher engine background loop polls feed watchers at their configured intervals
-  8. Watchers persist to watchers.json and reload on startup
-**Plans:** 3/3 plans complete
-
-Plans:
-- [ ] 16-01-PLAN.md -- TDD: Watcher CRUD, persistence, and passthrough template processing (WATCH-01, WATCH-02, WATCH-03, WATCH-04)
-- [ ] 16-02-PLAN.md -- TDD: Smart processing, fire dispatch, webhook routing, and feed polling (WATCH-05, WATCH-06, WATCH-07, WATCH-08)
-- [ ] 16-03-PLAN.md -- TDD: API endpoints, webhook receiver, engine loop, and startup wiring (WATCH-09, WATCH-10)
+- [ ] 21-01: E2e container integration test (TEST-08)
 
 ## Progress
 
-**Execution Order (v2.0):**
-Phases execute in numeric order: 6 -> 7 -> 8 -> 9 -> 10
-Phase 9 depends on Phase 6 (not Phase 7/8), so Phase 9 could start after Phase 6 if needed.
-
-**Execution Order (v3.0):**
-Phases execute: 11 -> 12 -> 13 -> 14 -> 15
-Phase 15 (reference plugin) depends on Phase 14 (outbound media).
+**Execution Order (v4.0):**
+Phases execute in order: 18 -> 19 -> 20 -> 21
+Security fixes first (18), then tests validate fixed code (19), then hardening with test safety net (20), then e2e validates everything (21).
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
@@ -226,30 +144,14 @@ Phase 15 (reference plugin) depends on Phase 14 (outbound media).
 | 8. Notification Channel Targeting | v2.0 | 1/1 | Complete | 2026-03-13 |
 | 9. Multi-Bot Core | v2.0 | 3/3 | Complete | 2026-03-13 |
 | 10. Multi-Bot Lifecycle | v2.0 | 1/1 | Complete | 2026-03-13 |
-| 11. Channel Contract v2 | 2/2 | Complete   | 2026-03-13 | - |
+| 11. Channel Contract v2 | v3.0 | 2/2 | Complete | 2026-03-13 |
 | 12. Inbound Media Pipeline | v3.0 | 2/2 | Complete | 2026-03-13 |
-| 13. Relay Protocol Upgrade | 2/2 | Complete   | 2026-03-13 | - |
+| 13. Relay Protocol Upgrade | v3.0 | 2/2 | Complete | 2026-03-13 |
 | 14. Outbound Rich Media | v3.0 | 2/2 | Complete | 2026-03-13 |
-| 15. Reference Channel Plugin | 1/1 | Complete   | 2026-03-13 | - |
-| 16. Watcher Engine | 3/3 | Complete    | 2026-03-14 | - |
-
-### Phase 17: Vector Knowledge Base — Semantic retrieval MCP extension replacing monolithic system.md context loading
-
-**Goal:** Replace monolithic system.md context loading (~6,000 tokens per session) with a ChromaDB-backed semantic retrieval MCP extension. The bot calls knowledge_search() on-demand. Vector store also absorbs memory.md as the unified knowledge persistence layer.
-**Depends on:** Phase 16
-**Requirements**: KB-01, KB-02, KB-03, KB-04, KB-05, KB-06, KB-07, KB-08, KB-09, KB-10
-**Success Criteria** (what must be TRUE):
-  1. LOCKED files (system.md, schemas/, onboarding.md) are chunked into ~30-40 typed chunks and indexed into ChromaDB
-  2. knowledge_search returns top-N semantically relevant chunks with similarity scores
-  3. knowledge_upsert writes typed chunks to runtime collection (replaces memory.md)
-  4. knowledge_get retrieves chunks by exact key from either collection
-  5. Deploy-time re-index wipes system collection, preserves runtime collection
-  6. .goosehints no longer loads system.md, memory.md, or onboarding.md (token reduction)
-  7. memory.md contents migrated to runtime chunks on first boot
-  8. MCP extension registered in goose config.yaml and bot can call tools
-**Plans:** 3/3 plans complete
-
-Plans:
-- [ ] 17-01-PLAN.md -- TDD: Chunker pipeline and deploy-time indexer (KB-01, KB-05, KB-06, KB-09)
-- [ ] 17-02-PLAN.md -- TDD: FastMCP server with 4 knowledge tools (KB-02, KB-03, KB-04, KB-10)
-- [ ] 17-03-PLAN.md -- Integration: Dockerfile, entrypoint, .goosehints, memory migration (KB-07, KB-08)
+| 15. Reference Channel Plugin | v3.0 | 1/1 | Complete | 2026-03-13 |
+| 16. Watcher Engine | v3.0 | 3/3 | Complete | 2026-03-14 |
+| 17. Vector Knowledge Base | v3.0 | 3/3 | Complete | 2026-03-15 |
+| 18. Security Foundations | v4.0 | 0/3 | Not started | - |
+| 19. Test Infrastructure and Coverage | v4.0 | 0/4 | Not started | - |
+| 20. Infrastructure Hardening | v4.0 | 0/3 | Not started | - |
+| 21. End-to-End Validation | v4.0 | 0/1 | Not started | - |

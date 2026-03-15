@@ -61,34 +61,34 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SEC-01 | — | Pending |
-| SEC-02 | — | Pending |
-| SEC-03 | — | Pending |
-| SEC-04 | — | Pending |
-| SEC-05 | — | Pending |
-| SEC-06 | — | Pending |
-| SEC-07 | — | Pending |
-| HARD-01 | — | Pending |
-| HARD-02 | — | Pending |
-| HARD-03 | — | Pending |
-| HARD-04 | — | Pending |
-| HARD-05 | — | Pending |
-| HARD-06 | — | Pending |
-| TEST-01 | — | Pending |
-| TEST-02 | — | Pending |
-| TEST-03 | — | Pending |
-| TEST-04 | — | Pending |
-| TEST-05 | — | Pending |
-| TEST-06 | — | Pending |
-| TEST-07 | — | Pending |
-| TEST-08 | — | Pending |
-| TEST-09 | — | Pending |
+| SEC-01 | Phase 18 | Pending |
+| SEC-02 | Phase 18 | Pending |
+| SEC-03 | Phase 18 | Pending |
+| SEC-04 | Phase 18 | Pending |
+| SEC-05 | Phase 18 | Pending |
+| SEC-06 | Phase 18 | Pending |
+| SEC-07 | Phase 18 | Pending |
+| HARD-01 | Phase 20 | Pending |
+| HARD-02 | Phase 20 | Pending |
+| HARD-03 | Phase 20 | Pending |
+| HARD-04 | Phase 18 | Pending |
+| HARD-05 | Phase 20 | Pending |
+| HARD-06 | Phase 20 | Pending |
+| TEST-01 | Phase 19 | Pending |
+| TEST-02 | Phase 19 | Pending |
+| TEST-03 | Phase 19 | Pending |
+| TEST-04 | Phase 19 | Pending |
+| TEST-05 | Phase 19 | Pending |
+| TEST-06 | Phase 19 | Pending |
+| TEST-07 | Phase 19 | Pending |
+| TEST-08 | Phase 21 | Pending |
+| TEST-09 | Phase 19 | Pending |
 
 **Coverage:**
 - v4.0 requirements: 22 total
-- Mapped to phases: 0
-- Unmapped: 22
+- Mapped to phases: 22
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-16*
-*Last updated: 2026-03-16 after initial definition*
+*Last updated: 2026-03-16 after roadmap creation*

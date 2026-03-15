@@ -731,13 +731,13 @@ class BotInstance:
                                     f"Generate a greeting that: confirms pairing worked, riffs on the time/day naturally "
                                     f"(be observational and cheeky, like 'friday night and you're setting up an AI agent "
                                     f"instead of going out? i already like you'), introduces yourself as gooseclaw briefly, "
-                                    f"then asks what they go by. 2-3 sentences max. casual, punchy."
+                                    f"then asks what they go by. casual, punchy."
                                     f"Plain text only, no markdown, no bullet points."
                                     if needs_onboarding else
                                     f"[SYSTEM CONTEXT — not a real user message, do not include in session history]\n"
                                     f"A returning user just paired a new device via Telegram. {_time_ctx}.\n"
                                     f"Say hi casually, riff on the time/day, confirm the new device is connected. "
-                                    f"2-3 sentences max. casual. Plain text only, no markdown."
+                                    f"casual. Plain text only, no markdown."
                                 )
                                 sid = _get_session_id(chat_id, channel=self.channel_key)
                                 # Change 4: skip LLM kick greeting for returning users

@@ -380,7 +380,7 @@ You are a learning agent. This is NOT optional.
 | User wants missing capability | learnings/FEATURE_REQUESTS.md | append |
 | Command/API fails | learnings/ERRORS.md | append |
 | User shares name, contact | user.md | People |
-| User mentions project, deadline | user.md | Work Context |
+| User mentions project, deadline | knowledge_upsert | type: "fact" |
 | User expresses preference | user.md | Preferences (Observed) |
 | User reacts well to a format | soul.md | Communication Patterns |
 | User is annoyed by something you did | soul.md | Weaknesses & Pitfalls |

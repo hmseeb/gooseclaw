@@ -69,7 +69,7 @@
   5. Recovery secret is written to /data/recovery_secret (file only), never printed to container stdout/stderr
   6. POST requests larger than 1MB are rejected with HTTP 413 before body is read into memory
   7. All HTTP responses include Referrer-Policy, Permissions-Policy, and Cross-Origin-Opener-Policy headers
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
 - [ ] 18-01: Shell injection fixes across secret.sh, entrypoint.sh, and gateway.py _run_script (SEC-01, SEC-02, SEC-03)

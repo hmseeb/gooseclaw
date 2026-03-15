@@ -4370,14 +4370,11 @@ def _fire_cron_job(job):
         notify_all(f"[cron:{job_id}] failed: {error}", channel=job.get("notify_channel"))
         return
 
-    # if the response contains useful output, deliver it
-    # (the recipe may have already called notify via shell, but we deliver
-    # the response too in case it didn't)
+    # The recipe delivers its own output via the `notify` CLI.
+    # Do NOT relay the goose response text, it's just delivery confirmation noise
+    # (e.g. "I've sent the notification") that leaks implementation details.
     if response_text:
-        response_text = _strip_goose_preamble(response_text)
-        if response_text:
-            formatted = f"[{job_id}]\n\n{response_text}"
-            notify_all(formatted, channel=job.get("notify_channel"))
+        print(f"[cron] {job_id} response (not relayed): {response_text[:200]}")
 
     print(f"[cron] job {job_id} completed")
 

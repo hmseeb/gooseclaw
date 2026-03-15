@@ -52,6 +52,28 @@ if [ -z "$GOOSECLAW_RECOVERY_SECRET" ] && [ -f "$DATA_DIR/.recovery_secret" ]; t
     echo "[init] recovery secret loaded from /data"
 fi
 
+# ─── emergency password reset via env var ─────────────────────────────────────
+
+if [ -n "$GOOSECLAW_RESET_PASSWORD" ]; then
+    echo "[init] GOOSECLAW_RESET_PASSWORD detected, resetting password..."
+    python3 -c "
+import json, hashlib, os
+setup_path = os.path.join('$DATA_DIR', 'config', 'setup.json')
+if os.path.exists(setup_path):
+    with open(setup_path) as f:
+        setup = json.load(f)
+    pw = '$GOOSECLAW_RESET_PASSWORD'
+    setup['web_auth_token_hash'] = hashlib.sha256(pw.encode()).hexdigest()
+    setup.pop('web_auth_token', None)
+    with open(setup_path, 'w') as f:
+        json.dump(setup, f, indent=2)
+    print('[init] password reset to value of GOOSECLAW_RESET_PASSWORD')
+else:
+    print('[init] no setup.json found, skipping password reset')
+"
+    echo "[init] IMPORTANT: remove GOOSECLAW_RESET_PASSWORD from Railway env vars after login"
+fi
+
 # ─── goose config ───────────────────────────────────────────────────────────
 
 # symlink goose config directory to volume

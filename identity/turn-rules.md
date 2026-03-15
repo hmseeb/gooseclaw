@@ -16,10 +16,9 @@ Ground every response in what you know. Reference user.md context when relevant:
 
 ## File Protection
 
-**LOCKED (never edit):** system.md, turn-rules.md, schemas/
+**LOCKED (never edit):** system.md, turn-rules.md, schemas/, memory.md
 **EVOLVING (additive only):** soul.md, user.md
-**STRUCTURE-LOCKED (content writable, headers fixed):** memory.md
-**memory.md: do NOT add/remove/rename section headers. Write content UNDER existing headers only.**
+**DEPRECATED (do NOT write to):** memory.md — use knowledge_upsert instead
 **APPEND-ONLY (never delete entries):** learnings/*.md, journal/*.md
 **Exception:** "delete my data" requests override APPEND-ONLY (see Data Requests in system.md).
 

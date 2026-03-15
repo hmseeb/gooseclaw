@@ -42,6 +42,7 @@ import collections
 import glob
 import hashlib
 import hmac
+import logging
 import mimetypes
 import http.client
 import http.server
@@ -59,12 +60,53 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
 import xml.etree.ElementTree as ET
 from http.server import ThreadingHTTPServer
+
+
+# ── structured logging ──────────────────────────────────────────────────────
+
+
+class JSONFormatter(logging.Formatter):
+    def format(self, record):
+        entry = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(record.created)),
+            "level": record.levelname.lower(),
+            "component": record.name,
+            "msg": record.getMessage(),
+        }
+        if record.exc_info and record.exc_info[0]:
+            entry["error"] = traceback.format_exception(*record.exc_info)[-1].strip()
+            entry["traceback"] = self.formatException(record.exc_info)
+        for key in ("event", "ip", "user", "detail", "duration_ms"):
+            val = getattr(record, key, None)
+            if val is not None:
+                entry[key] = val
+        return json.dumps(entry, default=str)
+
+
+_log_handler = logging.StreamHandler(sys.stdout)
+_log_handler.setFormatter(JSONFormatter())
+logging.basicConfig(level=logging.INFO, handlers=[_log_handler])
+
+_auth_log = logging.getLogger("auth")
+_gateway_log = logging.getLogger("gateway")
+_session_log = logging.getLogger("session-mgr")
+_jobs_log = logging.getLogger("jobs")
+_channels_log = logging.getLogger("channels")
+_telegram_log = logging.getLogger("telegram")
+_config_log = logging.getLogger("config")
+_bot_mgr_log = logging.getLogger("bot-mgr")
+_watchers_log = logging.getLogger("watchers")
+_watcher_log = logging.getLogger("watcher")
+_cron_log = logging.getLogger("cron")
+_memory_log = logging.getLogger("memory-writer")
+
 
 # ── rate limiting ────────────────────────────────────────────────────────────
 
@@ -208,7 +250,7 @@ class SessionManager:
                 json.dump(data, f, indent=2)
             os.replace(tmp, fpath)
         except Exception as e:
-            print(f"[session-mgr] warn: could not save {channel} sessions: {e}")
+            _session_log.warning(f"could not save {channel} sessions: {e}")
 
     def load(self, channel):
         if not self._persist_dir:
@@ -222,7 +264,7 @@ class SessionManager:
                     with self._lock:
                         self._sessions.update(data)
         except Exception as e:
-            print(f"[session-mgr] warn: could not load {channel} sessions: {e}")
+            _session_log.warning(f"could not load {channel} sessions: {e}")
 
 
 # ── channel state (shared concurrency primitives) ───────────────────────────
@@ -307,7 +349,7 @@ class BotInstance:
         code = "".join(secrets.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789") for _ in range(6))
         with self.pair_lock:
             self.pair_code = code
-        print(f"[telegram:{self.name}] pairing code: {code}")
+        _telegram_log.info(f"[telegram:{self.name}] pairing code: {code}")
         return code
 
     def get_user_lock(self, user_id):
@@ -324,7 +366,7 @@ class BotInstance:
         self.running = True
         self._thread = threading.Thread(target=self._poll_loop, daemon=True)
         self._thread.start()
-        print(f"[telegram:{self.name}] started")
+        _telegram_log.info(f"[telegram:{self.name}] started")
 
     def stop(self):
         """Stop this bot's poll loop and wait for thread to finish."""
@@ -357,9 +399,9 @@ class BotInstance:
                 headers={"Content-Type": "application/json"},
             )
             urllib.request.urlopen(req, timeout=10)
-            print(f"[telegram:{self.name}] registered slash commands for autocomplete")
+            _telegram_log.info(f"[telegram:{self.name}] registered slash commands for autocomplete")
         except Exception as e:
-            print(f"[telegram:{self.name}] warn: could not register commands: {e}")
+            _telegram_log.warning(f"[telegram:{self.name}] warn: could not register commands: {e}")
 
     def _make_notify_handler(self):
         """Return a notification handler closure that uses this bot's token and platform."""
@@ -425,7 +467,7 @@ class BotInstance:
                             )
                             downloaded.append(mc)
                         else:
-                            print(f"[telegram:{self.name}] media download failed for {ref.get('media_key')}: {file_path}")
+                            _telegram_log.error(f"[telegram:{self.name}] media download failed for {ref.get('media_key')}: {file_path}")
                 inbound_msg.media = downloaded
 
             _adapter = TelegramOutboundAdapter(bot_token, chat_id)
@@ -481,7 +523,7 @@ class BotInstance:
                             if mid:
                                 _st["msg_id"] = mid
                             else:
-                                print(f"[telegram:{self.name}] edit-stream: initial send failed: {err}")
+                                _telegram_log.error(f"[telegram:{self.name}] edit-stream: initial send failed: {err}")
                         elif len(txt) > 3800:
                             _st["overflow"].append(_st["msg_id"])
                             _st["accumulated"] = chunk
@@ -514,12 +556,12 @@ class BotInstance:
                     try:
                         _route_media_blocks(media, _adapter)
                     except Exception as _media_exc:
-                        print(f"[telegram:{self.name}] media routing error: {_media_exc}")
+                        _telegram_log.error(f"[telegram:{self.name}] media routing error: {_media_exc}")
             finally:
                 typing_stop.set()
                 typing_thread.join(timeout=2)
         except Exception as exc:
-            print(f"[telegram:{self.name}] relay exception for chat {chat_id}: {exc}")
+            _telegram_log.error(f"[telegram:{self.name}] relay exception for chat {chat_id}: {exc}")
             if not _cancelled.is_set():
                 try:
                     send_telegram_message(bot_token, chat_id, f"Error: {exc}")
@@ -562,7 +604,7 @@ class BotInstance:
         instead of module-level globals.
         """
         offset = 0
-        print(f"[telegram:{self.name}] polling loop started")
+        _telegram_log.info(f"[telegram:{self.name}] polling loop started")
 
         while self.running:
             try:
@@ -575,7 +617,7 @@ class BotInstance:
                     data = json.loads(resp.read())
 
                 if not data.get("ok"):
-                    print(f"[telegram:{self.name}] getUpdates not ok: {data}")
+                    _telegram_log.info(f"[telegram:{self.name}] getUpdates not ok: {data}")
                     time.sleep(5)
                     continue
 
@@ -694,7 +736,7 @@ class BotInstance:
                         # unpaired user -- check if this is a pairing code
                         if self._check_pairing(chat_id, text):
                             _add_pairing_to_config(chat_id, platform=self.channel_key)
-                            print(f"[telegram:{self.name}] chat {chat_id} paired")
+                            _telegram_log.info(f"[telegram:{self.name}] chat {chat_id} paired")
 
                             # auto-send first message after pairing
                             try:
@@ -766,19 +808,19 @@ class BotInstance:
                                                     msg, s, chat_id=str(c), channel=ck,
                                                 )
                                                 if err:
-                                                    print(f"[telegram:{self.name}] kick greeting error: {err}")
+                                                    _telegram_log.error(f"[telegram:{self.name}] kick greeting error: {err}")
                                                     send_telegram_message(bt, c, f"Error: {err}")
                                                 elif txt:
                                                     send_telegram_message(bt, c, txt)
                                         except Exception as exc:
-                                            print(f"[telegram:{self.name}] kick greeting exception: {exc}")
+                                            _telegram_log.error(f"[telegram:{self.name}] kick greeting exception: {exc}")
                                         finally:
                                             _typing_stop.set()
                                             evt.set()
                                             self.state._greeting_events.pop(str(c), None)
                                     threading.Thread(target=_kick_greeting, daemon=True).start()
                             except Exception as exc:
-                                print(f"[telegram:{self.name}] kick greeting setup failed: {exc}")
+                                _telegram_log.error(f"[telegram:{self.name}] kick greeting setup failed: {exc}")
                         else:
                             send_telegram_message(
                                 self.token, chat_id,
@@ -788,23 +830,23 @@ class BotInstance:
 
             except urllib.error.HTTPError as e:
                 if e.code == 409:
-                    print(f"[telegram:{self.name}] conflict (409), backing off 10s")
+                    _telegram_log.info(f"[telegram:{self.name}] conflict (409), backing off 10s")
                     time.sleep(10)
                 elif e.code == 401:
-                    print(f"[telegram:{self.name}] FATAL: invalid bot token (401). Stopping poll loop.")
+                    _telegram_log.critical(f"[telegram:{self.name}] FATAL: invalid bot token (401). Stopping poll loop.")
                     self.running = False
                     return
                 else:
-                    print(f"[telegram:{self.name}] HTTP error {e.code}, retrying in 5s")
+                    _telegram_log.error(f"[telegram:{self.name}] HTTP error {e.code}, retrying in 5s")
                     time.sleep(5)
             except urllib.error.URLError as e:
-                print(f"[telegram:{self.name}] network error: {e.reason}, retrying in 5s")
+                _telegram_log.error(f"[telegram:{self.name}] network error: {e.reason}, retrying in 5s")
                 time.sleep(5)
             except Exception as e:
-                print(f"[telegram:{self.name}] poll error: {e}, retrying in 5s")
+                _telegram_log.error(f"[telegram:{self.name}] poll error: {e}, retrying in 5s")
                 time.sleep(5)
 
-        print(f"[telegram:{self.name}] polling loop stopped")
+        _telegram_log.info(f"[telegram:{self.name}] polling loop stopped")
 
 
 class BotManager:
@@ -832,7 +874,7 @@ class BotManager:
             bot.stop()
             _session_manager.clear_channel(bot.channel_key)
             unregister_notification_handler(bot.channel_key)
-            print(f"[bot-mgr] removed bot '{name}' (channel_key={bot.channel_key})")
+            _bot_mgr_log.info(f"removed bot '{name}' (channel_key={bot.channel_key})")
 
     def stop_all(self):
         with self._lock:
@@ -935,17 +977,17 @@ def register_notification_handler(name, handler_fn):
         for h in _notification_handlers:
             if h["name"] == name:
                 h["handler"] = handler_fn
-                print(f"[notify] updated handler: {name}")
+                _channels_log.info(f"updated handler: {name}")
                 return
         _notification_handlers.append({"name": name, "handler": handler_fn})
-    print(f"[notify] registered handler: {name}")
+    _channels_log.info(f"registered handler: {name}")
 
 
 def unregister_notification_handler(name):
     """Remove a notification handler by name. No-op if not found."""
     with _notification_handlers_lock:
         _notification_handlers[:] = [h for h in _notification_handlers if h["name"] != name]
-    print(f"[notify] unregistered handler: {name}")
+    _channels_log.info(f"unregistered handler: {name}")
 
 
 # ── channel plugin system state ───────────────────────────────────────────────
@@ -1046,8 +1088,8 @@ def _stderr_reader(proc):
         for raw_line in proc.stderr:
             line = raw_line.decode("utf-8", errors="replace").rstrip("\n")
             # print to both stdout (Railway captures this) and stderr
-            print(f"[goose-web] {line}")
-            print(f"[goose-web] {line}", file=sys.stderr)
+            _gateway_log.info(f"{line}")
+            _gateway_log.error(f"{line}")
             _append_stderr(line)
     except Exception:
         pass  # process exited or pipe closed
@@ -1126,10 +1168,10 @@ def _migrate_password_hash(password):
         if setup:
             setup['web_auth_token_hash'] = hash_token(password)
             save_setup(setup)
-            print("[auth] password hash upgraded from SHA-256 to PBKDF2")
+            _auth_log.info("password hash upgraded from SHA-256 to PBKDF2")
     except Exception as e:
         # migration failure is non-fatal, old hash still works
-        print(f"[auth] hash migration failed (non-fatal): {e}")
+        _auth_log.error(f"hash migration failed (non-fatal): {e}")
 
 
 # ── provider registry ────────────────────────────────────────────────────────
@@ -1290,13 +1332,13 @@ def _re_persist_cached_pairings(config_path=None):
                 )
             else:
                 content = content.rstrip("\n") + "\ngateway_pairings:\n" + pairing_entry
-            print(f"[gateway] re-persisted pairing for {plat}:{uid} after config rewrite")
+            _gateway_log.info(f"re-persisted pairing for {plat}:{uid} after config rewrite")
         tmp = config_path + ".tmp"
         with open(tmp, "w") as f:
             f.write(content)
         os.replace(tmp, config_path)
     except Exception as e:
-        print(f"[gateway] warn: could not re-persist pairings: {e}")
+        _gateway_log.warning(f"could not re-persist pairings: {e}")
 
 
 def get_bot_token():
@@ -1349,7 +1391,7 @@ def get_paired_chat_ids(platform="telegram"):
         if current_entry.get("platform") == platform and current_entry.get("user_id"):
             chat_ids.append(current_entry["user_id"])
     except Exception as e:
-        print(f"[gateway] warn: could not read pairings: {e}")
+        _gateway_log.warning(f"could not read pairings: {e}")
     # merge in-memory cache (survives config.yaml race rewrites)
     with _pairing_cache_lock:
         for (plat, uid), _ in _pairing_cache.items():
@@ -1772,7 +1814,7 @@ def notify_all(text, channel=None, media=None):
                 return {"sent": False, "channels": [{"channel": target["name"], "sent": False, "error": str(e)}]}
         else:
             # channel not found -- fallback to all with warning
-            print(f"[notify] warn: channel '{channel}' not found, falling back to all")
+            _channels_log.warning(f"channel '{channel}' not found, falling back to all")
             text = f"[warn: '{channel}' channel not loaded, broadcasting]\n{text}"
 
     results = []
@@ -1805,7 +1847,7 @@ def _telegram_notify_handler(text, media=None):
                 _adapter = TelegramOutboundAdapter(token, cid)
                 _route_media_blocks(media, _adapter)
             except Exception as _media_exc:
-                print(f"[telegram:notify] media routing error for {cid}: {_media_exc}")
+                _telegram_log.error(f"media routing error for {cid}: {_media_exc}")
     return {"sent": ok_all, "error": "" if ok_all else "some deliveries failed"}
 
 
@@ -2871,9 +2913,9 @@ def _setup_claude_cli():
 
     # check if already installed
     if subprocess.run(["which", "claude"], capture_output=True).returncode == 0:
-        print("[gateway] claude CLI already installed")
+        _gateway_log.info("claude CLI already installed")
     else:
-        print("[gateway] installing claude CLI...")
+        _gateway_log.info("installing claude CLI...")
         is_root = os.getuid() == 0
         try:
             subprocess.run(
@@ -2882,18 +2924,18 @@ def _setup_claude_cli():
             )
         except Exception:
             if is_root:
-                print("[gateway] native install failed, trying npm...")
+                _gateway_log.error("native install failed, trying npm...")
                 try:
                     subprocess.run(
                         ["bash", "-c", "apt-get update -qq && apt-get install -y -qq nodejs npm >/dev/null 2>&1 && npm install -g @anthropic-ai/claude-code 2>/dev/null"],
                         check=True, timeout=180,
                     )
                 except Exception as e:
-                    print(f"[gateway] ERROR: could not install claude CLI: {e}")
+                    _gateway_log.error(f"could not install claude CLI: {e}")
                     return
             else:
-                print("[gateway] ERROR: claude CLI install failed (running as non-root, apt not available)")
-                print("[gateway] claude CLI should be pre-installed by entrypoint.sh")
+                _gateway_log.error("claude CLI install failed (running as non-root, apt not available)")
+                _gateway_log.info("claude CLI should be pre-installed by entrypoint.sh")
                 return
 
     # create ~/.claude.json if missing
@@ -2902,7 +2944,7 @@ def _setup_claude_cli():
         os.makedirs(os.path.join(home, ".claude"), exist_ok=True)
         with open(claude_json, "w") as f:
             json.dump({"hasCompletedOnboarding": True}, f)
-        print("[gateway] created ~/.claude.json")
+        _gateway_log.info("created ~/.claude.json")
 
 
 def _extract_yaml_sections(content, section_keys):
@@ -2952,7 +2994,7 @@ def _write_timezone_to_user_md(tz):
         )
     with open(user_md, "w") as f:
         f.write(content)
-    print(f"[config] wrote timezone {tz} to user.md")
+    _config_log.info(f"wrote timezone {tz} to user.md")
 
 
 
@@ -3114,7 +3156,7 @@ def apply_config(config):
             bot = _bot_manager.add_bot(name, token, channel_key=channel_key)
             bot.start()
         except ValueError as e:
-            print(f"[bot-mgr] error starting bot {name}: {e}")
+            _bot_mgr_log.error(f"error starting bot {name}: {e}")
 
 
 def _is_goose_gateway_running():
@@ -3139,9 +3181,9 @@ def _load_telegram_sessions():
                 if isinstance(data, dict):
                     for chat_key, sid in data.items():
                         _session_manager.set("telegram", chat_key, sid)
-                    print(f"[telegram] migrated {len(data)} sessions from old format")
+                    _telegram_log.info(f"migrated {len(data)} sessions from old format")
             except Exception as e:
-                print(f"[telegram] warn: could not migrate old sessions: {e}")
+                _telegram_log.warning(f"could not migrate old sessions: {e}")
 
 
 def _save_telegram_sessions():
@@ -3192,9 +3234,9 @@ def _load_jobs():
                 with _jobs_lock:
                     _jobs = data
                 active = sum(1 for j in data if not j.get("fired") and j.get("enabled", True))
-                print(f"[jobs] loaded {len(data)} job(s) ({active} active)")
+                _jobs_log.info(f"loaded {len(data)} job(s) ({active} active)")
     except Exception as e:
-        print(f"[jobs] warn: could not load jobs.json: {e}")
+        _jobs_log.warning(f"could not load jobs.json: {e}")
 
 
 def _save_jobs():
@@ -3208,7 +3250,7 @@ def _save_jobs():
             json.dump(data, f, indent=2)
         os.replace(tmp, _JOBS_FILE)
     except Exception as e:
-        print(f"[jobs] warn: could not save jobs.json: {e}")
+        _jobs_log.warning(f"could not save jobs.json: {e}")
 
 
 def _migrate_legacy_files():
@@ -3246,11 +3288,11 @@ def _migrate_legacy_files():
                     }
                     with _jobs_lock:
                         _jobs.append(job)
-                print(f"[jobs] migrated {len(reminders)} reminder(s) from reminders.json")
+                _jobs_log.info(f"migrated {len(reminders)} reminder(s) from reminders.json")
                 migrated = True
             os.rename(reminders_file, reminders_file + ".migrated")
         except Exception as e:
-            print(f"[jobs] warn: could not migrate reminders.json: {e}")
+            _jobs_log.warning(f"could not migrate reminders.json: {e}")
 
     # migrate script jobs
     if os.path.exists(script_jobs_file):
@@ -3285,11 +3327,11 @@ def _migrate_legacy_files():
                         job["working_dir"] = s["working_dir"]
                     with _jobs_lock:
                         _jobs.append(job)
-                print(f"[jobs] migrated {len(scripts)} script(s) from script_jobs.json")
+                _jobs_log.info(f"migrated {len(scripts)} script(s) from script_jobs.json")
                 migrated = True
             os.rename(script_jobs_file, script_jobs_file + ".migrated")
         except Exception as e:
-            print(f"[jobs] warn: could not migrate script_jobs.json: {e}")
+            _jobs_log.warning(f"could not migrate script_jobs.json: {e}")
 
     if migrated:
         _save_jobs()
@@ -3347,7 +3389,7 @@ def create_job(job_data):
     sched = job.get("cron") or (f"fire_at={job.get('fire_at')}" if job.get("fire_at") else "")
     if job.get("recurring_seconds"):
         sched += f" (every {job['recurring_seconds']}s)"
-    print(f"[jobs] created: {job['name']} ({job_id}) {sched}")
+    _jobs_log.info(f"created: {job['name']} ({job_id}) {sched}")
     return job, ""
 
 
@@ -3380,7 +3422,7 @@ def update_job(job_id, updates):
             job["auto_fix_attempts"] = 0
             job["auto_fix_history"] = []
     _save_jobs()
-    print(f"[jobs] updated: {job.get('name', job_id)} ({job_id})")
+    _jobs_log.info(f"updated: {job.get('name', job_id)} ({job_id})")
     return dict(job), ""
 
 
@@ -3457,7 +3499,7 @@ def delete_job(job_id):
         found = len(_jobs) < before
     if found:
         _save_jobs()
-        print(f"[jobs] deleted: {job_id}")
+        _jobs_log.info(f"deleted: {job_id}")
     return found
 
 
@@ -3632,7 +3674,7 @@ def get_upcoming_jobs(hours=24):
                 seen_ids.add(sj.get("id", "unknown"))
                 upcoming.append(entry)
     except Exception as e:
-        print(f"[schedule] warn: could not load goose schedule: {e}")
+        _jobs_log.warning(f"could not load goose schedule: {e}")
 
     # sort by next_run
     upcoming.sort(key=lambda x: x["next_run"])
@@ -3747,7 +3789,7 @@ def _fix_goose_run_recipe(command):
             continue
         new_parts.append(p)
     new_parts.extend(["--text", shlex.quote(instructions)])
-    print(f"[jobs] replaced --recipe with --text for headless goose run")
+    _jobs_log.info(f"replaced --recipe with --text for headless goose run")
     return " ".join(new_parts)
 
 
@@ -3824,12 +3866,12 @@ def _run_script(job):
     if "goose" in command:
         if job_provider:
             command = re.sub(r'(goose\s+run\b)', rf'\1 --provider {job_provider}', command)
-            print(f"[jobs] provider override: {job_provider}")
+            _jobs_log.info(f"provider override: {job_provider}")
         if model_name:
             command = re.sub(r'(goose\s+run\b)', rf'\1 --model {model_name}', command)
-            print(f"[jobs] model override: {model_name}")
+            _jobs_log.info(f"model override: {model_name}")
 
-    print(f"[jobs] firing script: {job_name} ({job_id})")
+    _jobs_log.info(f"firing script: {job_name} ({job_id})")
 
     env = dict(os.environ)
     env.update(extra_env)
@@ -3883,7 +3925,7 @@ def _run_script(job):
             msg = f"[{job_name}] {prefix}{full_output}"
             notify_all(msg, channel=job.get("notify_channel"))
 
-    print(f"[jobs] {job_name}: {status} ({len(full_output)} chars)")
+    _jobs_log.info(f"{job_name}: {status} ({len(full_output)} chars)")
     return status, full_output
 
 
@@ -3895,13 +3937,13 @@ def _fire_reminder(job):
     try:
         result = notify_all(msg, channel=job.get("notify_channel"))
         if result.get("sent"):
-            print(f"[jobs] fired reminder: '{text}'")
+            _jobs_log.info(f"fired reminder: '{text}'")
             return "ok", msg
         else:
-            print(f"[jobs] reminder delivery failed: {result.get('error', '?')}")
+            _jobs_log.error(f"reminder delivery failed: {result.get('error', '?')}")
             return "error", result.get("error", "delivery failed")
     except Exception as e:
-        print(f"[jobs] reminder error: {e}")
+        _jobs_log.error(f"reminder error: {e}")
         return "error", str(e)
 
 
@@ -3948,9 +3990,9 @@ def _handle_job_failure(job, status, output):
     _save_jobs()
 
     if tier == 1:
-        print(f"[autofix] {job_name}: retry {fc}/{max_retries} in {backoff}s")
+        _gateway_log.info(f"{job_name}: retry {fc}/{max_retries} in {backoff}s")
     elif tier == 2:
-        print(f"[autofix] {job_name}: LLM fix attempt {fix_attempts + 1}/{max_fix_attempts}")
+        _gateway_log.info(f"{job_name}: LLM fix attempt {fix_attempts + 1}/{max_fix_attempts}")
         threading.Thread(
             target=_inject_fix_request,
             args=(job, status, output, fix_attempts + 1),
@@ -3969,7 +4011,7 @@ def _handle_job_failure(job, status, output):
             f"Fix history:\n{history_text}\n"
             f"Job disabled until manual intervention."
         )
-        print(f"[autofix] {job_name}: ESCALATED to human")
+        _gateway_log.info(f"{job_name}: ESCALATED to human")
         notify_all(msg)
 
 
@@ -3991,7 +4033,7 @@ def _handle_job_success(job):
         _save_jobs()
         if fix_attempts > 0:
             notify_all(f"[autofix] Job '{job_name}' recovered after {fix_attempts} fix attempt(s)")
-            print(f"[autofix] {job_name}: recovered")
+            _gateway_log.info(f"{job_name}: recovered")
 
 
 def _inject_fix_request(job, status, output, attempt_num):
@@ -4018,7 +4060,7 @@ def _inject_fix_request(job, status, output, attempt_num):
         f"Be autonomous. Fix the problem, don't just diagnose it."
     )
 
-    print(f"[autofix] starting fix session {session_id}")
+    _gateway_log.info(f"starting fix session {session_id}")
     response_text, error, _media = _do_rest_relay(prompt, session_id)
 
     # record what happened
@@ -4038,7 +4080,7 @@ def _inject_fix_request(job, status, output, attempt_num):
     _save_jobs()
 
     if error:
-        print(f"[autofix] fix session failed: {error}")
+        _gateway_log.error(f"fix session failed: {error}")
         # don't count this attempt if goosed was unavailable
         if "Connection" in error or "not ready" in error.lower():
             with _jobs_lock:
@@ -4047,10 +4089,10 @@ def _inject_fix_request(job, status, output, attempt_num):
                 if job.get("auto_fix_history"):
                     job["auto_fix_history"].pop()
             _save_jobs()
-            print(f"[autofix] goosed unavailable, not counting attempt")
+            _gateway_log.info(f"goosed unavailable, not counting attempt")
         notify_all(f"[autofix] Fix attempt {attempt_num} for '{job_name}' failed: {error}")
     else:
-        print(f"[autofix] fix session complete: {response_text[:200]}")
+        _gateway_log.info(f"fix session complete: {response_text[:200]}")
         notify_all(
             f"[autofix] Fix attempt {attempt_num} for '{job_name}' applied. "
             f"Verifying in 10s.\nDiagnosis: {response_text[:300]}"
@@ -4062,7 +4104,7 @@ def _job_engine_loop():
     global _job_engine_running
     global _job_engine_last_tick, _job_engine_tick_count
     _job_engine_running = True
-    print(f"[jobs] engine started ({_JOBS_TICK_SECONDS}s tick)")
+    _jobs_log.info(f"engine started ({_JOBS_TICK_SECONDS}s tick)")
 
     while _job_engine_running:
         try:
@@ -4086,7 +4128,7 @@ def _job_engine_loop():
                         job["last_status"] = "expired"
                         job["last_run"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                         save_needed = True
-                        print(f"[jobs] expired: {job.get('name', job.get('id', '?'))}")
+                        _jobs_log.info(f"expired: {job.get('name', job.get('id', '?'))}")
                     continue
 
                 if not job.get("enabled", True):
@@ -4130,7 +4172,7 @@ def _job_engine_loop():
                 # script jobs: run in thread (may be slow)
                 if job.get("command"):
                     if running_count >= _MAX_CONCURRENT_JOBS:
-                        print(f"[jobs] skip {job.get('id', '?')}: max concurrent ({_MAX_CONCURRENT_JOBS}) reached")
+                        _jobs_log.info(f"skip {job.get('id', '?')}: max concurrent ({_MAX_CONCURRENT_JOBS}) reached")
                         break
 
                     job["currently_running"] = True
@@ -4199,11 +4241,11 @@ def _job_engine_loop():
                 ]
                 pruned = before - len(_jobs)
             if pruned > 0:
-                print(f"[jobs] pruned {pruned} expired one-shot job(s)")
+                _jobs_log.info(f"pruned {pruned} expired one-shot job(s)")
                 _save_jobs()
 
         except Exception as e:
-            print(f"[jobs] error: {e}")
+            _jobs_log.error(f"error: {e}")
             _job_engine_last_tick = time.time()  # tick attempted, engine alive
 
         # sleep 10s, checking shutdown every 2s
@@ -4212,7 +4254,7 @@ def _job_engine_loop():
                 break
             time.sleep(2)
 
-    print("[jobs] engine stopped")
+    _jobs_log.info("engine stopped")
 
 
 def _job_engine_stall_monitor():
@@ -4228,12 +4270,12 @@ def _job_engine_stall_monitor():
         if stale > _JOB_ENGINE_STALE_THRESHOLD:
             if not _job_engine_stalled_notified:
                 msg = f"[CRITICAL] Job engine stalled, last tick {stale:.0f}s ago"
-                print(f"[jobs] STALL ALERT: {msg}")
+                _jobs_log.info(f"STALL ALERT: {msg}")
                 notify_all(msg)
                 _job_engine_stalled_notified = True
         elif _job_engine_stalled_notified and stale < _JOBS_TICK_SECONDS * 2:
             # recovered
-            print("[jobs] stall recovered")
+            _jobs_log.info("stall recovered")
             _job_engine_stalled_notified = False
 
 
@@ -4261,9 +4303,9 @@ def _load_watchers():
             if isinstance(data, list):
                 with _watchers_lock:
                     _watchers = data
-                print(f"[watchers] loaded {len(data)} watcher(s)")
+                _watchers_log.info(f"loaded {len(data)} watcher(s)")
     except Exception as e:
-        print(f"[watchers] warn: could not load watchers.json: {e}")
+        _watchers_log.warning(f"could not load watchers.json: {e}")
 
 
 def _save_watchers():
@@ -4277,7 +4319,7 @@ def _save_watchers():
             json.dump(data, f, indent=2)
         os.replace(tmp, _WATCHERS_FILE)
     except Exception as e:
-        print(f"[watchers] warn: could not save watchers.json: {e}")
+        _watchers_log.warning(f"could not save watchers.json: {e}")
 
 
 def create_watcher(data, _save=True):
@@ -4325,7 +4367,7 @@ def create_watcher(data, _save=True):
         _watchers.append(watcher)
     if _save:
         _save_watchers()
-    print(f"[watchers] created: {watcher['name']} ({watcher_id}) type={watcher_type}")
+    _watchers_log.info(f"created: {watcher['name']} ({watcher_id}) type={watcher_type}")
     return watcher, ""
 
 
@@ -4337,7 +4379,7 @@ def delete_watcher(watcher_id):
         found = len(_watchers) < before
     if found:
         _save_watchers()
-        print(f"[watchers] deleted: {watcher_id}")
+        _watchers_log.info(f"deleted: {watcher_id}")
     return found
 
 
@@ -4361,7 +4403,7 @@ def update_watcher(watcher_id, updates):
             if key in allowed:
                 watcher[key] = val
     _save_watchers()
-    print(f"[watchers] updated: {watcher.get('name', watcher_id)} ({watcher_id})")
+    _watchers_log.info(f"updated: {watcher.get('name', watcher_id)} ({watcher_id})")
     return dict(watcher), ""
 
 
@@ -4527,7 +4569,7 @@ def _fire_watcher(watcher, data):
         watcher["last_error"] = None
     except Exception as e:
         watcher["last_error"] = str(e)
-        print(f"[watchers] error firing {watcher.get('name', '?')}: {e}")
+        _watchers_log.error(f"error firing {watcher.get('name', '?')}: {e}")
 
     _save_watchers()
 
@@ -4570,7 +4612,7 @@ def _handle_webhook_incoming(webhook_name, body, headers=None):
         if secret:
             sig = headers.get("X-Hub-Signature-256", "")
             if not _verify_webhook_signature(secret, body_bytes, sig):
-                print(f"[watchers] webhook HMAC mismatch for {w.get('name')}")
+                _watchers_log.info(f"webhook HMAC mismatch for {w.get('name')}")
                 continue
         matched.append(w)
 
@@ -4670,7 +4712,7 @@ def _check_feed_watcher(watcher):
         watcher["last_error"] = str(e)
         watcher["last_check"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         _save_watchers()
-        print(f"[watchers] feed error {watcher.get('name')}: {e}")
+        _watchers_log.error(f"feed error {watcher.get('name')}: {e}")
         return
 
     content_hash = hashlib.sha256(content).hexdigest()
@@ -4728,14 +4770,14 @@ def _watcher_engine_tick():
                 t = threading.Thread(target=_check_feed_watcher, args=(w,), daemon=True)
                 t.start()
     except Exception as e:
-        print(f"[watchers] engine tick error: {e}", file=sys.stderr)
+        _watchers_log.error(f"engine tick error: {e}")
 
 
 def _watcher_engine_loop():
     """Background loop that periodically ticks the watcher engine."""
     global _watcher_engine_running
     _watcher_engine_running = True
-    print("[watchers] engine started")
+    _watchers_log.info("engine started")
     while _watcher_engine_running:
         _watcher_engine_tick()
         # Sleep in short increments so we can stop promptly
@@ -4743,7 +4785,7 @@ def _watcher_engine_loop():
             if not _watcher_engine_running:
                 break
             time.sleep(5)
-    print("[watchers] engine stopped")
+    _watchers_log.info("engine stopped")
 
 
 def start_watcher_engine():
@@ -4757,7 +4799,7 @@ def start_watcher_engine():
         return
     t = threading.Thread(target=_watcher_engine_loop, daemon=True)
     t.start()
-    print(f"[watchers] engine started with {count} watcher(s)")
+    _watchers_log.info(f"engine started with {count} watcher(s)")
 
 
 def stop_watcher_engine():
@@ -4871,7 +4913,7 @@ def _load_schedule():
             if isinstance(data, list):
                 return data
     except Exception as e:
-        print(f"[cron] warn: could not load schedule.json: {e}")
+        _cron_log.warning(f"could not load schedule.json: {e}")
     return []
 
 
@@ -4884,7 +4926,7 @@ def _save_schedule(jobs):
             json.dump(jobs, f, indent=2)
         os.replace(tmp, _SCHEDULE_FILE)
     except Exception as e:
-        print(f"[cron] warn: could not save schedule.json: {e}")
+        _cron_log.warning(f"could not save schedule.json: {e}")
 
 
 def _load_recipe(source_path):
@@ -4935,7 +4977,7 @@ def _load_recipe(source_path):
             return "\n".join(instruction_lines).strip()
         return None
     except Exception as e:
-        print(f"[cron] warn: could not read recipe {source_path}: {e}")
+        _cron_log.warning(f"could not read recipe {source_path}: {e}")
         return None
 
 
@@ -4946,11 +4988,11 @@ def _fire_cron_job(job):
     """
     job_id = job.get("id", "unknown")
     source = job.get("source", "")
-    print(f"[cron] firing job: {job_id}")
+    _cron_log.info(f"firing job: {job_id}")
 
     instructions = _load_recipe(source)
     if not instructions:
-        print(f"[cron] skip {job_id}: no instructions found in {source}")
+        _cron_log.info(f"skip {job_id}: no instructions found in {source}")
         return
 
     # create an isolated session ID for this run
@@ -4970,7 +5012,7 @@ def _fire_cron_job(job):
     response_text, error, _media = _do_rest_relay(prompt, session_id)
 
     if error:
-        print(f"[cron] job {job_id} failed: {error}")
+        _cron_log.error(f"job {job_id} failed: {error}")
         # notify about the failure
         notify_all(f"[cron:{job_id}] failed: {error}", channel=job.get("notify_channel"))
         return
@@ -4979,16 +5021,16 @@ def _fire_cron_job(job):
     # Do NOT relay the goose response text, it's just delivery confirmation noise
     # (e.g. "I've sent the notification") that leaks implementation details.
     if response_text:
-        print(f"[cron] {job_id} response (not relayed): {response_text[:200]}")
+        _cron_log.info(f"{job_id} response (not relayed): {response_text[:200]}")
 
-    print(f"[cron] job {job_id} completed")
+    _cron_log.info(f"job {job_id} completed")
 
 
 def _cron_scheduler_loop():
     """Background loop: check schedule.json every 30s, fire due jobs."""
     global _cron_scheduler_running
     _cron_scheduler_running = True
-    print(f"[cron] scheduler started ({_CRON_TICK_SECONDS}s tick)")
+    _cron_log.info(f"scheduler started ({_CRON_TICK_SECONDS}s tick)")
 
     while _cron_scheduler_running:
         try:
@@ -5048,7 +5090,7 @@ def _cron_scheduler_loop():
                 _save_schedule(jobs)
 
         except Exception as e:
-            print(f"[cron] error: {e}")
+            _cron_log.error(f"error: {e}")
 
         # sleep 30s, checking shutdown every 5s
         for _ in range(6):
@@ -5056,7 +5098,7 @@ def _cron_scheduler_loop():
                 break
             time.sleep(5)
 
-    print("[cron] scheduler stopped")
+    _cron_log.info("scheduler stopped")
 
 
 def start_cron_scheduler():
@@ -5296,7 +5338,7 @@ def _route_media_blocks(media_blocks, adapter):
             else:
                 adapter.send_image(raw_bytes, mime_type=mime)
         else:
-            print(f"[media] unknown outbound media type: {btype}")
+            _gateway_log.info(f"unknown outbound media type: {btype}")
 
 
 # ── channel plugin system ─────────────────────────────────────────────────────
@@ -5344,7 +5386,7 @@ def get_paired_user_ids(platform):
         if current_entry.get("platform") == platform and current_entry.get("user_id"):
             user_ids.append(current_entry["user_id"])
     except Exception as e:
-        print(f"[channels] warn: could not read pairings for {platform}: {e}")
+        _channels_log.warning(f"could not read pairings for {platform}: {e}")
     # merge in-memory cache (survives config.yaml race rewrites)
     with _pairing_cache_lock:
         for (plat, uid), _ in _pairing_cache.items():
@@ -5363,7 +5405,7 @@ def _resolve_channel_creds(name, cred_keys):
             with open(sidecar_path) as f:
                 sidecar = json.load(f)
         except Exception as e:
-            print(f"[channels] warn: could not read {sidecar_path}: {e}")
+            _channels_log.warning(f"could not read {sidecar_path}: {e}")
     for key in cred_keys:
         val = os.environ.get(key, "") or sidecar.get(key, "")
         creds[key] = val
@@ -5514,7 +5556,7 @@ class ChannelRelay:
                         try:
                             _route_media_blocks(_media, _ch_adapter)
                         except Exception as _me:
-                            print(f"[channel:{self._name}] media routing error: {_me}")
+                            _channels_log.error(f"[channel:{self._name}] media routing error: {_me}")
 
                 return response_text
             finally:
@@ -5545,12 +5587,12 @@ def _load_channel(filepath):
     basename = os.path.basename(filepath)
     mod_name = basename[:-3]  # strip .py
 
-    print(f"[channels] loading {basename}...")
+    _channels_log.info(f"loading {basename}...")
 
     try:
         spec = importlib.util.spec_from_file_location(f"channel_{mod_name}", filepath)
         if not spec or not spec.loader:
-            print(f"[channels] skip {basename}: could not create module spec")
+            _channels_log.info(f"skip {basename}: could not create module spec")
             return False
 
         mod = importlib.util.module_from_spec(spec)
@@ -5558,17 +5600,17 @@ def _load_channel(filepath):
 
         channel = getattr(mod, "CHANNEL", None)
         if not isinstance(channel, dict):
-            print(f"[channels] skip {basename}: no CHANNEL dict found")
+            _channels_log.info(f"skip {basename}: no CHANNEL dict found")
             return False
 
         name = channel.get("name")
         if not name or not isinstance(name, str):
-            print(f"[channels] skip {basename}: CHANNEL.name is required")
+            _channels_log.info(f"skip {basename}: CHANNEL.name is required")
             return False
 
         send_fn = channel.get("send")
         if not callable(send_fn):
-            print(f"[channels] skip {basename}: CHANNEL.send must be callable")
+            _channels_log.info(f"skip {basename}: CHANNEL.send must be callable")
             return False
 
         # resolve credentials
@@ -5578,7 +5620,7 @@ def _load_channel(filepath):
         # check required creds are present
         missing = [k for k in cred_keys if not creds.get(k)]
         if missing:
-            print(f"[channels] skip {name}: missing credentials: {', '.join(missing)}")
+            _channels_log.info(f"skip {name}: missing credentials: {', '.join(missing)}")
             return False
 
         # call setup() if provided
@@ -5587,10 +5629,10 @@ def _load_channel(filepath):
             try:
                 result = setup_fn(creds)
                 if isinstance(result, dict) and not result.get("ok", True):
-                    print(f"[channels] skip {name}: setup failed: {result.get('error', '?')}")
+                    _channels_log.error(f"skip {name}: setup failed: {result.get('error', '?')}")
                     return False
             except Exception as e:
-                print(f"[channels] skip {name}: setup() raised: {e}")
+                _channels_log.info(f"skip {name}: setup() raised: {e}")
                 return False
 
         # wrap send_fn in adapter (v2 contract)
@@ -5619,7 +5661,7 @@ def _load_channel(filepath):
         if callable(poll_fn):
             typing_cb = channel.get("typing")
             if typing_cb and not callable(typing_cb):
-                print(f"[channels] warn: {name} typing is not callable, ignoring")
+                _channels_log.warning(f"{name} typing is not callable, ignoring")
                 typing_cb = None
             relay_fn = ChannelRelay(name, typing_cb=typing_cb, adapter=adapter)
 
@@ -5627,7 +5669,7 @@ def _load_channel(filepath):
                 try:
                     _fn(_relay, _stop, _creds)
                 except Exception as e:
-                    print(f"[channels] {name} poll() crashed: {e}")
+                    _channels_log.info(f"{name} poll() crashed: {e}")
 
             poll_thread = threading.Thread(
                 target=_poll_wrapper,
@@ -5641,14 +5683,14 @@ def _load_channel(filepath):
         if isinstance(custom_commands, dict):
             for cmd_name, cmd_info in custom_commands.items():
                 if not isinstance(cmd_info, dict) or not callable(cmd_info.get("handler")):
-                    print(f"[channels] warn: {name} command /{cmd_name} has invalid handler, skipping")
+                    _channels_log.warning(f"{name} command /{cmd_name} has invalid handler, skipping")
                     continue
                 # Check for conflicts with built-in commands
                 if _command_router.is_command(f"/{cmd_name}"):
-                    print(f"[channels] warn: {name} command /{cmd_name} conflicts with built-in, skipping")
+                    _channels_log.warning(f"{name} command /{cmd_name} conflicts with built-in, skipping")
                     continue
                 _command_router.register(cmd_name, cmd_info["handler"], cmd_info.get("description", ""))
-                print(f"[channels] registered custom command /{cmd_name} from {name}")
+                _channels_log.info(f"registered custom command /{cmd_name} from {name}")
 
         with _channels_lock:
             _loaded_channels[name] = {"module": mod, "channel": channel, "creds": creds, "adapter": adapter}
@@ -5657,11 +5699,11 @@ def _load_channel(filepath):
                 _channel_threads[name] = poll_thread
 
         has_poll = "poll" if callable(poll_fn) else "send-only"
-        print(f"[channels] loaded: {name} v{channel.get('version', '?')} ({has_poll})")
+        _channels_log.info(f"loaded: {name} v{channel.get('version', '?')} ({has_poll})")
         return True
 
     except Exception as e:
-        print(f"[channels] error loading {basename}: {e}")
+        _channels_log.error(f"error loading {basename}: {e}")
         return False
 
 
@@ -5681,7 +5723,7 @@ def _unload_channel(name):
         try:
             teardown_fn()
         except Exception as e:
-            print(f"[channels] {name} teardown() error: {e}")
+            _channels_log.error(f"{name} teardown() error: {e}")
 
     # stop poll thread
     if stop_event:
@@ -5692,7 +5734,7 @@ def _unload_channel(name):
     # deregister from notification bus
     _deregister_notification_handler(f"channel:{name}")
 
-    print(f"[channels] unloaded: {name}")
+    _channels_log.info(f"unloaded: {name}")
 
 
 def _load_all_channels():
@@ -5708,11 +5750,11 @@ def _load_all_channels():
             if _load_channel(filepath):
                 loaded += 1
         except Exception as e:
-            print(f"[channels] error loading {basename}: {e}")
+            _channels_log.error(f"error loading {basename}: {e}")
     if loaded:
-        print(f"[channels] {loaded} channel(s) loaded")
+        _channels_log.info(f"{loaded} channel(s) loaded")
     else:
-        print("[channels] no channel plugins found")
+        _channels_log.info("no channel plugins found")
 
 
 def _reload_channels():
@@ -5738,9 +5780,9 @@ def _load_watcher_state():
             if isinstance(data, dict):
                 with _session_watcher_lock:
                     _session_watcher_state = data
-                print(f"[watcher] loaded {len(data)} tracked session(s)")
+                _watcher_log.info(f"loaded {len(data)} tracked session(s)")
     except Exception as e:
-        print(f"[watcher] warn: could not load state: {e}")
+        _watcher_log.warning(f"could not load state: {e}")
 
 
 def _save_watcher_state():
@@ -5754,7 +5796,7 @@ def _save_watcher_state():
             json.dump(data, f, indent=2)
         os.replace(tmp, _session_watcher_state_file)
     except Exception as e:
-        print(f"[watcher] warn: could not save state: {e}")
+        _watcher_log.warning(f"could not save state: {e}")
 
 
 def _fetch_scheduled_sessions():
@@ -5775,7 +5817,7 @@ def _fetch_scheduled_sessions():
         sessions = data if isinstance(data, list) else data.get("sessions", [])
         return [s for s in sessions if s.get("schedule_id")]
     except Exception as e:
-        print(f"[watcher] error fetching sessions: {e}")
+        _watcher_log.error(f"error fetching sessions: {e}")
         return []
 
 
@@ -5811,7 +5853,7 @@ def _fetch_session_messages(session_id):
                 messages.append({"role": role, "text": "\n".join(text_parts)})
         return messages
     except Exception as e:
-        print(f"[watcher] error fetching session {session_id}: {e}")
+        _watcher_log.error(f"error fetching session {session_id}: {e}")
         return []
 
 
@@ -5819,7 +5861,7 @@ def _session_watcher_loop():
     """Poll goosed for scheduled session output and auto-forward to telegram."""
     global _session_watcher_running
     _session_watcher_running = True
-    print("[watcher] session watcher started")
+    _watcher_log.info("session watcher started")
 
     while _session_watcher_running:
         try:
@@ -5861,9 +5903,9 @@ def _session_watcher_loop():
                             formatted = formatted[:3997] + "..."
                         result = notify_all(formatted)
                         if result.get("sent"):
-                            print(f"[watcher] forwarded output from {schedule_id}")
+                            _watcher_log.info(f"forwarded output from {schedule_id}")
                         else:
-                            print(f"[watcher] delivery failed for {schedule_id}: {result.get('error', '?')}")
+                            _watcher_log.error(f"delivery failed for {schedule_id}: {result.get('error', '?')}")
 
                 # update tracking
                 with _session_watcher_lock:
@@ -5890,7 +5932,7 @@ def _session_watcher_loop():
                 _save_watcher_state()
 
         except Exception as e:
-            print(f"[watcher] error: {e}")
+            _watcher_log.error(f"error: {e}")
 
         # sleep 30s, checking shutdown flag every 5s
         for _ in range(6):
@@ -5898,7 +5940,7 @@ def _session_watcher_loop():
                 break
             time.sleep(5)
 
-    print("[watcher] session watcher stopped")
+    _watcher_log.info("session watcher stopped")
 
 
 def start_session_watcher():
@@ -5948,13 +5990,13 @@ def _restart_goose_and_prewarm(chat_id):
     conversation history is truly cleared.
     """
     chat_key = str(chat_id)
-    print(f"[clear] restarting goose web to clear provider state...")
+    _gateway_log.info(f"restarting goose web to clear provider state...")
     stop_goosed()
     ok = start_goosed()
     if not ok:
-        print(f"[clear] goose web restart failed! next message will trigger health monitor restart")
+        _gateway_log.error(f"goose web restart failed! next message will trigger health monitor restart")
         return
-    print(f"[clear] goose web restarted, prewarming session for chat {chat_key}")
+    _gateway_log.info(f"goose web restarted, prewarming session for chat {chat_key}")
     _prewarm_session(chat_id)
 
 
@@ -5985,10 +6027,10 @@ def _get_session_id(chat_id, channel="telegram"):
     if not sid:
         # fallback to random UUID if goosed is unavailable
         sid = str(uuid.uuid4())
-        print(f"[{channel}] warn: could not start agent, using random session {sid}")
+        _gateway_log.warning(f"[{channel}] warn: could not start agent, using random session {sid}")
 
     _session_manager.set(channel, chat_key, sid)
-    print(f"[{channel}] new session {sid} for chat {chat_key}")
+    _gateway_log.info(f"[{channel}] new session {sid} for chat {chat_key}")
     return sid
 
 
@@ -6006,14 +6048,14 @@ def _prewarm_session(chat_id):
         try:
             sid = _create_goose_session()
             if not sid:
-                print(f"[telegram] prewarm failed for chat {chat_key}")
+                _telegram_log.error(f"prewarm failed for chat {chat_key}")
                 return
             existing = _session_manager.get("telegram", chat_key)
             if not existing:
                 _session_manager.set("telegram", chat_key, sid)
-                print(f"[telegram] prewarmed session {sid} for chat {chat_key}")
+                _telegram_log.info(f"prewarmed session {sid} for chat {chat_key}")
             else:
-                print(f"[telegram] prewarm skipped, session exists for {chat_key}")
+                _telegram_log.info(f"prewarm skipped, session exists for {chat_key}")
         finally:
             evt.set()
             _telegram_state._prewarm_events.pop(chat_key, None)
@@ -6051,7 +6093,7 @@ def _handle_cmd_stop(ctx):
         except Exception:
             pass
         ctx["send_fn"]("Stopped.")
-        print(f"[{channel}] /stop killed relay for chat {chat_id}")
+        _gateway_log.info(f"[{channel}] /stop killed relay for chat {chat_id}")
     else:
         ctx["send_fn"]("Nothing running.")
 
@@ -6075,7 +6117,7 @@ def _handle_cmd_clear(ctx):
         args=(chat_id,),
         daemon=True,
     ).start()
-    print(f"[{channel}] session cleared for chat {chat_id} (old: {old}), restarting goose web")
+    _gateway_log.info(f"[{channel}] session cleared for chat {chat_id} (old: {old}), restarting goose web")
 
 
 def _handle_cmd_restart(ctx):
@@ -6095,7 +6137,7 @@ def _handle_cmd_restart(ctx):
         args=(chat_id,),
         daemon=True,
     ).start()
-    print(f"[{channel}] engine restart requested by chat {chat_id} (session preserved)")
+    _gateway_log.info(f"[{channel}] engine restart requested by chat {chat_id} (session preserved)")
 
 
 def _handle_cmd_compact(ctx):
@@ -6285,11 +6327,11 @@ def _set_session_default_provider(session_id):
         resp.read()
         conn.close()
         if resp.status in (200, 204):
-            print(f"[session] set provider {provider}/{model} on {session_id}")
+            _session_log.info(f"set provider {provider}/{model} on {session_id}")
         else:
-            print(f"[session] WARN: update_provider returned {resp.status} for {session_id}")
+            _session_log.warning(f"update_provider returned {resp.status} for {session_id}")
     except Exception as e:
-        print(f"[session] WARN: failed to set provider on {session_id}: {e}")
+        _session_log.error(f"WARN: failed to set provider on {session_id}: {e}")
 
 
 def _create_goose_session():
@@ -6315,7 +6357,7 @@ def _create_goose_session():
             session = json.loads(body)
             sid = session.get("id") or session.get("session_id")
             if sid:
-                print(f"[telegram] created session via /agent/start: {sid}")
+                _telegram_log.info(f"created session via /agent/start: {sid}")
                 # set default provider on the session immediately
                 # (goosed doesn't inherit global config into sessions reliably)
                 _set_session_default_provider(str(sid))
@@ -6335,14 +6377,14 @@ def _create_goose_session():
             if isinstance(sessions, list) and sessions:
                 sid = sessions[-1].get("id") or sessions[-1].get("session_id")
                 if sid:
-                    print(f"[telegram] using latest session from /sessions: {sid}")
+                    _telegram_log.info(f"using latest session from /sessions: {sid}")
                     return str(sid)
 
-        print(f"[telegram] could not create session: /agent/start returned {resp.status}")
+        _telegram_log.info(f"could not create session: /agent/start returned {resp.status}")
         return None
 
     except Exception as e:
-        print(f"[telegram] session creation failed: {e}")
+        _telegram_log.error(f"session creation failed: {e}")
         return None
 
 
@@ -6386,7 +6428,7 @@ def _memory_writer_loop():
     """Background loop: check for idle sessions and extract memories."""
     global _memory_writer_running
     _memory_writer_running = True
-    print("[memory-writer] started")
+    _memory_log.info("started")
 
     while True:
         try:
@@ -6437,29 +6479,29 @@ def _memory_writer_loop():
                 if len(convo_text.strip()) < 50:
                     continue
 
-                print(f"[memory-writer] extracting from session {sid} ({len(messages)} msgs)")
+                _memory_log.info(f"extracting from session {sid} ({len(messages)} msgs)")
 
                 # send through goosed in a separate session
                 try:
                     extract_sid = _create_goose_session()
                     if not extract_sid:
-                        print("[memory-writer] could not create extraction session")
+                        _memory_log.info("could not create extraction session")
                         continue
 
                     prompt = MEMORY_EXTRACT_PROMPT + convo_text
                     response, error, _media = _do_rest_relay(prompt, extract_sid)
                     if error:
-                        print(f"[memory-writer] extraction error: {error}")
+                        _memory_log.error(f"extraction error: {error}")
                         continue
 
                     _process_memory_extraction(response)
-                    print(f"[memory-writer] done for session {sid}")
+                    _memory_log.info(f"done for session {sid}")
 
                 except Exception as e:
-                    print(f"[memory-writer] error processing session {sid}: {e}")
+                    _memory_log.error(f"error processing session {sid}: {e}")
 
         except Exception as e:
-            print(f"[memory-writer] loop error: {e}")
+            _memory_log.error(f"loop error: {e}")
 
 
 def _classify_fact(fact):
@@ -6534,17 +6576,17 @@ def _process_memory_extraction(response_text):
     # try to find JSON in the response
     json_match = re.search(r'\{[^{}]*\}', response_text, re.DOTALL)
     if not json_match:
-        print("[memory-writer] no JSON found in response")
+        _memory_log.info("no JSON found in response")
         return
 
     try:
         data = json.loads(json_match.group())
     except (json.JSONDecodeError, ValueError):
-        print("[memory-writer] could not parse JSON from response")
+        _memory_log.info("could not parse JSON from response")
         return
 
     if data.get("empty"):
-        print("[memory-writer] nothing to extract")
+        _memory_log.info("nothing to extract")
         return
 
     identity_dir = os.path.join(DATA_DIR, "identity")
@@ -6565,7 +6607,7 @@ def _process_memory_extraction(response_text):
                 section_header = f"## {section}"
                 # dedup: check if fact already exists anywhere in the file
                 if _fact_already_exists(fact, content):
-                    print(f"[memory-writer] skipping duplicate fact: {fact}")
+                    _memory_log.info(f"skipping duplicate fact: {fact}")
                     continue
                 by_section.setdefault(section_header, []).append(fact)
 
@@ -6579,7 +6621,7 @@ def _process_memory_extraction(response_text):
             if added > 0:
                 with open(user_file, "w") as f:
                     f.write(content)
-                print(f"[memory-writer] added {added} facts to user.md")
+                _memory_log.info(f"added {added} facts to user.md")
 
     # append preferences to user.md Preferences section (with dedup)
     preferences = data.get("preferences", [])
@@ -6597,9 +6639,9 @@ def _process_memory_extraction(response_text):
                 content = _append_to_section(content, section_header, additions, timestamp)
                 with open(user_file, "w") as f:
                     f.write(content)
-                print(f"[memory-writer] added {len(new_prefs)} preferences to user.md")
+                _memory_log.info(f"added {len(new_prefs)} preferences to user.md")
             else:
-                print(f"[memory-writer] skipping {len(preferences)} duplicate preferences")
+                _memory_log.info(f"skipping {len(preferences)} duplicate preferences")
 
     # append context to memory.md
     context = data.get("context", [])
@@ -6614,7 +6656,7 @@ def _process_memory_extraction(response_text):
                 content = _append_to_section(content, "## Lessons Learned", additions, timestamp)
                 with open(memory_file, "w") as f:
                     f.write(content)
-                print(f"[memory-writer] added {len(new_ctx)} context items to memory.md")
+                _memory_log.info(f"added {len(new_ctx)} context items to memory.md")
 
 
 def start_memory_writer():
@@ -6673,11 +6715,11 @@ def _update_goose_session_provider(session_id, model_config):
         if resp.status in (200, 204):
             with _session_model_lock:
                 _session_model_cache[session_id] = mid
-            print(f"[routing] updated session {session_id} to {provider}/{model}")
+            _gateway_log.info(f"updated session {session_id} to {provider}/{model}")
         else:
-            print(f"[routing] update_provider returned {resp.status} for session {session_id}")
+            _gateway_log.info(f"update_provider returned {resp.status} for session {session_id}")
     except Exception as e:
-        print(f"[routing] failed to update session provider: {e}")
+        _gateway_log.error(f"failed to update session provider: {e}")
 
 
 def _relay_to_goosed(user_text, session_id, chat_id=None, channel=None,
@@ -6719,11 +6761,11 @@ def _relay_to_goosed(user_text, session_id, chat_id=None, channel=None,
     if err and chat_id and not cancelled:
         reason = err if err else "empty response"
         ch = channel or "telegram"
-        print(f"[{ch}] relay failed ({reason}), creating new session")
+        _gateway_log.error(f"[{ch}] relay failed ({reason}), creating new session")
         new_sid = _create_goose_session()
         if new_sid:
             _session_manager.set(ch, str(chat_id), new_sid)
-            print(f"[{ch}] retrying with new session {new_sid}")
+            _gateway_log.info(f"[{ch}] retrying with new session {new_sid}")
             return relay_fn(user_text, new_sid)
 
     return text, err, media
@@ -6812,7 +6854,7 @@ class _StreamBuffer:
             try:
                 self._flush_cb(text)
             except Exception as e:
-                print(f"[stream] flush error: {e}")
+                _gateway_log.error(f"flush error: {e}")
 
     def flush_final(self):
         self.flush()
@@ -6959,12 +7001,12 @@ def _do_rest_relay(user_text, session_id, content_blocks=None, sock_ref=None):
         conn.close()
         full_text = "".join(text_parts).strip()
         elapsed = time.time() - t0
-        print(f"[rest-relay] done in {elapsed:.1f}s ({len(full_text)} chars) session={session_id}")
+        _gateway_log.info(f"done in {elapsed:.1f}s ({len(full_text)} chars) session={session_id}")
         return full_text, "", media_blocks
 
     except socket.timeout:
         elapsed = time.time() - t0
-        print(f"[rest-relay] TIMEOUT after {elapsed:.1f}s session={session_id}")
+        _gateway_log.info(f"TIMEOUT after {elapsed:.1f}s session={session_id}")
         if conn:
             try:
                 conn.close()
@@ -6973,7 +7015,7 @@ def _do_rest_relay(user_text, session_id, content_blocks=None, sock_ref=None):
         return "", "Goose took too long to respond (timeout). Try again.", []
 
     except ConnectionError as e:
-        print(f"[rest-relay] connection error after {time.time() - t0:.1f}s: {e}")
+        _gateway_log.error(f"connection error after {time.time() - t0:.1f}s: {e}")
         if conn:
             try:
                 conn.close()
@@ -6982,7 +7024,7 @@ def _do_rest_relay(user_text, session_id, content_blocks=None, sock_ref=None):
         return "", f"Connection error: {e}", []
 
     except Exception as e:
-        print(f"[rest-relay] error after {time.time() - t0:.1f}s: {e}")
+        _gateway_log.error(f"error after {time.time() - t0:.1f}s: {e}")
         if conn:
             try:
                 conn.close()
@@ -7001,7 +7043,7 @@ def _do_rest_relay_streaming(user_text, session_id, flush_cb, verbosity="balance
     """
     t0 = time.time()
     blocks = content_blocks or [{"type": "text", "text": user_text}]
-    print(f"[rest-relay-stream] start session={session_id} verbosity={verbosity} text={user_text[:50]!r}")
+    _gateway_log.info(f"start session={session_id} verbosity={verbosity} text={user_text[:50]!r}")
 
     chat_request = json.dumps({
         "session_id": session_id,
@@ -7069,7 +7111,7 @@ def _do_rest_relay_streaming(user_text, session_id, flush_cb, verbosity="balance
                             try:
                                 flush_cb(status)
                             except Exception as e:
-                                print(f"[rest-relay-stream] tool status error: {e}")
+                                _gateway_log.error(f"tool status error: {e}")
 
                     elif btype == "thinking":
                         if verbosity == "verbose":
@@ -7080,7 +7122,7 @@ def _do_rest_relay_streaming(user_text, session_id, flush_cb, verbosity="balance
                                 try:
                                     flush_cb(f"_{truncated}_")
                                 except Exception as e:
-                                    print(f"[rest-relay-stream] thinking error: {e}")
+                                    _gateway_log.error(f"thinking error: {e}")
 
                     elif btype == "toolResponse":
                         # extract nested text/images from tool results
@@ -7096,7 +7138,7 @@ def _do_rest_relay_streaming(user_text, session_id, flush_cb, verbosity="balance
             elif etype == "Error":
                 buf.flush()
                 err_msg = event.get("error", "Unknown error")
-                print(f"[rest-relay-stream] error event after {time.time() - t0:.1f}s: {err_msg}")
+                _gateway_log.error(f"error event after {time.time() - t0:.1f}s: {err_msg}")
                 conn.close()
                 return "".join(collected).strip(), f"Goose error: {err_msg}", media_blocks
 
@@ -7107,14 +7149,14 @@ def _do_rest_relay_streaming(user_text, session_id, flush_cb, verbosity="balance
         conn.close()
         full_text = "".join(collected).strip()
         elapsed = time.time() - t0
-        print(f"[rest-relay-stream] done in {elapsed:.1f}s ({len(full_text)} chars) session={session_id}")
+        _gateway_log.info(f"done in {elapsed:.1f}s ({len(full_text)} chars) session={session_id}")
         if not full_text:
             return "", _diagnose_empty_response(), media_blocks
         return full_text, "", media_blocks
 
     except socket.timeout:
         elapsed = time.time() - t0
-        print(f"[rest-relay-stream] TIMEOUT after {elapsed:.1f}s session={session_id}")
+        _gateway_log.info(f"TIMEOUT after {elapsed:.1f}s session={session_id}")
         if conn:
             try:
                 conn.close()
@@ -7126,7 +7168,7 @@ def _do_rest_relay_streaming(user_text, session_id, flush_cb, verbosity="balance
         return "", "Goose took too long to respond (timeout). Try again.", media_blocks
 
     except ConnectionError as e:
-        print(f"[rest-relay-stream] connection error after {time.time() - t0:.1f}s: {e}")
+        _gateway_log.error(f"connection error after {time.time() - t0:.1f}s: {e}")
         if conn:
             try:
                 conn.close()
@@ -7135,7 +7177,7 @@ def _do_rest_relay_streaming(user_text, session_id, flush_cb, verbosity="balance
         return "", f"Connection error: {e}", media_blocks
 
     except Exception as e:
-        print(f"[rest-relay-stream] error after {time.time() - t0:.1f}s: {e}")
+        _gateway_log.error(f"error after {time.time() - t0:.1f}s: {e}")
         if conn:
             try:
                 conn.close()
@@ -7181,9 +7223,9 @@ def _add_pairing_to_config(chat_id, platform="telegram"):
         with open(tmp, "w") as f:
             f.write(content)
         os.replace(tmp, config_path)
-        print(f"[{platform}] paired chat_id {chat_str}")
+        _gateway_log.info(f"[{platform}] paired chat_id {chat_str}")
     except Exception as e:
-        print(f"[{platform}] warn: could not write pairing: {e}")
+        _gateway_log.warning(f"[{platform}] warn: could not write pairing: {e}")
 
 
 def _generate_and_store_pair_code():
@@ -7194,7 +7236,7 @@ def _generate_and_store_pair_code():
     code = "".join(secrets.choice(alphabet) for _ in range(6))
     with telegram_pair_lock:
         telegram_pair_code = code
-    print(f"[telegram] pairing code: {code}")
+    _telegram_log.info(f"pairing code: {code}")
     return code
 
 
@@ -7239,7 +7281,7 @@ def _flush_media_group(group_id, bot_token):
                     )
                     downloaded.append(mc)
                 else:
-                    print(f"[telegram] media group download failed for {ref.get('media_key')}: {file_path}")
+                    _telegram_log.error(f"media group download failed for {ref.get('media_key')}: {file_path}")
             _leg_adapter = TelegramOutboundAdapter(_bt, _chat_id)
             _leg_adapter.send_typing(_chat_id)
             session_id = _get_session_id(_chat_id)
@@ -7277,12 +7319,12 @@ def _flush_media_group(group_id, bot_token):
                     try:
                         _route_media_blocks(_resp_media, _leg_adapter)
                     except Exception as _media_exc:
-                        print(f"[telegram] media routing error: {_media_exc}")
+                        _telegram_log.error(f"media routing error: {_media_exc}")
             finally:
                 typing_stop.set()
                 _telegram_state.pop_active_relay(_chat_id)
         except Exception as exc:
-            print(f"[telegram] media group relay exception for chat {_chat_id}: {exc}")
+            _telegram_log.error(f"media group relay exception for chat {_chat_id}: {exc}")
         finally:
             _chat_lock.release()
             _mq = _telegram_state.pop_queued_replay(_chat_id)
@@ -7302,7 +7344,7 @@ def _telegram_poll_loop(bot_token):
     global _telegram_running, telegram_pair_code
     offset = 0
     _telegram_running = True
-    print("[telegram] polling loop started")
+    _telegram_log.info("polling loop started")
 
     while _telegram_running:
         try:
@@ -7315,7 +7357,7 @@ def _telegram_poll_loop(bot_token):
                 data = json.loads(resp.read())
 
             if not data.get("ok"):
-                print(f"[telegram] getUpdates not ok: {data}")
+                _telegram_log.info(f"getUpdates not ok: {data}")
                 time.sleep(5)
                 continue
 
@@ -7407,7 +7449,7 @@ def _telegram_poll_loop(bot_token):
                                         )
                                         downloaded.append(mc)
                                     else:
-                                        print(f"[telegram] media download failed for {ref.get('media_key')}: {file_path}")
+                                        _telegram_log.error(f"media download failed for {ref.get('media_key')}: {file_path}")
                                 _media_adapter = TelegramOutboundAdapter(_bt, _chat_id)
                                 _media_adapter.send_typing(_chat_id)
                                 session_id = _get_session_id(_chat_id)
@@ -7428,9 +7470,9 @@ def _telegram_poll_loop(bot_token):
                                     try:
                                         _route_media_blocks(_resp_media, _media_adapter)
                                     except Exception as _media_exc:
-                                        print(f"[telegram] media routing error: {_media_exc}")
+                                        _telegram_log.error(f"media routing error: {_media_exc}")
                             except Exception as exc:
-                                print(f"[telegram] media relay exception for chat {_chat_id}: {exc}")
+                                _telegram_log.error(f"media relay exception for chat {_chat_id}: {exc}")
                             finally:
                                 _chat_lock.release()
                                 # process queued messages
@@ -7502,7 +7544,7 @@ def _telegram_poll_loop(bot_token):
                                         )
                                         downloaded.append(mc)
                                     else:
-                                        print(f"[telegram] media download failed for {ref.get('media_key')}: {file_path}")
+                                        _telegram_log.error(f"media download failed for {ref.get('media_key')}: {file_path}")
 
                             _relay_adapter = TelegramOutboundAdapter(_bt, _chat_id)
                             _relay_adapter.send_typing(_chat_id)
@@ -7559,7 +7601,7 @@ def _telegram_poll_loop(bot_token):
                                             if mid:
                                                 _st["msg_id"] = mid
                                             else:
-                                                print(f"[telegram] edit-stream: initial send failed: {err}")
+                                                _telegram_log.error(f"edit-stream: initial send failed: {err}")
                                         elif len(txt) > 3800:
                                             _st["overflow"].append(_st["msg_id"])
                                             _st["accumulated"] = chunk
@@ -7592,12 +7634,12 @@ def _telegram_poll_loop(bot_token):
                                     try:
                                         _route_media_blocks(_leg_media, _relay_adapter)
                                     except Exception as _media_exc:
-                                        print(f"[telegram] media routing error: {_media_exc}")
+                                        _telegram_log.error(f"media routing error: {_media_exc}")
                             finally:
                                 typing_stop.set()
                                 typing_thread.join(timeout=2)
                         except Exception as exc:
-                            print(f"[telegram] relay exception for chat {_chat_id}: {exc}")
+                            _telegram_log.error(f"relay exception for chat {_chat_id}: {exc}")
                             if not _cancelled.is_set():
                                 try:
                                     send_telegram_message(_bt, _chat_id, f"Error: {exc}")
@@ -7629,7 +7671,7 @@ def _telegram_poll_loop(bot_token):
                             bot_token, chat_id,
                             "Paired successfully! You can now send messages to goose through this chat."
                         )
-                        print(f"[telegram] chat {chat_id} paired via code {current_code}")
+                        _telegram_log.info(f"chat {chat_id} paired via code {current_code}")
 
                         # auto-send first message after pairing
                         try:
@@ -7684,19 +7726,19 @@ def _telegram_poll_loop(bot_token):
                                                 msg, s, chat_id=str(c), channel="telegram",
                                             )
                                             if err:
-                                                print(f"[telegram] kick greeting error: {err}")
+                                                _telegram_log.error(f"kick greeting error: {err}")
                                                 send_telegram_message(bot_token, c, f"Error: {err}")
                                             elif txt:
                                                 send_telegram_message(bot_token, c, txt)
                                     except Exception as exc:
-                                        print(f"[telegram] kick greeting exception: {exc}")
+                                        _telegram_log.error(f"kick greeting exception: {exc}")
                                     finally:
                                         _typing_stop.set()
                                         evt.set()
                                         _legacy_greeting_events.pop(str(c), None)
                                 threading.Thread(target=_kick_greeting, daemon=True).start()
                         except Exception as exc:
-                            print(f"[telegram] kick greeting setup failed: {exc}")
+                            _telegram_log.error(f"kick greeting setup failed: {exc}")
                     else:
                         send_telegram_message(
                             bot_token, chat_id,
@@ -7707,36 +7749,36 @@ def _telegram_poll_loop(bot_token):
         except urllib.error.HTTPError as e:
             if e.code == 409:
                 # conflict — another getUpdates call is running; back off
-                print("[telegram] conflict (409), backing off 10s")
+                _telegram_log.info("conflict (409), backing off 10s")
                 time.sleep(10)
             elif e.code == 401:
-                print("[telegram] FATAL: invalid bot token (401). Stopping poll loop.")
+                _telegram_log.critical("invalid bot token (401). Stopping poll loop.")
                 _telegram_running = False
                 return
             else:
-                print(f"[telegram] HTTP error {e.code}, retrying in 5s")
+                _telegram_log.error(f"HTTP error {e.code}, retrying in 5s")
                 time.sleep(5)
         except urllib.error.URLError as e:
-            print(f"[telegram] network error: {e.reason}, retrying in 5s")
+            _telegram_log.error(f"network error: {e.reason}, retrying in 5s")
             time.sleep(5)
         except Exception as e:
-            print(f"[telegram] poll error: {e}, retrying in 5s")
+            _telegram_log.error(f"poll error: {e}, retrying in 5s")
             time.sleep(5)
 
-    print("[telegram] polling loop stopped")
+    _telegram_log.info("polling loop stopped")
 
 
 def start_telegram_gateway(bot_token):
     """Start the default telegram bot. Backward-compatible entry point."""
     existing = _bot_manager.get_bot("default")
     if existing and existing.running:
-        print("[telegram] polling already running")
+        _telegram_log.info("polling already running")
         return
     try:
         bot = _bot_manager.add_bot("default", bot_token, channel_key="telegram")
         bot.start()
     except ValueError as e:
-        print(f"[telegram] error: {e}")
+        _telegram_log.error(f"error: {e}")
 
 
 def _configure_goosed_provider():
@@ -7768,11 +7810,11 @@ def _configure_goosed_provider():
         body = resp.read().decode("utf-8", errors="replace")
         conn.close()
         if resp.status in (200, 204):
-            print(f"[gateway] configured goosed provider: {provider}/{model}")
+            _gateway_log.info(f"configured goosed provider: {provider}/{model}")
         else:
-            print(f"[gateway] WARN: /config/set_provider returned {resp.status}: {body[:200]}")
+            _gateway_log.warning(f"/config/set_provider returned {resp.status}: {body[:200]}")
     except Exception as e:
-        print(f"[gateway] WARN: failed to configure goosed provider: {e}")
+        _gateway_log.error(f"WARN: failed to configure goosed provider: {e}")
 
 
 def start_goosed():
@@ -7810,9 +7852,9 @@ def start_goosed():
             if md and "GOOSE_MODEL" not in env:
                 env["GOOSE_MODEL"] = md
 
-        print(f"[gateway] starting goosed agent on 127.0.0.1:{GOOSE_WEB_PORT}")
-        print(f"[gateway] cmd: goosed agent (TLS=false, port={GOOSE_WEB_PORT})")
-        print(f"[gateway] env: GOOSE_PROVIDER={env.get('GOOSE_PROVIDER', 'NOT SET')} "
+        _gateway_log.info(f"starting goosed agent on 127.0.0.1:{GOOSE_WEB_PORT}")
+        _gateway_log.info(f"cmd: goosed agent (TLS=false, port={GOOSE_WEB_PORT})")
+        _gateway_log.info(f"env: GOOSE_PROVIDER={env.get('GOOSE_PROVIDER', 'NOT SET')} "
               f"GOOSE_MODEL={env.get('GOOSE_MODEL', 'NOT SET')} "
               f"GOOSE_MODE={env.get('GOOSE_MODE', 'NOT SET')}")
         goosed_process = subprocess.Popen(cmd, stdout=sys.stdout, stderr=subprocess.PIPE, env=env)
@@ -7829,7 +7871,7 @@ def start_goosed():
             if goosed_process.poll() is not None:
                 exit_code = goosed_process.returncode
                 _set_startup_state("error", f"goosed exited with code {exit_code}", error=_get_recent_stderr(20))
-                print(f"[gateway] goosed exited during startup with code {exit_code}")
+                _gateway_log.info(f"goosed exited during startup with code {exit_code}")
                 return False
             try:
                 conn = _goosed_conn(timeout=2)
@@ -7837,7 +7879,7 @@ def start_goosed():
                 resp = conn.getresponse()
                 if resp.status == 200:
                     _set_startup_state("ready", "goosed is running")
-                    print("[gateway] goosed is ready")
+                    _gateway_log.info("goosed is ready")
                     # configure provider via API (goosed ignores env vars for provider)
                     _configure_goosed_provider()
                     return True
@@ -7846,7 +7888,7 @@ def start_goosed():
                 pass
 
         _set_startup_state("error", "goosed did not become ready in 30s", error=_get_recent_stderr(20))
-        print("[gateway] WARN: goosed did not become ready in 30s")
+        _gateway_log.warning("goosed did not become ready in 30s")
         return False
 
 
@@ -7885,15 +7927,15 @@ def goose_health_monitor():
             consecutive_failures += 1
             wait_time = min(backoff * (2 ** (consecutive_failures - 1)), max_backoff)
             _set_startup_state("starting", f"Restarting goosed (attempt #{consecutive_failures})...")
-            print(f"[health] goosed exited (code {exit_code}). "
+            _gateway_log.error(f"goosed exited (code {exit_code}). "
                   f"Restart #{consecutive_failures} in {wait_time}s...")
             _remove_pid("goosed")
             time.sleep(wait_time)
             try:
                 start_goosed()
-                print(f"[health] goosed restarted after failure #{consecutive_failures}")
+                _gateway_log.error(f"goosed restarted after failure #{consecutive_failures}")
             except Exception as e:
-                print(f"[health] restart failed: {e}")
+                _gateway_log.error(f"restart failed: {e}")
         else:
             # process is running, reset backoff on sustained health
             if consecutive_failures > 0:
@@ -7932,15 +7974,15 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         """Structured request logging with timestamp and format string."""
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
         if args:
-            print(f"[gateway] {timestamp} {format % args}")
+            _gateway_log.info(f"{timestamp} {format % args}")
         else:
-            print(f"[gateway] {timestamp} {format}")
+            _gateway_log.info(f"{timestamp} {format}")
 
     def log_request(self, code="-", size="-"):
         """Override to log request with duration."""
         duration_ms = int((time.time() - getattr(self, "_request_start", time.time())) * 1000)
         timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
-        print(f"[gateway] {timestamp} {self.command} {self.path} {code} {duration_ms}ms")
+        _gateway_log.info(f"{timestamp} {self.command} {self.path} {code} {duration_ms}ms")
 
     def _check_rate_limit(self, limiter):
         """Return True if request is allowed; send 429 and return False if over limit."""
@@ -8478,7 +8520,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             self.send_json(400, {"success": False, "error": "invalid JSON", "code": "INVALID_CONFIG"})
         except Exception as e:
-            print(f"[gateway] ERROR (handle_save): {e}", file=sys.stderr)
+            _gateway_log.error(f"(handle_save): {e}")
             self.send_json(500, {"success": False, "error": "Internal server error. Check server logs.", "code": "INTERNAL_ERROR"})
 
     def handle_validate(self):
@@ -8497,7 +8539,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             result = dispatch_validation(provider, credentials)
             self.send_json(200, result)
         except Exception as e:
-            print(f"[gateway] ERROR (handle_validate): {e}", file=sys.stderr)
+            _gateway_log.error(f"(handle_validate): {e}")
             self.send_json(500, {"valid": False, "error": "Internal server error. Check server logs.", "code": "INTERNAL_ERROR"})
 
     def handle_fetch_models(self):
@@ -8516,7 +8558,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             result = fetch_provider_models(provider, credentials)
             self.send_json(200, result)
         except Exception as e:
-            print(f"[gateway] ERROR (handle_fetch_models): {e}", file=sys.stderr)
+            _gateway_log.error(f"(handle_fetch_models): {e}")
             self.send_json(500, {"models": [], "fallback": True, "error": "Internal server error."})
 
     # ── model management endpoints ──
@@ -8602,7 +8644,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self._save_and_apply(setup)
             self.send_json(200, {"success": True, "model": new_model})
         except Exception as e:
-            print(f"[gateway] ERROR (handle_add_model): {e}", file=sys.stderr)
+            _gateway_log.error(f"(handle_add_model): {e}")
             self.send_json(500, {"error": "Internal server error."})
 
     def handle_remove_model(self):
@@ -8649,7 +8691,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self._save_and_apply(setup)
             self.send_json(200, {"success": True, "models": models})
         except Exception as e:
-            print(f"[gateway] ERROR (handle_remove_model): {e}", file=sys.stderr)
+            _gateway_log.error(f"(handle_remove_model): {e}")
             self.send_json(500, {"error": "Internal server error."})
 
     def handle_activate_model(self):
@@ -8682,7 +8724,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self._save_and_apply(setup)
             self.send_json(200, {"success": True})
         except Exception as e:
-            print(f"[gateway] ERROR (handle_activate_model): {e}", file=sys.stderr)
+            _gateway_log.error(f"(handle_activate_model): {e}")
             self.send_json(500, {"error": "Internal server error."})
 
     def handle_set_routes(self):
@@ -8736,7 +8778,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
 
             self.send_json(200, {"success": True, "channel_routes": clean_routes})
         except Exception as e:
-            print(f"[gateway] ERROR (handle_set_routes): {e}", file=sys.stderr)
+            _gateway_log.error(f"(handle_set_routes): {e}")
             self.send_json(500, {"error": "Internal server error."})
 
     def handle_set_verbosity(self):
@@ -8774,7 +8816,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             save_setup(setup)
             self.send_json(200, {"success": True, "channel_verbosity": clean})
         except Exception as e:
-            print(f"[gateway] ERROR (handle_set_verbosity): {e}", file=sys.stderr)
+            _gateway_log.error(f"(handle_set_verbosity): {e}")
             self.send_json(500, {"error": "Internal server error."})
 
     def handle_agent_config(self):
@@ -8809,7 +8851,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         except (ValueError, TypeError) as e:
             self.send_json(400, {"error": str(e)})
         except Exception as e:
-            print(f"[gateway] ERROR (handle_agent_config): {e}", file=sys.stderr)
+            _gateway_log.error(f"(handle_agent_config): {e}")
             self.send_json(500, {"error": "Internal server error."})
 
     # ── notify endpoints ──
@@ -8845,7 +8887,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             self.send_json(400, {"sent": False, "error": "invalid JSON", "code": "INVALID_CONFIG"})
         except Exception as e:
-            print(f"[gateway] ERROR (handle_notify): {e}", file=sys.stderr)
+            _gateway_log.error(f"(handle_notify): {e}")
             self.send_json(500, {"sent": False, "error": "Internal server error. Check server logs.", "code": "INTERNAL_ERROR"})
 
     def handle_notify_status(self):
@@ -8982,7 +9024,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             config["bots"].append(bot_entry)
             save_setup(config)
         except Exception as e:
-            print(f"[bot-mgr] warn: could not persist bot '{name}' to setup.json: {e}")
+            _bot_mgr_log.warning(f"could not persist bot '{name}' to setup.json: {e}")
 
         self.send_json(201, {"name": name, "channel_key": bot.channel_key, "status": "running"})
 
@@ -9000,7 +9042,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             return
 
         if name == "default":
-            print("[bot-mgr] warn: removing default bot")
+            _bot_mgr_log.warning("removing default bot")
 
         _bot_manager.remove_bot(name)
 
@@ -9014,7 +9056,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                 config["telegram_bot_token"] = ""
             save_setup(config)
         except Exception as e:
-            print(f"[bot-mgr] warn: could not persist removal of '{name}' from setup.json: {e}")
+            _bot_mgr_log.warning(f"could not persist removal of '{name}' from setup.json: {e}")
 
         self.send_json(200, {"removed": name})
 
@@ -9171,7 +9213,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             if found:
                 results.append({"id": watcher_id, "status": "deleted"})
                 deleted += 1
-                print(f"[watchers] deleted: {watcher_id}")
+                _watchers_log.info(f"deleted: {watcher_id}")
             else:
                 results.append({"id": watcher_id, "status": "error", "error": "watcher not found"})
                 errors += 1
@@ -9768,7 +9810,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             except Exception:
                 pass  # client disconnected
         except Exception as e:
-            print(f"[gateway] proxy error: {e}", file=sys.stderr)
+            _gateway_log.error(f"proxy error: {e}")
             try:
                 self.send_error(502, "Gateway error")
             except Exception:
@@ -9778,7 +9820,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
 
     def _internal_error(self, e, context=""):
         """Log real error to stderr, return sanitized response to client."""
-        print(f"[gateway] ERROR ({context}): {e}", file=sys.stderr)
+        _gateway_log.error(f"({context}): {e}")
         self.send_json(500, {"error": "Internal server error. Check server logs.", "code": "INTERNAL_ERROR"})
 
     def _read_body(self):
@@ -9832,14 +9874,14 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
 # ── main ────────────────────────────────────────────────────────────────────
 
 def main():
-    print(f"[gateway] gooseclaw gateway starting on 0.0.0.0:{PORT}")
+    _gateway_log.info(f"gooseclaw gateway starting on 0.0.0.0:{PORT}")
 
     if is_configured():
         # re-apply config from setup.json (env vars lost on container restart)
         setup = load_setup()
         if setup:
             apply_config(setup)
-        print("[gateway] provider configured. starting goose web...")
+        _gateway_log.info("provider configured. starting goose web...")
         start_goosed()
 
         # start health monitor to auto-restart goosed on crash
@@ -9870,7 +9912,7 @@ def main():
         if tg_token and not _bot_manager.get_bot("default"):
             start_telegram_gateway(tg_token)
     else:
-        print("[gateway] no provider configured. serving setup wizard.")
+        _gateway_log.info("no provider configured. serving setup wizard.")
 
     server = ThreadingHTTPServer(("0.0.0.0", PORT), GatewayHandler)
 
@@ -9889,13 +9931,13 @@ def main():
 
         # Watchdog: force-exit after 5 seconds if cleanup hangs
         def _force_exit():
-            print("[gateway] shutdown timeout exceeded, forcing exit", flush=True)
+            _gateway_log.info("shutdown timeout exceeded, forcing exit")
             os._exit(1)
         watchdog = threading.Timer(5.0, _force_exit)
         watchdog.daemon = True
         watchdog.start()
 
-        print("[gateway] shutting down...")
+        _gateway_log.info("shutting down...")
         # stop accepting new connections first
         threading.Thread(target=server.shutdown, daemon=True).start()
         # unload all channel plugins (stop threads, call teardown)
@@ -9914,7 +9956,7 @@ def main():
         _cron_scheduler_running = False
         stop_watcher_engine()
         watchdog.cancel()
-        print("[gateway] shutdown complete")
+        _gateway_log.info("shutdown complete")
 
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)

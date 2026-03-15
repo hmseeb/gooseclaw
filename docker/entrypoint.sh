@@ -474,13 +474,20 @@ mkdir -p /data/knowledge/chroma
 chown -R gooseclaw:gooseclaw /data/knowledge
 
 echo "[knowledge] indexing system knowledge base..."
-runuser -u gooseclaw -- env PYTHONPATH=/app/docker python3 /app/docker/knowledge/indexer.py
+if runuser -u gooseclaw -- env PYTHONPATH=/app/docker python3 /app/docker/knowledge/indexer.py; then
+    echo "[knowledge] indexing complete"
+else
+    echo "[knowledge] WARNING: indexing failed (non-fatal, gateway will still start)"
+fi
 
 if [ -f "$IDENTITY_DIR/memory.md" ] && [ ! -f "$DATA_DIR/knowledge/.memory_migrated" ]; then
     echo "[knowledge] migrating memory.md to vector store..."
-    runuser -u gooseclaw -- env PYTHONPATH=/app/docker python3 /app/docker/knowledge/migrate_memory.py
-    touch "$DATA_DIR/knowledge/.memory_migrated"
-    echo "[knowledge] memory migration complete"
+    if runuser -u gooseclaw -- env PYTHONPATH=/app/docker python3 /app/docker/knowledge/migrate_memory.py; then
+        touch "$DATA_DIR/knowledge/.memory_migrated"
+        echo "[knowledge] memory migration complete"
+    else
+        echo "[knowledge] WARNING: memory migration failed (non-fatal)"
+    fi
 fi
 
 export KNOWLEDGE_DB_PATH="/data/knowledge/chroma"

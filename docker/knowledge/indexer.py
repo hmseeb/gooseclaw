@@ -5,8 +5,11 @@ chunks them, and indexes into ChromaDB's "system" collection. Leaves the
 "runtime" collection untouched.
 """
 import os
+import logging
 import chromadb
 from knowledge.chunker import chunk_file
+
+logger = logging.getLogger("knowledge.indexer")
 
 
 def run_index(client=None, identity_dir=None):
@@ -27,10 +30,10 @@ def run_index(client=None, identity_dir=None):
         client.delete_collection("system")
     except Exception:
         pass  # collection doesn't exist yet
-    system_col = client.create_collection("system")
+    system_col = client.create_collection("system", metadata={"hnsw:space": "cosine"})
 
     # ensure runtime collection exists (never wiped)
-    client.get_or_create_collection("runtime")
+    client.get_or_create_collection("runtime", metadata={"hnsw:space": "cosine"})
 
     # chunk LOCKED files
     chunks = []
@@ -51,11 +54,15 @@ def run_index(client=None, identity_dir=None):
                 chunks.extend(chunk_file(path, "schemas/{}".format(fname)))
 
     if chunks:
-        system_col.add(
-            ids=[c["id"] for c in chunks],
-            documents=[c["text"] for c in chunks],
-            metadatas=[c["metadata"] for c in chunks],
-        )
+        try:
+            system_col.add(
+                ids=[c["id"] for c in chunks],
+                documents=[c["text"] for c in chunks],
+                metadatas=[c["metadata"] for c in chunks],
+            )
+        except Exception as e:
+            logger.error("failed to index system chunks: %s", e)
+            return 0
 
     print("[knowledge] indexed {} system chunks".format(len(chunks)), flush=True)
     return len(chunks)

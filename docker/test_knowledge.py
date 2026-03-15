@@ -496,6 +496,50 @@ class TestMigration(unittest.TestCase):
         self.assertEqual(count, 0)
 
 
+class TestEndToEndPipeline(unittest.TestCase):
+    """E2E: chunk markdown, index into ChromaDB, query and verify results."""
+
+    def test_chunk_index_search_pipeline(self):
+        import chromadb
+        from knowledge.chunker import chunk_file
+        from knowledge.indexer import run_index
+
+        md_content = """\
+# Test Doc
+
+## Architecture
+
+GooseClaw is a personal AI assistant deployed on Railway using the Goose framework.
+
+## Security
+
+Never expose API keys in logs or plaintext. Use environment variables.
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # 1. Write a temp markdown file
+            md_path = os.path.join(tmpdir, "system.md")
+            with open(md_path, "w") as f:
+                f.write(md_content)
+
+            # 2. Chunk it
+            chunks = chunk_file(md_path, "system.md")
+            self.assertGreater(len(chunks), 0)
+
+            # 3. Index into ephemeral ChromaDB via run_index
+            client = chromadb.EphemeralClient()
+            run_index(client=client, identity_dir=tmpdir)
+
+            # 4. Query and verify
+            sys_col = client.get_collection("system")
+            results = sys_col.query(
+                query_texts=["AI assistant Railway"],
+                n_results=3,
+            )
+            self.assertTrue(results["documents"][0])
+            top_doc = results["documents"][0][0]
+            self.assertIn("GooseClaw", top_doc)
+
+
 class TestGoosehints(unittest.TestCase):
     """KB-08: .goosehints no longer references system.md/memory.md/onboarding.md."""
 

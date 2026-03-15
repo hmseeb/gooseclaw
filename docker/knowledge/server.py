@@ -21,8 +21,8 @@ try:
 except Exception:
     client = chromadb.EphemeralClient()
 
-system_col = client.get_or_create_collection("system")
-runtime_col = client.get_or_create_collection("runtime")
+system_col = client.get_or_create_collection("system", metadata={"hnsw:space": "cosine"})
+runtime_col = client.get_or_create_collection("runtime", metadata={"hnsw:space": "cosine"})
 
 mcp = FastMCP("knowledge")
 
@@ -36,7 +36,7 @@ def knowledge_search(query: str, type: str = "", limit: int = 5) -> str:
         type: Optional filter by chunk type (fact, procedure, preference, integration, schema)
         limit: Max results (default 5, max 10)
     """
-    limit = min(limit, 10)
+    limit = max(1, min(limit, 10))
     where_filter = {"type": type} if type else None
 
     results = []
@@ -89,18 +89,26 @@ def knowledge_upsert(key: str, content: str, type: str, refs: str = "") -> str:
         type: Chunk type (fact, procedure, preference, integration, schema)
         refs: Comma-separated keys of related chunks
     """
-    runtime_col.upsert(
-        ids=[key],
-        documents=[content],
-        metadatas=[{
-            "type": type,
-            "source": "runtime",
-            "section": "",
-            "namespace": "runtime",
-            "refs": refs,
-            "key": key,
-        }],
-    )
+    valid_types = ("procedure", "schema", "fact", "preference", "integration")
+    if type not in valid_types:
+        return f"Invalid type '{type}'. Must be one of: {', '.join(valid_types)}"
+
+    try:
+        runtime_col.upsert(
+            ids=[key],
+            documents=[content],
+            metadatas=[{
+                "type": type,
+                "source": "runtime",
+                "section": "",
+                "namespace": "runtime",
+                "refs": refs,
+                "key": key,
+            }],
+        )
+    except Exception as e:
+        logger.error("upsert failed for key %s: %s", key, e)
+        return f"Failed to store chunk '{key}': {e}"
     logger.info("upserted chunk: %s", key)
     return f"Stored knowledge chunk: {key}"
 

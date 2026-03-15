@@ -162,6 +162,54 @@ class TestKnowledgeUpsert(_ServerTestBase):
         self.assertEqual(meta["key"], "test.meta")
 
 
+class TestKnowledgeUpsertValidation(_ServerTestBase):
+    """Validation tests for knowledge_upsert type checking."""
+
+    def test_upsert_rejects_invalid_type(self):
+        from docker.knowledge.server import knowledge_upsert
+
+        result = knowledge_upsert("test.bad", "content", "invalid_type")
+        self.assertIn("Invalid type", result)
+        self.assertIn("invalid_type", result)
+
+        # Verify nothing was stored
+        got = self.runtime_col.get(ids=["test.bad"])
+        self.assertEqual(len(got["ids"]), 0)
+
+    def test_upsert_accepts_all_valid_types(self):
+        from docker.knowledge.server import knowledge_upsert
+
+        for t in ("procedure", "schema", "fact", "preference", "integration"):
+            result = knowledge_upsert(f"test.{t}", f"content for {t}", t)
+            self.assertIn("Stored", result)
+
+
+class TestKnowledgeSearchLimitValidation(_ServerTestBase):
+    """Validation tests for knowledge_search limit parameter."""
+
+    def setUp(self):
+        super().setUp()
+        self.system_col.add(
+            ids=["s1"],
+            documents=["test doc"],
+            metadatas=[{"type": "fact", "source": "test", "section": "",
+                        "namespace": "system", "refs": "", "key": "s1"}],
+        )
+
+    def test_search_negative_limit_becomes_one(self):
+        from docker.knowledge.server import knowledge_search
+
+        # Should not crash with negative limit
+        result = knowledge_search("test", limit=-5)
+        self.assertIsInstance(result, str)
+
+    def test_search_zero_limit_becomes_one(self):
+        from docker.knowledge.server import knowledge_search
+
+        result = knowledge_search("test", limit=0)
+        self.assertIsInstance(result, str)
+
+
 class TestKnowledgeGet(_ServerTestBase):
     """KB-04: knowledge_get retrieves chunk by exact key from either collection."""
 

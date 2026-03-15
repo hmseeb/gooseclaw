@@ -235,7 +235,16 @@ if lp:
 if lm:
     print(f'export GOOSE_LEAD_MODEL={shlex.quote(lm)}')
 if ltc:
-    print(f'export GOOSE_LEAD_TURN_COUNT={shlex.quote(str(ltc))}')
+    print(f'export GOOSE_LEAD_TURNS={shlex.quote(str(ltc))}')
+lft = c.get('lead_failure_threshold', '')
+lfbt = c.get('lead_fallback_turns', '')
+lcl = c.get('lead_context_limit', '')
+if lft:
+    print(f'export GOOSE_LEAD_FAILURE_THRESHOLD={shlex.quote(str(lft))}')
+if lfbt:
+    print(f'export GOOSE_LEAD_FALLBACK_TURNS={shlex.quote(str(lfbt))}')
+if lcl:
+    print(f'export GOOSE_LEAD_CONTEXT_LIMIT={shlex.quote(str(lcl))}')
 " > "$REHYDRATE_FILE" 2>/dev/null
     # source is safe because values are shlex.quote'd by the Python script
     . "$REHYDRATE_FILE"
@@ -258,8 +267,17 @@ fi
 if [ -n "${GOOSE_LEAD_MODEL:-}" ]; then
     echo "GOOSE_LEAD_MODEL: $GOOSE_LEAD_MODEL" >> "$CONFIG_DIR/config.yaml"
 fi
-if [ -n "${GOOSE_LEAD_TURN_COUNT:-}" ]; then
-    echo "GOOSE_LEAD_TURN_COUNT: $GOOSE_LEAD_TURN_COUNT" >> "$CONFIG_DIR/config.yaml"
+if [ -n "${GOOSE_LEAD_TURNS:-}" ]; then
+    echo "GOOSE_LEAD_TURNS: $GOOSE_LEAD_TURNS" >> "$CONFIG_DIR/config.yaml"
+fi
+if [ -n "${GOOSE_LEAD_FAILURE_THRESHOLD:-}" ]; then
+    echo "GOOSE_LEAD_FAILURE_THRESHOLD: $GOOSE_LEAD_FAILURE_THRESHOLD" >> "$CONFIG_DIR/config.yaml"
+fi
+if [ -n "${GOOSE_LEAD_FALLBACK_TURNS:-}" ]; then
+    echo "GOOSE_LEAD_FALLBACK_TURNS: $GOOSE_LEAD_FALLBACK_TURNS" >> "$CONFIG_DIR/config.yaml"
+fi
+if [ -n "${GOOSE_LEAD_CONTEXT_LIMIT:-}" ]; then
+    echo "GOOSE_LEAD_CONTEXT_LIMIT: $GOOSE_LEAD_CONTEXT_LIMIT" >> "$CONFIG_DIR/config.yaml"
 fi
 
 # ─── vault hydration (export stored credentials as env vars) ─────────────

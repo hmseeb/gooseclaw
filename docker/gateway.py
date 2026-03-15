@@ -1818,6 +1818,30 @@ def validate_setup_config(config):
                 errors.append("lead_turn_count must be between 1 and 50")
         except (ValueError, TypeError):
             errors.append("lead_turn_count must be an integer")
+    lead_failure_threshold = config.get("lead_failure_threshold", "")
+    if lead_failure_threshold:
+        try:
+            ft = int(lead_failure_threshold)
+            if ft < 1 or ft > 20:
+                errors.append("lead_failure_threshold must be between 1 and 20")
+        except (ValueError, TypeError):
+            errors.append("lead_failure_threshold must be an integer")
+    lead_fallback_turns = config.get("lead_fallback_turns", "")
+    if lead_fallback_turns:
+        try:
+            fbt = int(lead_fallback_turns)
+            if fbt < 1 or fbt > 100:
+                errors.append("lead_fallback_turns must be between 1 and 100")
+        except (ValueError, TypeError):
+            errors.append("lead_fallback_turns must be an integer")
+    lead_context_limit = config.get("lead_context_limit", "")
+    if lead_context_limit:
+        try:
+            cl = int(lead_context_limit)
+            if cl < 1000 or cl > 2000000:
+                errors.append("lead_context_limit must be between 1000 and 2000000")
+        except (ValueError, TypeError):
+            errors.append("lead_context_limit must be an integer")
 
     # models array validation
     models = config.get("models")
@@ -2970,12 +2994,21 @@ def apply_config(config):
     lead_provider = config.get("lead_provider", "")
     lead_model = config.get("lead_model", "")
     lead_turn_count = config.get("lead_turn_count", "")
+    lead_failure_threshold = config.get("lead_failure_threshold", "")
+    lead_fallback_turns = config.get("lead_fallback_turns", "")
+    lead_context_limit = config.get("lead_context_limit", "")
     if lead_provider:
         lines.append(f"GOOSE_LEAD_PROVIDER: {lead_provider}")
         if lead_model:
             lines.append(f"GOOSE_LEAD_MODEL: {lead_model}")
         if lead_turn_count:
-            lines.append(f"GOOSE_LEAD_TURN_COUNT: {lead_turn_count}")
+            lines.append(f"GOOSE_LEAD_TURNS: {lead_turn_count}")
+        if lead_failure_threshold:
+            lines.append(f"GOOSE_LEAD_FAILURE_THRESHOLD: {lead_failure_threshold}")
+        if lead_fallback_turns:
+            lines.append(f"GOOSE_LEAD_FALLBACK_TURNS: {lead_fallback_turns}")
+        if lead_context_limit:
+            lines.append(f"GOOSE_LEAD_CONTEXT_LIMIT: {lead_context_limit}")
 
     # set env vars for all saved provider keys (needed for per-channel model routing)
     saved_keys = config.get("saved_keys", {})

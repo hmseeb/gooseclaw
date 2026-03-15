@@ -1548,8 +1548,9 @@ body::after {
     <div id="model-info"></div>
     <div class="field">
       <label>Model</label>
-      <input type="text" id="model" list="modelSuggestions" placeholder="loading...">
-      <datalist id="modelSuggestions"></datalist>
+      <select id="modelSelect" style="display:none" onchange="onModelSelectChange()"></select>
+      <input type="text" id="model" placeholder="loading...">
+      <input type="text" id="modelCustom" style="display:none" placeholder="Enter custom model ID...">
       <div class="field-hint" id="modelHint"></div>
     </div>
     <div id="modelNotes"></div>
@@ -1629,13 +1630,29 @@ body::after {
         </div>
         <div class="field">
           <label>Lead Model</label>
-          <input type="text" id="leadModel" list="leadModelSuggestions" placeholder="e.g. claude-sonnet-4-20250514">
-          <datalist id="leadModelSuggestions"></datalist>
+          <select id="leadModelSelect" style="display:none" onchange="onLeadModelSelectChange()"></select>
+          <input type="text" id="leadModel" placeholder="e.g. claude-sonnet-4-20250514">
+          <input type="text" id="leadModelCustom" style="display:none" placeholder="Enter custom model ID...">
         </div>
         <div class="field">
           <label>Lead Turn Count</label>
           <input type="number" id="leadTurnCount" min="1" max="50" value="" placeholder="3">
           <div class="field-hint">Number of turns the lead model takes before handing off to the worker (default: 3)</div>
+        </div>
+        <div class="field">
+          <label>Failure Threshold</label>
+          <input type="number" id="leadFailureThreshold" min="1" max="20" value="" placeholder="3">
+          <div class="field-hint">Number of lead failures before falling back to the worker model (default: 3)</div>
+        </div>
+        <div class="field">
+          <label>Fallback Turns</label>
+          <input type="number" id="leadFallbackTurns" min="1" max="100" value="" placeholder="5">
+          <div class="field-hint">Number of turns to use worker model after lead failure before retrying lead (default: 5)</div>
+        </div>
+        <div class="field">
+          <label>Context Limit</label>
+          <input type="number" id="leadContextLimit" min="1000" max="2000000" value="" placeholder="128000">
+          <div class="field-hint">Context window limit for the lead model in tokens (default: 128000)</div>
         </div>
       </div>
     </div>
@@ -2631,22 +2648,22 @@ function buildModelStep() {
   if (!provider) return;
 
   const modelInput = document.getElementById('model');
-  const datalist = document.getElementById('modelSuggestions');
+  const modelSelect = document.getElementById('modelSelect');
+  const modelCustom = document.getElementById('modelCustom');
   const hintEl = document.getElementById('modelHint');
   const notesEl = document.getElementById('modelNotes');
+
+  /* reset to text input state */
+  modelSelect.style.display = 'none';
+  modelSelect.innerHTML = '';
+  modelCustom.style.display = 'none';
+  modelCustom.value = '';
+  modelInput.style.display = '';
 
   /* pre-fill default if user hasn't typed anything yet */
   if (!modelInput.value && provider.defaultModel) {
     modelInput.value = provider.defaultModel;
   }
-
-  /* populate datalist */
-  datalist.innerHTML = '';
-  (provider.models || []).forEach(m => {
-    const opt = document.createElement('option');
-    opt.value = m;
-    datalist.appendChild(opt);
-  });
 
   /* set hint */
   if (selectedProvider === 'github-copilot') {
@@ -2749,19 +2766,74 @@ async function fetchDynamicModels() {
     });
     const data = await res.json();
     if (data.models && data.models.length > 0) {
-      const dl = document.getElementById('modelSuggestions');
-      dl.innerHTML = '';
+      const sel = document.getElementById('modelSelect');
+      const modelInput = document.getElementById('model');
+      const modelCustom = document.getElementById('modelCustom');
+      sel.innerHTML = '';
+      const currentVal = modelInput.value;
       data.models.forEach(m => {
         const opt = document.createElement('option');
         opt.value = m.id;
-        opt.label = m.name !== m.id ? m.name + ' (' + m.id + ')' : m.id;
-        dl.appendChild(opt);
+        opt.textContent = m.name !== m.id ? m.name + ' (' + m.id + ')' : m.id;
+        if (m.id === currentVal) opt.selected = true;
+        sel.appendChild(opt);
       });
-      hintEl.innerHTML = data.models.length + ' models available. type to filter or enter a custom model ID.';
+      /* add custom option */
+      const customOpt = document.createElement('option');
+      customOpt.value = '__custom__';
+      customOpt.textContent = 'Custom model ID\u2026';
+      sel.appendChild(customOpt);
+      /* if current value wasn't in the list, select default or first */
+      if (!sel.querySelector('option[selected]')) {
+        const provider = PROVIDERS[selectedProvider];
+        const defModel = provider && provider.defaultModel;
+        const defOpt = defModel && sel.querySelector('option[value="' + defModel + '"]');
+        if (defOpt) defOpt.selected = true;
+      }
+      /* show select, hide text input, sync value */
+      sel.style.display = '';
+      modelInput.style.display = 'none';
+      modelCustom.style.display = 'none';
+      modelInput.value = sel.value === '__custom__' ? '' : sel.value;
+      hintEl.innerHTML = data.models.length + ' models discovered from your provider.';
     }
     /* if fallback or error, keep the hardcoded list already populated */
   } catch(e) {
     /* silently keep hardcoded list */
+  }
+}
+
+/* ── model select change handlers ── */
+function onModelSelectChange() {
+  const sel = document.getElementById('modelSelect');
+  const modelInput = document.getElementById('model');
+  const modelCustom = document.getElementById('modelCustom');
+  if (sel.value === '__custom__') {
+    modelCustom.style.display = '';
+    modelCustom.focus();
+    modelInput.value = modelCustom.value;
+    /* sync custom input to hidden model input on typing */
+    modelCustom.oninput = function() { modelInput.value = this.value; };
+  } else {
+    modelCustom.style.display = 'none';
+    modelCustom.oninput = null;
+    modelInput.value = sel.value;
+  }
+}
+
+function onLeadModelSelectChange() {
+  const sel = document.getElementById('leadModelSelect');
+  const modelInput = document.getElementById('leadModel');
+  const modelCustom = document.getElementById('leadModelCustom');
+  if (sel.value === '__custom__') {
+    modelCustom.style.display = '';
+    modelCustom.focus();
+    modelInput.value = modelCustom.value;
+    modelCustom.oninput = function() { modelInput.value = this.value; };
+  } else {
+    modelCustom.style.display = 'none';
+    modelCustom.oninput = null;
+    modelInput.value = sel.value;
   }
 }
 
@@ -3108,26 +3180,47 @@ function populateLeadProviders() {
 }
 
 function onLeadProviderChange() {
-  const sel = document.getElementById('leadProvider');
-  const datalist = document.getElementById('leadModelSuggestions');
+  const provSel = document.getElementById('leadProvider');
   const modelInput = document.getElementById('leadModel');
-  if (!sel || !datalist) return;
-  const val = sel.value;
-  datalist.innerHTML = '';
+  const modelSelect = document.getElementById('leadModelSelect');
+  const modelCustom = document.getElementById('leadModelCustom');
+  if (!provSel) return;
+  const val = provSel.value;
+
+  /* reset to text input state */
+  modelSelect.style.display = 'none';
+  modelSelect.innerHTML = '';
+  modelCustom.style.display = 'none';
+  modelCustom.value = '';
+  modelInput.style.display = '';
+
   if (!val) {
     if (modelInput) modelInput.value = '';
     return;
   }
   const provider = PROVIDERS[val];
-  if (provider && provider.models) {
-    provider.models.forEach(m => {
+  if (provider && provider.models && provider.models.length > 0) {
+    provider.models.forEach(function(m) {
       const opt = document.createElement('option');
       opt.value = m;
-      datalist.appendChild(opt);
+      opt.textContent = m;
+      modelSelect.appendChild(opt);
     });
+    const customOpt = document.createElement('option');
+    customOpt.value = '__custom__';
+    customOpt.textContent = 'Custom model ID\u2026';
+    modelSelect.appendChild(customOpt);
+    /* pre-select default */
+    if (provider.defaultModel) {
+      const defOpt = modelSelect.querySelector('option[value="' + provider.defaultModel + '"]');
+      if (defOpt) defOpt.selected = true;
+    }
+    modelSelect.style.display = '';
+    modelInput.style.display = 'none';
+    modelInput.value = modelSelect.value === '__custom__' ? '' : modelSelect.value;
   }
-  /* pre-fill default model */
-  if (modelInput && !modelInput.value && provider && provider.defaultModel) {
+  /* pre-fill default model for text input fallback */
+  if (modelInput.style.display !== 'none' && !modelInput.value && provider && provider.defaultModel) {
     modelInput.value = provider.defaultModel;
   }
 }
@@ -3945,6 +4038,12 @@ function prefillWizard(config) {
     if (lmEl && config.lead_model) lmEl.value = config.lead_model;
     const ltcEl = document.getElementById('leadTurnCount');
     if (ltcEl && config.lead_turn_count) ltcEl.value = config.lead_turn_count;
+    const lftEl = document.getElementById('leadFailureThreshold');
+    if (lftEl && config.lead_failure_threshold) lftEl.value = config.lead_failure_threshold;
+    const lfbtEl = document.getElementById('leadFallbackTurns');
+    if (lfbtEl && config.lead_fallback_turns) lfbtEl.value = config.lead_fallback_turns;
+    const lclEl = document.getElementById('leadContextLimit');
+    if (lclEl && config.lead_context_limit) lclEl.value = config.lead_context_limit;
   }
 
   /* mark validation as passed since this config was previously validated */
@@ -4374,6 +4473,12 @@ async function saveConfig() {
     config.lead_provider = leadProv;
     config.lead_model = leadMod;
     config.lead_turn_count = leadTurns ? parseInt(leadTurns, 10) : 3;
+    const leadFT = document.getElementById('leadFailureThreshold')?.value || '';
+    const leadFBT = document.getElementById('leadFallbackTurns')?.value || '';
+    const leadCL = document.getElementById('leadContextLimit')?.value || '';
+    if (leadFT) config.lead_failure_threshold = parseInt(leadFT, 10);
+    if (leadFBT) config.lead_fallback_turns = parseInt(leadFBT, 10);
+    if (leadCL) config.lead_context_limit = parseInt(leadCL, 10);
   }
 
   /* persist saved_keys across provider switches */

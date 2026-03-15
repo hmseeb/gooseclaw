@@ -10,7 +10,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1
 
 # minimal runtime deps
-# python3-yaml pinned via apt; see docker/requirements.txt for pip-based version tracking
+# python3-yaml pinned via apt; see docker/requirements.txt for version pins
+# docker/requirements.lock has hash-pinned transitive deps (generate via docker/generate-lockfile.sh)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       curl git python3 python3-pip python3-yaml ca-certificates jq bzip2 libgomp1 tzdata libssl3 && \
@@ -48,8 +49,14 @@ RUN groupadd -r gooseclaw && \
 WORKDIR /app
 
 # copy dependencies first for better layer caching (these change rarely)
-COPY docker/requirements.txt /app/docker/requirements.txt
-RUN pip3 install --no-cache-dir -r /app/docker/requirements.txt
+# if requirements.lock exists (hash-pinned), use it with --require-hashes for supply chain security
+# otherwise fall back to requirements.txt for initial setup / development
+COPY docker/requirements.txt docker/requirements.lock* /app/docker/
+RUN if [ -f /app/docker/requirements.lock ]; then \
+      pip3 install --no-cache-dir --require-hashes -r /app/docker/requirements.lock; \
+    else \
+      pip3 install --no-cache-dir -r /app/docker/requirements.txt; \
+    fi
 
 # pre-download ChromaDB ONNX embedding model so it doesn't download on every boot
 RUN python3 -c "import chromadb; c=chromadb.Client(); col=c.create_collection('warmup'); col.add(ids=['1'],documents=['warmup']); c.delete_collection('warmup')"

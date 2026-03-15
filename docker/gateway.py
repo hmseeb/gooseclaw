@@ -6703,7 +6703,7 @@ def _do_rest_relay(user_text, session_id, content_blocks=None, sock_ref=None):
                 break
 
         conn.close()
-        full_text = "\n".join(text_parts).strip()
+        full_text = "".join(text_parts).strip()
         elapsed = time.time() - t0
         print(f"[rest-relay] done in {elapsed:.1f}s ({len(full_text)} chars) session={session_id}")
         return full_text, "", media_blocks
@@ -7992,7 +7992,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         # first boot (no setup.json) = open. after that = require auth.
         # allow unauthenticated access to recovery page
         query = urllib.parse.urlparse(self.path).query
-        is_recovery = "recover" in urllib.parse.parse_qs(query)
+        is_recovery = "recover" in query
         if load_setup() and not is_recovery and not check_auth(self):
             self.send_response(302)
             self.send_header("Location", "/login")

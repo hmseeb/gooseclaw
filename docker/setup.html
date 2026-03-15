@@ -1485,7 +1485,7 @@ body::after {
   padding: 0;
 }
 .advanced-panel.open {
-  max-height: 500px;
+  max-height: 1000px;
   padding: 16px 0 0;
 }
 </style>
@@ -1766,10 +1766,6 @@ body::after {
           </div>
         </div>
       </div>
-      <button class="btn btn-primary" onclick="window.location.href='/'" id="openChatBtn" style="display:none">
-        Open Chat
-        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5.5 3L9.5 7L5.5 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </button>
     </div>
   </div>
 
@@ -4414,9 +4410,6 @@ async function pollStartupStatus() {
   const titleEl = document.getElementById('successTitle');
   const errorArea = document.getElementById('startupError');
   const errorDetail = document.getElementById('startupErrorDetail');
-  const openChatBtn = document.getElementById('openChatBtn');
-
-  if (openChatBtn) openChatBtn.style.display = 'none';
 
   // initial state: config step active
   updateStartupStep('ss-config', 'active');
@@ -4453,7 +4446,6 @@ async function pollStartupStatus() {
         updateStartupStep('ss-config', 'done');
         updateStartupStep('ss-starting', 'done');
         updateStartupStep('ss-ready', 'done');
-        if (openChatBtn) openChatBtn.style.display = '';
         document.getElementById('successOrb').textContent = '\u2705';
       } else if (status.state === 'error') {
         clearInterval(_startupPollTimer);

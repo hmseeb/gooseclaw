@@ -1085,14 +1085,48 @@ def _check_stale_pid(name):
 
 # ── auth token hashing ───────────────────────────────────────────────────────
 
+PBKDF2_ITERATIONS = 600_000
+
+
 def hash_token(token):
-    """Hash an auth token using SHA-256 for storage."""
-    return hashlib.sha256(token.encode()).hexdigest()
+    """Hash password using PBKDF2-SHA256. Returns versioned string."""
+    salt = os.urandom(16)
+    dk = hashlib.pbkdf2_hmac('sha256', token.encode(), salt, PBKDF2_ITERATIONS)
+    salt_b64 = base64.b64encode(salt).decode()
+    dk_b64 = base64.b64encode(dk).decode()
+    return f"$pbkdf2${salt_b64}${dk_b64}"
 
 
 def verify_token(provided, stored_hash):
-    """Verify a provided token against a stored SHA-256 hash."""
-    return hashlib.sha256(provided.encode()).hexdigest() == stored_hash
+    """Verify password. Supports PBKDF2 and legacy SHA-256 with lazy migration."""
+    if stored_hash.startswith("$pbkdf2$"):
+        parts = stored_hash.split("$")  # ['', 'pbkdf2', salt_b64, dk_b64]
+        salt = base64.b64decode(parts[2])
+        expected = base64.b64decode(parts[3])
+        dk = hashlib.pbkdf2_hmac('sha256', provided.encode(), salt, PBKDF2_ITERATIONS)
+        return hmac.compare_digest(dk, expected)
+    # legacy SHA-256: bare 64-char hex, no salt
+    legacy_ok = hmac.compare_digest(
+        hashlib.sha256(provided.encode()).hexdigest(),
+        stored_hash
+    )
+    if legacy_ok:
+        # lazy migration: rehash with PBKDF2 and save
+        _migrate_password_hash(provided)
+    return legacy_ok
+
+
+def _migrate_password_hash(password):
+    """Upgrade a legacy SHA-256 password hash to PBKDF2 in setup.json."""
+    try:
+        setup = load_setup()
+        if setup:
+            setup['web_auth_token_hash'] = hash_token(password)
+            save_setup(setup)
+            print("[auth] password hash upgraded from SHA-256 to PBKDF2")
+    except Exception as e:
+        # migration failure is non-fatal, old hash still works
+        print(f"[auth] hash migration failed (non-fatal): {e}")
 
 
 # ── provider registry ────────────────────────────────────────────────────────

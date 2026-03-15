@@ -57,17 +57,21 @@ fi
 if [ -n "$GOOSECLAW_RESET_PASSWORD" ]; then
     echo "[init] GOOSECLAW_RESET_PASSWORD detected, resetting password..."
     _DATA_DIR="$DATA_DIR" _RESET_PW="$GOOSECLAW_RESET_PASSWORD" python3 -c "
-import json, hashlib, os
+import json, hashlib, os, base64
 setup_path = os.path.join(os.environ['_DATA_DIR'], 'config', 'setup.json')
 if os.path.exists(setup_path):
     with open(setup_path) as f:
         setup = json.load(f)
     pw = os.environ['_RESET_PW']
-    setup['web_auth_token_hash'] = hashlib.sha256(pw.encode()).hexdigest()
+    salt = os.urandom(16)
+    dk = hashlib.pbkdf2_hmac('sha256', pw.encode(), salt, 600_000)
+    salt_b64 = base64.b64encode(salt).decode()
+    dk_b64 = base64.b64encode(dk).decode()
+    setup['web_auth_token_hash'] = '\$pbkdf2\$' + salt_b64 + '\$' + dk_b64
     setup.pop('web_auth_token', None)
     with open(setup_path, 'w') as f:
         json.dump(setup, f, indent=2)
-    print('[init] password reset to value of GOOSECLAW_RESET_PASSWORD')
+    print('[init] password reset to value of GOOSECLAW_RESET_PASSWORD (PBKDF2)')
 else:
     print('[init] no setup.json found, skipping password reset')
 "

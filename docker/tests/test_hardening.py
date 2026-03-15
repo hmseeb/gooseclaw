@@ -78,3 +78,45 @@ def test_dependabot_config_targets_docker_dir():
     assert pip_entries[0]["directory"] == "/docker", (
         "pip ecosystem should target /docker directory"
     )
+
+
+# ── HARD-03: Shutdown watchdog ───────────────────────────────────────────────
+
+
+def _extract_shutdown_function(gateway_source):
+    """Extract the shutdown() function body from gateway.py source."""
+    # Find the shutdown function definition and extract its body
+    match = re.search(
+        r"(    def shutdown\(_sig, _frame\):.*?)(?=\n    signal\.signal|\n    [a-zA-Z]|\nif __name__)",
+        gateway_source,
+        re.DOTALL,
+    )
+    assert match, "Could not find shutdown() function in gateway.py"
+    return match.group(1)
+
+
+def test_shutdown_handler_has_watchdog(gateway_source):
+    """Shutdown function contains a threading.Timer watchdog and os._exit."""
+    body = _extract_shutdown_function(gateway_source)
+    assert "threading.Timer" in body, "shutdown() should use threading.Timer for watchdog"
+    assert "os._exit" in body, "shutdown() should use os._exit for force-exit"
+
+
+def test_shutdown_watchdog_timeout_is_5_seconds(gateway_source):
+    """Shutdown watchdog uses a 5-second timeout."""
+    body = _extract_shutdown_function(gateway_source)
+    assert re.search(r"Timer\(5\.0", body) or re.search(r"Timer\(5,", body), (
+        "shutdown watchdog should have 5-second timeout"
+    )
+
+
+def test_shutdown_watchdog_is_daemon(gateway_source):
+    """Shutdown watchdog thread is a daemon (won't prevent exit)."""
+    body = _extract_shutdown_function(gateway_source)
+    assert "watchdog.daemon = True" in body, "watchdog should be a daemon thread"
+
+
+def test_shutdown_watchdog_cancelled_on_success(gateway_source):
+    """Shutdown watchdog is cancelled after successful cleanup."""
+    body = _extract_shutdown_function(gateway_source)
+    assert "watchdog.cancel()" in body, "watchdog should be cancelled on successful cleanup"

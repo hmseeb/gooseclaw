@@ -9886,6 +9886,15 @@ def main():
 
     def shutdown(_sig, _frame):
         global _job_engine_running, _cron_scheduler_running
+
+        # Watchdog: force-exit after 5 seconds if cleanup hangs
+        def _force_exit():
+            print("[gateway] shutdown timeout exceeded, forcing exit", flush=True)
+            os._exit(1)
+        watchdog = threading.Timer(5.0, _force_exit)
+        watchdog.daemon = True
+        watchdog.start()
+
         print("[gateway] shutting down...")
         # stop accepting new connections first
         threading.Thread(target=server.shutdown, daemon=True).start()
@@ -9904,6 +9913,7 @@ def main():
         _job_engine_running = False
         _cron_scheduler_running = False
         stop_watcher_engine()
+        watchdog.cancel()
         print("[gateway] shutdown complete")
 
     signal.signal(signal.SIGTERM, shutdown)

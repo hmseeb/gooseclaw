@@ -1,4 +1,4 @@
-import hashlib, json, os, sys
+import os, sys
 
 # Add docker/ to path so we can potentially import gateway helpers
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -50,3 +50,149 @@ class TestLegacySHA256Migration:
         """Migration failure must not prevent login."""
         assert "non-fatal" in gateway_source or "except" in gateway_source, \
             "Hash migration must be wrapped in try/except (non-fatal)"
+
+
+# ── HTTP-level auth endpoint tests ───────────────────────────────────────────
+
+import json
+import requests
+
+
+def _setup_password(gateway_module, password="testpassword"):
+    """Write setup.json with a PBKDF2 hash for the given password."""
+    gw = gateway_module
+    hashed = gw.hash_token(password)
+    setup = {
+        "web_auth_token_hash": hashed,
+        "setup_complete": True,
+        "provider_type": "openai",
+    }
+    os.makedirs(os.path.dirname(gw.SETUP_FILE), exist_ok=True)
+    with open(gw.SETUP_FILE, "w") as f:
+        json.dump(setup, f, indent=2)
+
+
+class TestAuthLogin:
+    """HTTP-level tests for POST /api/auth/login."""
+
+    def test_login_correct_password(self, live_gateway, gateway_module):
+        _setup_password(gateway_module)
+        resp = requests.post(
+            f"{live_gateway}/api/auth/login",
+            json={"password": "testpassword"},
+        )
+        assert resp.status_code == 200
+        assert "Set-Cookie" in resp.headers
+
+    def test_login_wrong_password(self, live_gateway, gateway_module):
+        _setup_password(gateway_module)
+        resp = requests.post(
+            f"{live_gateway}/api/auth/login",
+            json={"password": "wrongpassword"},
+        )
+        assert resp.status_code == 401
+
+    def test_login_missing_password(self, live_gateway, gateway_module):
+        _setup_password(gateway_module)
+        resp = requests.post(
+            f"{live_gateway}/api/auth/login",
+            json={},
+        )
+        assert resp.status_code == 400
+
+    def test_login_empty_body(self, live_gateway, gateway_module):
+        _setup_password(gateway_module)
+        resp = requests.post(
+            f"{live_gateway}/api/auth/login",
+            data=b"",
+            headers={"Content-Type": "application/json"},
+        )
+        # Empty body should be rejected (400 for invalid JSON or missing password)
+        assert resp.status_code in (400, 401)
+
+
+class TestAuthSession:
+    """HTTP-level tests for session cookie behavior."""
+
+    def test_authenticated_endpoint_with_cookie(self, live_gateway, auth_session):
+        resp = requests.get(
+            f"{live_gateway}/api/setup/config",
+            headers=auth_session,
+        )
+        assert resp.status_code == 200
+
+    def test_authenticated_endpoint_without_cookie(self, live_gateway, gateway_module):
+        _setup_password(gateway_module)
+        resp = requests.get(
+            f"{live_gateway}/api/setup/config",
+        )
+        assert resp.status_code == 401
+
+    def test_session_cookie_httponly(self, live_gateway, gateway_module):
+        _setup_password(gateway_module)
+        resp = requests.post(
+            f"{live_gateway}/api/auth/login",
+            json={"password": "testpassword"},
+        )
+        assert resp.status_code == 200
+        cookie_header = resp.headers.get("Set-Cookie", "")
+        assert "HttpOnly" in cookie_header
+
+
+class TestAuthRateLimiting:
+    """HTTP-level tests for auth rate limiting."""
+
+    def test_auth_rate_limit_triggers(self, live_gateway, gateway_module):
+        _setup_password(gateway_module)
+        max_reqs = gateway_module.auth_limiter.max_requests
+        # Send max_requests + 1 wrong password attempts
+        last_status = None
+        for i in range(max_reqs + 1):
+            resp = requests.post(
+                f"{live_gateway}/api/auth/login",
+                json={"password": "wrongpassword"},
+            )
+            last_status = resp.status_code
+        assert last_status == 429
+
+
+class TestAuthRecovery:
+    """HTTP-level tests for POST /api/auth/recover."""
+
+    def test_recovery_with_valid_secret(self, live_gateway, gateway_module):
+        _setup_password(gateway_module)
+        recovery_secret = "test-recovery-secret-12345"
+        os.environ["GOOSECLAW_RECOVERY_SECRET"] = recovery_secret
+
+        resp = requests.post(
+            f"{live_gateway}/api/auth/recover",
+            json={"secret": recovery_secret},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data.get("success") is True
+        assert "temporary_password" in data
+
+        # Verify login works with the new temporary password
+        new_pass = data["temporary_password"]
+        resp2 = requests.post(
+            f"{live_gateway}/api/auth/login",
+            json={"password": new_pass},
+        )
+        assert resp2.status_code == 200
+
+        # Cleanup
+        os.environ.pop("GOOSECLAW_RECOVERY_SECRET", None)
+
+    def test_recovery_with_invalid_secret(self, live_gateway, gateway_module):
+        _setup_password(gateway_module)
+        os.environ["GOOSECLAW_RECOVERY_SECRET"] = "real-secret"
+
+        resp = requests.post(
+            f"{live_gateway}/api/auth/recover",
+            json={"secret": "wrong-secret"},
+        )
+        assert resp.status_code == 403
+
+        # Cleanup
+        os.environ.pop("GOOSECLAW_RECOVERY_SECRET", None)

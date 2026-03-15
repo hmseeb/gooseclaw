@@ -1,150 +1,94 @@
-# Requirements: GooseClaw v2.0
+# Requirements: GooseClaw v4.0
 
-**Defined:** 2026-03-13
+**Defined:** 2026-03-16
 **Core Value:** A user with zero DevOps knowledge can deploy and configure GooseClaw correctly on the first try
 
-## v2.0 Requirements
+## v4.0 Requirements
 
-### Channel Parity
+### Security
 
-- [x] **CHAN-01**: Channel plugins receive /help, /stop, /clear, /compact commands identical to telegram
-- [x] **CHAN-02**: Channel plugins have per-user relay locks preventing concurrent goose requests from same user
-- [x] **CHAN-03**: Channel plugins can cancel in-flight requests via /stop (active relay tracking + socket close)
-- [x] **CHAN-04**: Channel plugins can register custom commands via CHANNEL dict `commands` field
-- [x] **CHAN-05**: Notification bus validates channel names dynamically from loaded plugins, not hardcoded list
-- [x] **CHAN-06**: Channel plugins can signal typing/activity indicators via optional `typing` callback in CHANNEL dict
-- [x] **CHAN-07**: POST /api/notify accepts optional `channel` parameter for targeted delivery
-- [x] **CHAN-08**: Cron scheduler passes `notify_channel` to notify_all when job specifies it
-- [x] **CHAN-09**: remind.sh accepts --notify-channel flag matching job.sh behavior
+- [ ] **SEC-01**: Shell injection in secret.sh eliminated (variable interpolation into Python strings replaced with safe argument passing)
+- [ ] **SEC-02**: Shell injection in entrypoint.sh eliminated (GOOSECLAW_RESET_PASSWORD no longer interpolated into inline Python)
+- [ ] **SEC-03**: Command injection in gateway.py `_run_script` eliminated (shell=True replaced with list-based execution)
+- [ ] **SEC-04**: Password hashing upgraded from SHA-256 to PBKDF2 with salt and 600K iterations
+- [ ] **SEC-05**: Existing SHA-256 password hashes transparently migrate to PBKDF2 on successful login (lazy migration)
+- [ ] **SEC-06**: Recovery secret no longer printed to container logs on first boot
+- [ ] **SEC-07**: Request body size limited to configurable maximum (default 1MB), oversized requests rejected with 413
 
-### Multi-Bot
+### Hardening
 
-- [x] **BOT-01**: User can configure multiple telegram bots in setup.json `bots` array with name, token, and optional provider/model
-- [x] **BOT-02**: Each telegram bot runs its own poll loop with independent session store and pair codes
-- [x] **BOT-03**: Each bot has per-user session locks and active relay tracking (not shared across bots)
-- [x] **BOT-04**: Each bot routes to its own LLM provider/model via extended channel_routes keyed by bot name
-- [x] **BOT-05**: User can add a new bot via API without container restart (hot-add)
-- [x] **BOT-06**: User can remove a bot via API without container restart (hot-remove)
-- [x] **BOT-07**: Existing single-bot `telegram_bot_token` config remains backward-compatible as default bot
+- [ ] **HARD-01**: Dependencies pinned to exact versions with hashes in lock file
+- [ ] **HARD-02**: CVE scanning configured via GitHub Dependabot or equivalent
+- [ ] **HARD-03**: Graceful shutdown has 5-second timeout, force-kills hung processes after grace period
+- [ ] **HARD-04**: Missing HTTP security headers added (Referrer-Policy, Permissions-Policy, Cross-Origin-Opener-Policy)
+- [ ] **HARD-05**: Structured JSON logging replaces print() calls with stdlib logging module and custom JSON formatter
+- [ ] **HARD-06**: Security-sensitive operations (auth, config changes, errors) logged in structured format first (incremental migration)
 
-### Infrastructure
+### Testing
 
-- [x] **INFRA-01**: SessionManager class with composite key (channel:user_id) replaces per-channel session dicts
-- [x] **INFRA-02**: CommandRouter class dispatches /help /stop /clear /compact to shared handlers
-- [x] **INFRA-03**: Telegram globals (_telegram_sessions, _telegram_active_relays, _telegram_chat_locks) refactored into per-instance state
-- [x] **INFRA-04**: /clear scoped to requesting channel's sessions only, not global goose web restart (or documented limitation)
+- [ ] **TEST-01**: Gateway HTTP auth endpoints tested (login, session validation, rate limiting, password reset)
+- [ ] **TEST-02**: Gateway HTTP setup endpoints tested (provider config, validation, save)
+- [ ] **TEST-03**: Gateway HTTP job endpoints tested (create, list, cancel, run, schedule)
+- [ ] **TEST-04**: Gateway HTTP health endpoints tested (/api/health, /api/health/ready, /api/health/jobs)
+- [ ] **TEST-05**: Gateway security headers and CORS tested across all response paths
+- [ ] **TEST-06**: Shell scripts tested (job.sh duration/time parsing, remind.sh flags, notify.sh message handling, secret.sh vault ops)
+- [ ] **TEST-07**: Entrypoint bootstrap tested (directory creation, config generation, env rehydration, provider detection)
+- [ ] **TEST-08**: E2e integration test boots container, completes setup wizard, verifies goosed starts and health endpoint returns 200
+- [ ] **TEST-09**: pytest + requests test infrastructure established with requirements-dev.txt
 
-## v3.0 Requirements
+## Future Requirements
 
-### Rich Media & Channel Flexibility
+### v4.x (After Core Hardening)
 
-**Goal:** Make channels truly flexible. Any media type (images, voice, files) flows seamlessly in both directions across any channel. The agent never knows which platform it's on.
-
-#### Channel Contract v2
-
-- **MEDIA-01**: InboundMessage envelope normalizes all incoming messages (text, media, metadata) into a channel-agnostic format before reaching the relay
-- **MEDIA-02**: OutboundAdapter interface defines send_text (required), send_image, send_voice, send_file, send_buttons (all optional) per channel
-- **MEDIA-03**: ChannelCapabilities declaration per channel (supports_images, supports_voice, supports_files, max_file_size, etc.)
-- **MEDIA-04**: Graceful degradation: if a channel doesn't support a media type, fall back to text (image URL, transcript, file link)
-- **MEDIA-05**: Existing channel plugins with text-only send() continue to work unchanged (backward compatible)
-
-#### Inbound Media Pipeline
-
-- **MEDIA-06**: Telegram adapter downloads media (photo, voice, document, video, sticker, audio) via getFile API and buffers as bytes
-- **MEDIA-07**: MediaContent class normalizes media with kind (image/audio/video/document), mime_type, data (bytes), and optional filename
-- **MEDIA-08**: Voice messages are downloaded and normalized as MediaContent(kind="audio") like any other media, no built-in STT (users configure their own)
-- **MEDIA-09**: Images are base64-encoded and sent to goose as multimodal content blocks
-
-#### Relay Protocol Upgrade
-
-- **MEDIA-10**: Gateway relay sends multimodal content blocks to goose (images as base64 in content array) instead of text-only strings
-- **MEDIA-11**: Gateway parses typed content blocks in goose responses (text, image, audio) and routes to outbound adapter
-- **MEDIA-12**: Relay upgrade is backward-compatible: text-only messages still work identically
-
-#### Outbound Rich Media
-
-- [x] **MEDIA-13**: Telegram adapter implements send_image (sendPhoto), send_voice (sendVoice), send_file (sendDocument)
-- [x] **MEDIA-14**: notify_all supports media attachments alongside text
-
-#### Reference Plugin
-
-- **MEDIA-15**: At least one non-Telegram channel plugin (Slack or Discord) ships with full rich media support using the new contract
-- **MEDIA-16**: Adding a new channel with media support requires only implementing the OutboundAdapter methods, no gateway changes
-
-### Deferred (v4.0+)
-
-- **CROSS-01**: Cross-channel session continuity (same goose session across telegram + discord)
-- **CROSS-02**: Unified user identity layer mapping platform IDs to GooseClaw user
-- **PERF-01**: Webhook mode for telegram bots (polling fine for 1-5 bots)
-- **PERS-01**: Per-bot personality/system prompt (each bot gets its own soul.md)
+- **CSRF-01**: CSRF tokens on all state-changing POST endpoints
+- **AUDIT-01**: Append-only audit log for auth events, config changes, vault operations
+- **AUDIT-02**: Security audit endpoint (/api/security/audit) checks hash algorithm, headers, rate limiting
+- **DASH-01**: Container health dashboard shows memory, uptime, restart count, active sessions
 
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
-| Cross-channel message bridging | GooseClaw is an AI gateway, not a chat bridge. Use Matterbridge for that. |
-| OAuth/SSO for channels | Too complex per-platform. Stick with API tokens and pairing codes. |
-| Per-message provider switching | Goose sessions are tied to a provider. Switching mid-session breaks context. |
-| Auto-downloading plugins from registry | Massive attack surface. Manual .py file drops only. |
-| Multiple goose web processes | Single process, sessions provide isolation. |
-| Platform-specific rich UI (cards, carousels) | Beyond v3.0 scope. send_buttons is the escape hatch for now. |
+| TLS termination in container | Railway terminates TLS at load balancer. Adding certs inside container is unnecessary complexity |
+| WAF inside container | Single-user auth-gated app. Input sanitization + rate limiting is sufficient |
+| Encrypted vault at rest | Single-user, Railway volumes isolated. Encryption key on same disk provides no real benefit |
+| Multi-factor authentication | Single-user self-hosted app. Railway's own auth is the primary gate |
+| RBAC / multi-user auth | GooseClaw is a personal agent. Build multi-user when the use case exists |
+| argon2 password hashing | Requires pip dependency. PBKDF2 via stdlib achieves same security goal |
+| structlog / python-json-logger | Pip dependencies. Stdlib logging + custom JSON formatter is sufficient |
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| INFRA-01 | Phase 6 | Complete |
-| INFRA-02 | Phase 6 | Complete |
-| INFRA-03 | Phase 6 | Complete |
-| INFRA-04 | Phase 6 | Complete |
-| CHAN-01 | Phase 7 | Complete |
-| CHAN-02 | Phase 7 | Complete |
-| CHAN-03 | Phase 7 | Complete |
-| CHAN-04 | Phase 7 | Complete |
-| CHAN-05 | Phase 7 | Complete |
-| CHAN-06 | Phase 7 | Complete |
-| CHAN-07 | Phase 8 | Complete |
-| CHAN-08 | Phase 8 | Complete |
-| CHAN-09 | Phase 8 | Complete |
-| BOT-01 | Phase 9 | Complete |
-| BOT-02 | Phase 9 | Complete |
-| BOT-03 | Phase 9 | Complete |
-| BOT-04 | Phase 9 | Complete |
-| BOT-07 | Phase 9 | Complete |
-| BOT-05 | Phase 10 | Complete |
-| BOT-06 | Phase 10 | Complete |
+| SEC-01 | — | Pending |
+| SEC-02 | — | Pending |
+| SEC-03 | — | Pending |
+| SEC-04 | — | Pending |
+| SEC-05 | — | Pending |
+| SEC-06 | — | Pending |
+| SEC-07 | — | Pending |
+| HARD-01 | — | Pending |
+| HARD-02 | — | Pending |
+| HARD-03 | — | Pending |
+| HARD-04 | — | Pending |
+| HARD-05 | — | Pending |
+| HARD-06 | — | Pending |
+| TEST-01 | — | Pending |
+| TEST-02 | — | Pending |
+| TEST-03 | — | Pending |
+| TEST-04 | — | Pending |
+| TEST-05 | — | Pending |
+| TEST-06 | — | Pending |
+| TEST-07 | — | Pending |
+| TEST-08 | — | Pending |
+| TEST-09 | — | Pending |
 
-**Coverage (v2.0):**
-- v2.0 requirements: 20 total
-- Mapped to phases: 20
-- Unmapped: 0
-
-## v3.0 Traceability
-
-| Requirement | Phase | Status |
-|-------------|-------|--------|
-| MEDIA-01 | Phase 11 | Complete |
-| MEDIA-02 | Phase 11 | Complete |
-| MEDIA-03 | Phase 11 | Complete |
-| MEDIA-04 | Phase 11 | Complete |
-| MEDIA-05 | Phase 11 | Complete |
-| MEDIA-06 | Phase 12 | Complete |
-| MEDIA-07 | Phase 12 | Complete |
-| MEDIA-08 | Phase 12 | Complete |
-| MEDIA-09 | Phase 12 | Complete |
-| MEDIA-10 | Phase 13 | Complete |
-| MEDIA-11 | Phase 13 | Complete |
-| MEDIA-12 | Phase 13 | Complete |
-| MEDIA-13 | Phase 14 | Complete |
-| MEDIA-14 | Phase 14 | Complete |
-| MEDIA-15 | Phase 15 | Complete |
-| MEDIA-16 | Phase 15 | Complete |
-
-**Coverage (v3.0):**
-- v3.0 requirements: 16 total
-- Mapped to phases: 16
-- Unmapped: 0
+**Coverage:**
+- v4.0 requirements: 22 total
+- Mapped to phases: 0
+- Unmapped: 22
 
 ---
-*Requirements defined: 2026-03-13*
-*Last updated: 2026-03-13 -- v3.0 milestone shipped, all 16 requirements complete*
+*Requirements defined: 2026-03-16*
+*Last updated: 2026-03-16 after initial definition*

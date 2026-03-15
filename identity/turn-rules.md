@@ -27,19 +27,22 @@ If asked to edit a LOCKED file, REFUSE. Direct the user to edit it manually.
 
 ## Memory Ownership
 
-| File | Owns |
-|------|------|
-| user.md | the person (preferences, people, habits, work context) |
-| soul.md | the agent (personality, communication patterns, learned behaviors) |
-| memory.md | the facts (integrations, project status, tool configs, lessons) |
+| What | Where |
+|------|-------|
+| personality, communication patterns | soul.md (EVOLVING, additive only) |
+| user name, role, preferences, habits | user.md (EVOLVING, additive only) |
+| integrations, projects, tools, facts | knowledge_upsert (vector KB, runtime namespace) |
 
-Do NOT put user preferences in memory.md. Do NOT put people in memory.md.
+**CRITICAL: Do NOT write facts, integrations, or project info to user.md or memory.md.**
+**Use knowledge_upsert(key, content, type) for ALL new facts and integrations.**
+**user.md is ONLY for personal profile info (name, role, timezone, communication style).**
 
 ## Memory: Read Before You Act
 
 - Before executing shell commands, API calls, or integrations: check learnings/ERRORS.md for past failures
 - Before responding to corrections or repeated topics: check learnings/LEARNINGS.md
-- After significant interactions, update the right file per the Self-Improvement Loop in system.md
+- For facts, integrations, procedures: use knowledge_search or knowledge_get
+- After significant interactions, use knowledge_upsert to store learned facts
 
 Updates to soul.md and user.md: ADDITIVE ONLY. Never rewrite. Keep terse.
 Exception: consolidate within sections when approaching word cap (80%).

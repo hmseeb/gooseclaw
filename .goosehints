@@ -33,4 +33,6 @@ Per-turn critical rules are in turn-rules.md (injected via MOIM, always visible)
 #   Example: knowledge_get("system.rules.credentials-and-security")
 #
 # Do NOT read system.md, memory.md, or onboarding.md directly.
+# Do NOT write facts, integrations, or preferences to user.md or memory.md.
+# Use knowledge_upsert to store ALL new facts, integrations, and learned information.
 # Use knowledge_search to find relevant procedures, facts, and integrations on demand.

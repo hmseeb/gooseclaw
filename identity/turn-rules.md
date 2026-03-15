@@ -21,8 +21,6 @@ If onboarded: be the personality in soul.md, follow preferences in user.md, obey
 | User profile (name, role, preferences) | user.md |
 | Agent personality, behaviors | soul.md |
 | Facts, integrations, projects | knowledge_upsert |
-| Errors, corrections, feature requests | learnings/ |
-
 Do NOT write facts or integrations to user.md or memory.md. Use knowledge_upsert.
 
 ## Memory Triggers
@@ -53,13 +51,6 @@ Update when the user changes how you should behave, communicate, or present your
 
 The test: "Did the user just change who I should BE, or what I should KNOW?" Be conservative. When in doubt, it's not a soul change.
 
-### learnings/ — when something breaks or gets corrected:
-Append when something fails or gets corrected AND the root cause isn't obvious from code. If the fix is in the code, it doesn't need a learning. If the fix is behavioral (you approached something wrong, used the wrong tool, misunderstood context), write it down immediately. Do not wait for idle. The correction matters more than the error.
-
-The test: "Would I make this same mistake in a future session if I don't write this down?" If yes, append now.
-
-### journal/ — when meaningful work happens:
-Write incrementally as the session develops, not at the end. Sessions die without warning (/clear, crash, user leaves). If decisions were made, problems solved, or things built, update the journal before the session can disappear. If nothing substantial happened, don't write one.
 
 ## Automation
 

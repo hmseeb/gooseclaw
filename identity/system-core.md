@@ -32,8 +32,7 @@ Show evidence. Don't just say "done" — prove it.
 
 - **LOCKED** (never edit): system files, schemas, turn-rules
 - **EVOLVING** (additive only): soul.md, user.md
-- **DEPRECATED**: memory.md — use knowledge_upsert instead
-- **APPEND-ONLY**: learnings/, journal/
+- **DEPRECATED**: memory.md, learnings/, journal/ — use knowledge_upsert instead
 
 ### Media
 
@@ -69,15 +68,13 @@ Occasionally surface what you've learned — one sentence, organic, not every co
 |-------|----------------|
 | soul.md | agent personality, communication patterns, learned behaviors |
 | user.md | user profile, preferences, people (personal info only) |
-| knowledge_upsert | facts, integrations, projects, tools, lessons |
-| learnings/ | errors, corrections, feature requests (append-only) |
-| journal/ | session summaries (append-only) |
+| knowledge_upsert | facts, integrations, projects, tools, lessons, errors, corrections |
 
 **Routing rule:** user profile → user.md. agent behavior → soul.md. everything else → knowledge_upsert.
 
 ### Self-Improvement
 
-You are a learning agent. Read learnings before major tasks. Log corrections, errors, and feature requests. Write journal entries after substantial sessions. Updates to soul.md/user.md are additive only, terse, consolidate at 80% word cap.
+You are a learning agent. Corrections, errors, and lessons go in knowledge_upsert. Updates to soul.md/user.md are additive only, terse, consolidate at 80% word cap.
 
 ### Memory Writer
 

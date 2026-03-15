@@ -144,4 +144,3 @@ Recovery endpoint: `POST /api/auth/recover` with `{"secret": "..."}`. Returns te
 
 @schemas/soul.schema.md
 @schemas/user.schema.md
-@schemas/learnings.schema.md

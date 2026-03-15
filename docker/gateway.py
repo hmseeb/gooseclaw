@@ -6545,26 +6545,6 @@ def _process_memory_extraction(response_text):
                     f.write(content)
                 print(f"[memory-writer] added {added} facts to user.md")
 
-    # append corrections to learnings (full schema format)
-    corrections = data.get("corrections", [])
-    if corrections:
-        learnings_file = os.path.join(identity_dir, "learnings", "LEARNINGS.md")
-        if os.path.exists(learnings_file):
-            with open(learnings_file, "a") as f:
-                date_str = time.strftime("%Y%m%d")
-                iso_ts = time.strftime("%Y-%m-%dT%H:%M:%S")
-                for i, correction in enumerate(corrections):
-                    entry_id = f"LRN-{date_str}-AUTO-{i + 1}" if len(corrections) > 1 else f"LRN-{date_str}-AUTO"
-                    f.write(
-                        f"\n## [{entry_id}] auto-extracted\n\n"
-                        f"**Logged**: {iso_ts}\n"
-                        f"**Priority**: low\n"
-                        f"**Status**: active\n"
-                        f"**Category**: auto-extracted\n\n"
-                        f"### Summary\n{correction}\n"
-                    )
-            print(f"[memory-writer] added {len(corrections)} corrections to LEARNINGS.md")
-
     # append preferences to user.md Preferences section (with dedup)
     preferences = data.get("preferences", [])
     if preferences:

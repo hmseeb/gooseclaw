@@ -692,10 +692,6 @@ class BotInstance:
                         # unpaired user -- check if this is a pairing code
                         if self._check_pairing(chat_id, text):
                             _add_pairing_to_config(chat_id, platform=self.channel_key)
-                            send_telegram_message(
-                                self.token, chat_id,
-                                "Paired successfully! You can now send messages to goose through this chat."
-                            )
                             print(f"[telegram:{self.name}] chat {chat_id} paired")
 
                             # auto-send first message after pairing
@@ -708,23 +704,40 @@ class BotInstance:
                                 except FileNotFoundError:
                                     needs_onboarding = True
 
-                                # Change 1: static welcome message right after pairing
-                                if needs_onboarding:
-                                    send_telegram_message(
-                                        self.token, chat_id,
-                                        "hey! i'm gooseclaw, your personal AI agent. i run 24/7 on your server, learn how you think, and remember everything.\n\ni'm setting up now. give me a few seconds and i'll introduce myself properly."
-                                    )
+                                # build time context for the LLM greeting
+                                import datetime as _dt
+                                _tz_name = None
+                                try:
+                                    _setup = load_setup()
+                                    _tz_name = _setup.get("timezone") if _setup else None
+                                except Exception:
+                                    pass
+                                if _tz_name:
+                                    try:
+                                        import zoneinfo
+                                        _now = _dt.datetime.now(zoneinfo.ZoneInfo(_tz_name))
+                                    except Exception:
+                                        _now = _dt.datetime.now()
                                 else:
-                                    send_telegram_message(
-                                        self.token, chat_id,
-                                        "welcome back! new device paired. give me a moment."
-                                    )
+                                    _now = _dt.datetime.now()
+                                _time_str = _now.strftime("%I:%M %p").lstrip("0").lower()
+                                _day_str = _now.strftime("%A").lower()
+                                _time_ctx = f"it's {_time_str} on a {_day_str} for the user"
 
-                                # Change 3: inject context into LLM kick message
+                                # LLM-generated greeting with time context
                                 kick_msg = (
-                                    "I just paired via Telegram. I've already been shown a welcome message saying I'm gooseclaw, a personal AI agent that runs 24/7 and learns. Do NOT repeat any of that. Jump straight into the onboarding flow -- ask my name. Keep your response to 2-3 short sentences. Use normal prose, no bullet points, no line breaks between words. Plain text only, no markdown formatting."
+                                    f"[SYSTEM CONTEXT — not a real user message, do not include in session history]\n"
+                                    f"A new user just paired via Telegram. {_time_ctx}.\n"
+                                    f"Generate a greeting that: confirms pairing worked, riffs on the time/day naturally "
+                                    f"(be observational and cheeky, like 'friday night and you're setting up an AI agent "
+                                    f"instead of going out? i already like you'), introduces yourself as gooseclaw briefly, "
+                                    f"then asks what they go by. 2-3 sentences max. casual, punchy."
+                                    f"Plain text only, no markdown, no bullet points."
                                     if needs_onboarding else
-                                    "I just paired a new device via Telegram. I've already seen a 'welcome back' message. Just say hi casually, keep it very short. Keep your response to 2-3 short sentences. Use normal prose, no bullet points, no line breaks between words. Plain text only, no markdown formatting."
+                                    f"[SYSTEM CONTEXT — not a real user message, do not include in session history]\n"
+                                    f"A returning user just paired a new device via Telegram. {_time_ctx}.\n"
+                                    f"Say hi casually, riff on the time/day, confirm the new device is connected. "
+                                    f"2-3 sentences max. casual. Plain text only, no markdown."
                                 )
                                 sid = _get_session_id(chat_id, channel=self.channel_key)
                                 # Change 4: skip LLM kick greeting for returning users

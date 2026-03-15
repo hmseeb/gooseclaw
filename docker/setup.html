@@ -1000,6 +1000,40 @@ body::after {
   cursor: pointer;
 }
 .add-model-form .field select option { background: var(--bg-elevated); }
+.add-model-test-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+.add-model-test-btn {
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: 'DM Sans', sans-serif;
+  cursor: pointer;
+  transition: all 0.2s;
+  background: rgba(124, 58, 237, 0.08);
+  color: var(--text-accent);
+  border: 1px solid rgba(124, 58, 237, 0.2);
+  white-space: nowrap;
+}
+.add-model-test-btn:hover {
+  background: rgba(124, 58, 237, 0.14);
+  border-color: rgba(124, 58, 237, 0.35);
+}
+.add-model-test-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.add-model-test-result {
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.add-model-test-result.success { color: var(--success); }
+.add-model-test-result.error { color: var(--error); }
 .add-model-form-actions {
   display: flex;
   justify-content: flex-end;
@@ -1783,6 +1817,13 @@ body::after {
             </button>
           </div>
           <div style="font-size:11px;color:var(--text-tertiary);margin-top:3px" id="addModelKeyHint"></div>
+          <div class="add-model-test-row">
+            <button type="button" class="add-model-test-btn" id="addModelTestBtn" onclick="testAddModelKey()">
+              <svg width="12" height="12" viewBox="0 0 14 14" fill="none" style="vertical-align:-1px"><path d="M2 7.5L5.5 11L12 3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              Test
+            </button>
+            <span class="add-model-test-result" id="addModelTestResult"></span>
+          </div>
         </div>
         <div class="field">
           <label>Model</label>
@@ -3618,6 +3659,92 @@ function closeAddModelForm() {
   document.getElementById('addModelName').value = '';
   document.getElementById('addModelUrl').value = '';
   document.getElementById('addModelEngine').selectedIndex = 0;
+  document.getElementById('addModelTestResult').textContent = '';
+  document.getElementById('addModelTestResult').className = 'add-model-test-result';
+}
+
+async function testAddModelKey() {
+  const btn = document.getElementById('addModelTestBtn');
+  const result = document.getElementById('addModelTestResult');
+  const provId = document.getElementById('addModelProvider').value;
+  const keyInput = document.getElementById('addModelKey');
+  const prov = PROVIDERS[provId];
+
+  /* build credential payload same as wizard validateKey() */
+  const payload = { provider_type: provId };
+  const localProviders = ['ollama', 'lm-studio', 'docker-model-runner', 'ramalama'];
+  const noKeyProviders = ['github-copilot'];
+
+  if (localProviders.includes(provId)) {
+    payload.ollama_host = document.getElementById('addModelUrl')?.value || '';
+  } else if (noKeyProviders.includes(provId)) {
+    /* nothing to validate */
+  } else if (provId === 'custom') {
+    payload.url = document.getElementById('addModelUrl')?.value || '';
+    payload.api_key = keyInput.value.trim();
+  } else if (provId === 'azure-openai') {
+    payload.api_key = keyInput.value.trim();
+    payload.azure_endpoint = document.getElementById('addModelUrl')?.value || '';
+  } else {
+    payload.api_key = keyInput.value.trim();
+  }
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Testing...';
+  result.textContent = '';
+  result.className = 'add-model-test-result';
+
+  try {
+    const resp = await fetch('/api/setup/validate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    const data = await resp.json();
+    if (data.valid || data.skip_validation) {
+      result.className = 'add-model-test-result success';
+      result.textContent = data.message || 'connection successful';
+
+      /* refresh model suggestions on successful validation */
+      const nameInput = document.getElementById('addModelName');
+      const dl = document.getElementById('addModelSuggestions');
+      const creds = {};
+      if (!localProviders.includes(provId) && !noKeyProviders.includes(provId)) {
+        creds.api_key = keyInput.value.trim() || undefined;
+      }
+      if (localProviders.includes(provId)) {
+        creds.ollama_host = document.getElementById('addModelUrl')?.value || '';
+      }
+      try {
+        nameInput.placeholder = 'loading models...';
+        const mResp = await fetch('/api/setup/models', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({provider: provId, credentials: creds})
+        });
+        const mData = await mResp.json();
+        if (mData.models && mData.models.length > 0) {
+          dl.innerHTML = '';
+          mData.models.forEach(m => {
+            const opt = document.createElement('option');
+            opt.value = m.id;
+            opt.label = m.name !== m.id ? m.name : m.id;
+            dl.appendChild(opt);
+          });
+          nameInput.placeholder = mData.models.length + ' models available';
+        }
+      } catch(e) { /* keep existing suggestions */ }
+    } else {
+      result.className = 'add-model-test-result error';
+      result.textContent = data.error || 'validation failed';
+    }
+  } catch(e) {
+    result.className = 'add-model-test-result error';
+    result.textContent = 'could not reach server';
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 14 14" fill="none" style="vertical-align:-1px"><path d="M2 7.5L5.5 11L12 3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg> Test';
 }
 
 async function onAddModelProviderChange() {
@@ -3634,6 +3761,10 @@ async function onAddModelProviderChange() {
   const urlField = document.getElementById('addModelUrlField');
   engineField.style.display = (prov && prov.needsEngine) ? '' : 'none';
   urlField.style.display = (prov && prov.needsUrl) ? '' : 'none';
+
+  /* reset test result on provider change */
+  const testResult = document.getElementById('addModelTestResult');
+  if (testResult) { testResult.textContent = ''; testResult.className = 'add-model-test-result'; }
 
   /* show/hide key field based on provider type */
   const localProviders = ['ollama', 'lm-studio', 'docker-model-runner', 'ramalama'];

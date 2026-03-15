@@ -56,13 +56,13 @@ fi
 
 if [ -n "$GOOSECLAW_RESET_PASSWORD" ]; then
     echo "[init] GOOSECLAW_RESET_PASSWORD detected, resetting password..."
-    python3 -c "
+    _DATA_DIR="$DATA_DIR" _RESET_PW="$GOOSECLAW_RESET_PASSWORD" python3 -c "
 import json, hashlib, os
-setup_path = os.path.join('$DATA_DIR', 'config', 'setup.json')
+setup_path = os.path.join(os.environ['_DATA_DIR'], 'config', 'setup.json')
 if os.path.exists(setup_path):
     with open(setup_path) as f:
         setup = json.load(f)
-    pw = '$GOOSECLAW_RESET_PASSWORD'
+    pw = os.environ['_RESET_PW']
     setup['web_auth_token_hash'] = hashlib.sha256(pw.encode()).hexdigest()
     setup.pop('web_auth_token', None)
     with open(setup_path, 'w') as f:

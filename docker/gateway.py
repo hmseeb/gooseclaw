@@ -3799,8 +3799,7 @@ def _run_script(job):
 
     try:
         result = subprocess.run(
-            command,
-            shell=True,
+            ["/bin/sh", "-c", command],
             capture_output=True,
             text=True,
             timeout=timeout,

@@ -34,18 +34,18 @@ case "$CMD" in
     get)
         [ $# -lt 2 ] && usage
         DOTPATH="$2"
-        python3 -c "
-import yaml, sys
+        _VAULT_FILE="$VAULT_FILE" _DOTPATH="$DOTPATH" python3 -c "
+import yaml, sys, os
 try:
-    with open('$VAULT_FILE') as f:
+    with open(os.environ['_VAULT_FILE']) as f:
         data = yaml.safe_load(f) or {}
-    keys = '$DOTPATH'.split('.')
+    keys = os.environ['_DOTPATH'].split('.')
     val = data
     for k in keys:
         val = val[k]
     print(val)
 except (KeyError, TypeError):
-    print('[secret] key not found: $DOTPATH', file=sys.stderr)
+    print(f'[secret] key not found: {os.environ[\"_DOTPATH\"]}', file=sys.stderr)
     sys.exit(1)
 "
         ;;
@@ -54,26 +54,26 @@ except (KeyError, TypeError):
         [ $# -lt 3 ] && usage
         DOTPATH="$2"
         VALUE="$3"
-        python3 -c "
-import yaml
-with open('$VAULT_FILE') as f:
+        _VAULT_FILE="$VAULT_FILE" _DOTPATH="$DOTPATH" _VALUE="$VALUE" python3 -c "
+import yaml, os
+with open(os.environ['_VAULT_FILE']) as f:
     data = yaml.safe_load(f) or {}
-keys = '$DOTPATH'.split('.')
+keys = os.environ['_DOTPATH'].split('.')
 d = data
 for k in keys[:-1]:
     d = d.setdefault(k, {})
-d[keys[-1]] = '''$VALUE'''
-with open('$VAULT_FILE', 'w') as f:
+d[keys[-1]] = os.environ['_VALUE']
+with open(os.environ['_VAULT_FILE'], 'w') as f:
     yaml.dump(data, f, default_flow_style=False)
-print('[secret] stored: $DOTPATH')
+print(f'[secret] stored: {os.environ[\"_DOTPATH\"]}')
 "
         chmod 600 "$VAULT_FILE"
         ;;
 
     list)
-        python3 -c "
-import yaml
-with open('$VAULT_FILE') as f:
+        _VAULT_FILE="$VAULT_FILE" python3 -c "
+import yaml, os
+with open(os.environ['_VAULT_FILE']) as f:
     data = yaml.safe_load(f) or {}
 for section, values in sorted(data.items()):
     if isinstance(values, dict):
@@ -87,15 +87,15 @@ for section, values in sorted(data.items()):
     delete)
         [ $# -lt 2 ] && usage
         DOTPATH="$2"
-        python3 -c "
-import yaml, sys
-with open('$VAULT_FILE') as f:
+        _VAULT_FILE="$VAULT_FILE" _DOTPATH="$DOTPATH" python3 -c "
+import yaml, sys, os
+with open(os.environ['_VAULT_FILE']) as f:
     data = yaml.safe_load(f) or {}
-keys = '$DOTPATH'.split('.')
+keys = os.environ['_DOTPATH'].split('.')
 d = data
 for k in keys[:-1]:
     if k not in d:
-        print('[secret] key not found: $DOTPATH', file=sys.stderr)
+        print(f'[secret] key not found: {os.environ[\"_DOTPATH\"]}', file=sys.stderr)
         sys.exit(1)
     d = d[k]
 if keys[-1] in d:
@@ -107,11 +107,11 @@ if keys[-1] in d:
             parent = parent[k]
         if isinstance(parent.get(keys[-2]), dict) and not parent[keys[-2]]:
             del parent[keys[-2]]
-    with open('$VAULT_FILE', 'w') as f:
+    with open(os.environ['_VAULT_FILE'], 'w') as f:
         yaml.dump(data, f, default_flow_style=False)
-    print('[secret] deleted: $DOTPATH')
+    print(f'[secret] deleted: {os.environ[\"_DOTPATH\"]}')
 else:
-    print('[secret] key not found: $DOTPATH', file=sys.stderr)
+    print(f'[secret] key not found: {os.environ[\"_DOTPATH\"]}', file=sys.stderr)
     sys.exit(1)
 "
         chmod 600 "$VAULT_FILE"

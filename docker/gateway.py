@@ -300,6 +300,8 @@ class BotInstance:
         self.pair_lock = threading.Lock()
         self.running = False
         self._thread = None
+        self._media_group_buffer = {}  # media_group_id -> {"chat_id", "text", "refs": [], "timer": Timer}
+        self._media_group_lock = threading.Lock()
 
     def generate_pair_code(self):
         code = "".join(secrets.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789") for _ in range(6))
@@ -327,6 +329,12 @@ class BotInstance:
     def stop(self):
         """Stop this bot's poll loop and wait for thread to finish."""
         self.running = False
+        with self._media_group_lock:
+            for group in self._media_group_buffer.values():
+                timer = group.get("timer")
+                if timer is not None:
+                    timer.cancel()
+            self._media_group_buffer.clear()
         if self._thread:
             self._thread.join(timeout=5)
             self._thread = None
@@ -525,6 +533,26 @@ class BotInstance:
                 if _replay_fn:
                     threading.Thread(target=_replay_fn, daemon=True).start()
 
+    def _flush_media_group_v2(self, group_id):
+        """Flush a buffered media group: combine all refs and relay as one message."""
+        with self._media_group_lock:
+            group = self._media_group_buffer.pop(group_id, None)
+        if not group:
+            return
+
+        chat_id = group["chat_id"]
+        text = group["text"]
+        refs = group["refs"]
+
+        paired_ids = get_paired_chat_ids(platform=self.channel_key)
+        if chat_id not in paired_ids:
+            return
+
+        # build InboundMessage with all refs from the group
+        inbound_msg = InboundMessage(user_id=chat_id, text=text, channel=self.channel_key, media=refs)
+
+        self._do_message_relay(chat_id=chat_id, text=text, bot_token=self.token, inbound_msg=inbound_msg)
+
     def _poll_loop(self):
         """Long-poll Telegram for updates and relay messages to goosed.
 
@@ -579,6 +607,34 @@ class BotInstance:
                                         "mime_hint": mime_hint,
                                         "filename": fname,
                                     })
+
+                    # ── media group buffering ──
+                    # Telegram sends multi-image messages as separate updates with
+                    # the same media_group_id. Buffer them and flush after ~1s.
+                    mg_id = msg.get("media_group_id")
+                    if mg_id and has_media and media_list:
+                        with self._media_group_lock:
+                            if mg_id in self._media_group_buffer:
+                                # add refs to existing group, reset timer
+                                group = self._media_group_buffer[mg_id]
+                                group["refs"].extend(media_list)
+                                if not group["text"] and text:
+                                    group["text"] = text
+                                if group.get("timer"):
+                                    group["timer"].cancel()
+                            else:
+                                self._media_group_buffer[mg_id] = {
+                                    "chat_id": chat_id,
+                                    "text": text or msg.get("caption", "").strip(),
+                                    "refs": list(media_list),
+                                }
+                                group = self._media_group_buffer[mg_id]
+                            # set/reset 1s flush timer
+                            timer = threading.Timer(1.0, self._flush_media_group_v2, args=(mg_id,))
+                            timer.daemon = True
+                            group["timer"] = timer
+                            timer.start()
+                        continue
 
                     inbound_msg = InboundMessage(
                         user_id=chat_id, text=text,
@@ -4729,7 +4785,7 @@ class MediaContent:
     def to_content_block(self):
         if self.kind == "image":
             return {"type": "image", "data": self.to_base64(), "mimeType": self.mime_type}
-        if self.kind == "document":
+        if self.kind in ("document", "audio", "video"):
             return self._document_content_block()
         return None
 

@@ -9,15 +9,15 @@ See: .planning/PROJECT.md (updated 2026-03-13)
 
 ## Current Position
 
-Phase: 17 of 17
-Plan: 3 of 3
-Status: Phase 17 complete. Full vector knowledge base pipeline deployed (3/3 plans).
-Last activity: 2026-03-15 - Completed 17-03: Deployment Pipeline Integration
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements for v4.0 Production Hardening
+Last activity: 2026-03-16 — Milestone v4.0 started
 
-Progress v2.0: [==========] 100% (10/10 phases complete, shipped)
-Progress v3.0: [==========] 100% (5/5 phases complete)
-Progress v4.0 (watchers): [==========] 100% (3/3 plans complete)
-Progress v5.0 (knowledge): [==========] 100% (3/3 plans complete)
+Progress v1.0: [==========] 100% (shipped)
+Progress v2.0: [==========] 100% (shipped)
+Progress v3.0: [==========] 100% (shipped)
+Progress v4.0: [░░░░░░░░░░] 0% (defining requirements)
 
 ## Performance Metrics
 

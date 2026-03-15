@@ -8,21 +8,21 @@ A self-hosted personal AI agent platform built on Block's Goose. Users deploy on
 
 A user with zero DevOps knowledge can deploy GooseClaw and configure it correctly on the first try, every time. If they can paste an API key, they can run their own AI agent.
 
-## Current Milestone: v3.0 Rich Media & Channel Flexibility
+## Current Milestone: v4.0 Production Hardening
 
-**Goal:** Make channels truly flexible for rich media. Images, voice, files flow seamlessly in both directions across any channel. The agent is channel-agnostic.
+**Goal:** Make GooseClaw production-ready with critical security fixes, infrastructure hardening, and comprehensive test coverage.
 
 **Target features:**
-- Channel contract v2: InboundMessage envelope, OutboundAdapter, ChannelCapabilities
-- Inbound media: download + normalize photos, voice, documents, videos from any platform
-- Relay upgrade: multimodal content blocks to goosed (images, audio) instead of text-only
-- Outbound media: send images, voice, files back through any channel
-- Voice pipeline: STT inbound (Whisper), TTS outbound, full roundtrip
-- Reference plugin: Slack or Discord with full media support
+- Security: fix shell injection (entrypoint.sh, secret.sh), replace shell=True with safe execution, swap SHA-256 for argon2/bcrypt password hashing, stop leaking recovery secrets
+- Hardening: Docker resource limits, structured JSON logging, graceful shutdown timeouts, dependency lock files, CVE scanning, request body size limits, HTTP security headers (Referrer-Policy, Permissions-Policy)
+- Testing: gateway HTTP endpoint tests, shell script tests (job.sh, remind.sh, notify.sh), git persistence tests, discord integration tests, entrypoint bootstrap tests, e2e workflow tests
 
 **Previous milestones:**
 - v1.0 Setup Wizard (shipped 2026-03-11)
 - v2.0 Multi-Channel & Multi-Bot (shipped 2026-03-13)
+- v3.0 Rich Media & Channel Flexibility (shipped 2026-03-13)
+- Watcher Engine (Phase 16, shipped 2026-03-14)
+- Vector Knowledge Base (Phase 17, shipped 2026-03-15)
 
 ## Requirements
 
@@ -93,4 +93,4 @@ Key technical constraints:
 | Provider categories in UI | Reduces decision paralysis for new users | -- Pending |
 
 ---
-*Last updated: 2026-03-10 after initialization*
+*Last updated: 2026-03-16 after v4.0 milestone initialization*

@@ -863,7 +863,10 @@ SECURITY_HEADERS = {
     "X-XSS-Protection": "1; mode=block",
     "Referrer-Policy": "strict-origin-when-cross-origin",
     "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+    "Cross-Origin-Opener-Policy": "same-origin",
 }
+
+MAX_BODY_SIZE = 1_048_576  # 1 MB
 
 # ── config ──────────────────────────────────────────────────────────────────
 
@@ -8404,6 +8407,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             return
         body = self._read_body()
+        if body is None:
+            return  # 413 already sent
         try:
             config = json.loads(body)
 
@@ -8480,6 +8485,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         if not self._check_rate_limit(auth_limiter):
             return
         body = self._read_body()
+        if body is None:
+            return  # 413 already sent
         try:
             data = json.loads(body)
             provider = _sanitize_string(data.get("provider_type") or data.get("provider", ""))
@@ -8498,6 +8505,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         if not self._check_rate_limit(auth_limiter):
             return
         body = self._read_body()
+        if body is None:
+            return  # 413 already sent
         try:
             data = json.loads(body)
             provider = _sanitize_string(data.get("provider", ""))
@@ -8536,6 +8545,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         if not check_auth(self):
             self.send_response(401); self.end_headers(); return
         body = self._read_body()
+        if body is None:
+            return  # 413 already sent
         try:
             data = json.loads(body)
             setup = load_setup()
@@ -8601,6 +8612,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         if not check_auth(self):
             self.send_response(401); self.end_headers(); return
         body = self._read_body()
+        if body is None:
+            return  # 413 already sent
         try:
             data = json.loads(body)
             mid = _sanitize_string(data.get("id", ""))
@@ -8646,6 +8659,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         if not check_auth(self):
             self.send_response(401); self.end_headers(); return
         body = self._read_body()
+        if body is None:
+            return  # 413 already sent
         try:
             data = json.loads(body)
             mid = _sanitize_string(data.get("id", ""))
@@ -8677,6 +8692,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         if not check_auth(self):
             self.send_response(401); self.end_headers(); return
         body = self._read_body()
+        if body is None:
+            return  # 413 already sent
         try:
             data = json.loads(body)
             routes = data.get("channel_routes", {})
@@ -8729,6 +8746,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         if not check_auth(self):
             self.send_response(401); self.end_headers(); return
         body = self._read_body()
+        if body is None:
+            return  # 413 already sent
         try:
             data = json.loads(body)
             verbosity = data.get("channel_verbosity", {})
@@ -8765,6 +8784,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         if not check_auth(self):
             self.send_response(401); self.end_headers(); return
         body = self._read_body()
+        if body is None:
+            return  # 413 already sent
         try:
             data = json.loads(body)
             setup = load_setup()
@@ -8807,6 +8828,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(401, {"error": "Authentication required"})
             return
         body = self._read_body()
+        if body is None:
+            return  # 413 already sent
         try:
             data = json.loads(body)
             text = _sanitize_string(data.get("text", ""), max_length=4000)
@@ -8908,6 +8931,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         if not self._check_local_or_auth():
             return
         body = self._read_body()
+        if body is None:
+            return  # 413 already sent
         try:
             data = json.loads(body)
         except (json.JSONDecodeError, ValueError):
@@ -9015,6 +9040,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         if not self._check_local_or_auth():
             return
         body = self._read_body()
+        if body is None:
+            return  # 413 already sent
         try:
             data = json.loads(body)
         except (json.JSONDecodeError, Exception):
@@ -9054,6 +9081,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             return
         try:
             body = self._read_body()
+            if body is None:
+                return  # 413 already sent
             data = json.loads(body)
         except (json.JSONDecodeError, Exception):
             self.send_json(400, {"error": "invalid JSON"})
@@ -9071,6 +9100,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         if not self._check_local_or_auth():
             return
         body = self._read_body()
+        if body is None:
+            return  # 413 already sent
         try:
             data = json.loads(body)
         except (json.JSONDecodeError, Exception):
@@ -9113,6 +9144,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         if not self._check_local_or_auth():
             return
         body = self._read_body()
+        if body is None:
+            return  # 413 already sent
         try:
             data = json.loads(body)
         except (json.JSONDecodeError, Exception):
@@ -9151,6 +9184,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         if not self._check_rate_limit(api_limiter):
             return
         body = self._read_body()
+        if body is None:
+            return  # 413 already sent
         headers = dict(self.headers) if self.headers else {}
         count = _handle_webhook_incoming(webhook_name, body, headers)
         if count > 0:
@@ -9186,6 +9221,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         if not self._check_local_or_auth():
             return
         body = self._read_body()
+        if body is None:
+            return  # 413 already sent
         try:
             data = json.loads(body)
             job_type = data.get("type", "script")
@@ -9424,6 +9461,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             return
         try:
             body = self._read_body()
+            if body is None:
+                return  # 413 already sent
             data = json.loads(body)
         except (json.JSONDecodeError, Exception):
             self.send_json(400, {"error": "invalid JSON"})
@@ -9507,6 +9546,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(400, {"error": "No password configured yet"})
             return
         body = self._read_body()
+        if body is None:
+            return  # 413 already sent
         try:
             data = json.loads(body)
             password = data.get("password", "")
@@ -9551,6 +9592,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(404, {"error": "auth recovery not configured. Set GOOSECLAW_RECOVERY_SECRET env var."})
             return
         body = self._read_body()
+        if body is None:
+            return  # 413 already sent
         try:
             data = json.loads(body)
             provided = _sanitize_string(data.get("secret", ""))
@@ -9632,6 +9675,9 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
 
             # read body
             content_length = int(self.headers.get("Content-Length", 0))
+            if content_length > MAX_BODY_SIZE:
+                self.send_json(413, {"error": "Request body too large", "max_bytes": MAX_BODY_SIZE})
+                return
             body = self.rfile.read(content_length) if content_length > 0 else None
 
             # per-channel model routing for web requests
@@ -9737,6 +9783,9 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
 
     def _read_body(self):
         length = int(self.headers.get("Content-Length", 0))
+        if length > MAX_BODY_SIZE:
+            self.send_json(413, {"error": "Request body too large", "max_bytes": MAX_BODY_SIZE})
+            return None
         return self.rfile.read(length) if length > 0 else b""
 
     def _inject_session_cookie(self):

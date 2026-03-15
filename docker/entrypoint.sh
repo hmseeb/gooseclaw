@@ -36,7 +36,7 @@ if [ ! -f "$DATA_DIR/.initialized" ]; then
     chmod 600 "$DATA_DIR/.recovery_secret"
     echo "[init] recovery secret generated and saved to /data/.recovery_secret"
     echo "[init] TIP: copy this to Railway env vars as GOOSECLAW_RECOVERY_SECRET for easy access"
-    echo "[init] GOOSECLAW_RECOVERY_SECRET=$RECOVERY_SECRET"
+    echo "[init] recovery secret saved to /data/.recovery_secret (cat /data/.recovery_secret to retrieve)"
 
     touch "$DATA_DIR/.initialized"
     echo "[init] first boot setup complete"

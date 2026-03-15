@@ -3376,6 +3376,7 @@ def get_upcoming_jobs(hours=24):
     now = time.time()
     window_end = now + hours * 3600
     upcoming = []
+    seen_ids = set()
 
     # 1. job engine jobs
     with _jobs_lock:
@@ -3434,6 +3435,7 @@ def get_upcoming_jobs(hours=24):
                 entry["last_run"] = job["last_run"]
             if job.get("last_status"):
                 entry["last_status"] = job["last_status"]
+            seen_ids.add(job["id"])
             upcoming.append(entry)
 
     # 2. goose schedule.json cron jobs
@@ -3441,6 +3443,8 @@ def get_upcoming_jobs(hours=24):
         schedule_jobs = _load_schedule()
         for sj in schedule_jobs:
             if sj.get("paused"):
+                continue
+            if sj.get("id") in seen_ids:
                 continue
             cron_expr = sj.get("cron", "")
             if not cron_expr:
@@ -3463,6 +3467,7 @@ def get_upcoming_jobs(hours=24):
                     entry["recipe"] = sj["source"]
                 if sj.get("last_run"):
                     entry["last_run"] = sj["last_run"]
+                seen_ids.add(sj.get("id", "unknown"))
                 upcoming.append(entry)
     except Exception as e:
         print(f"[schedule] warn: could not load goose schedule: {e}")

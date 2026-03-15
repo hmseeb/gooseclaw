@@ -398,6 +398,73 @@ class TestHandleScheduleUpcoming(unittest.TestCase):
             result = gateway.get_schedule_context()
         assert isinstance(result, str)
 
+    def test_handler_invokes_send_json(self):
+        """Call handle_schedule_upcoming() on a mock handler and verify send_json."""
+        now = time.time()
+        job = {
+            "id": "handler-test",
+            "name": "handler job",
+            "type": "reminder",
+            "text": "hi",
+            "command": None,
+            "cron": None,
+            "fire_at": now + 1800,
+            "recurring_seconds": None,
+            "enabled": True,
+            "fired": False,
+            "last_run": None,
+            "last_status": None,
+            "last_output": None,
+            "currently_running": False,
+            "created_at": "2026-03-15T10:00:00Z",
+        }
+        with gateway._jobs_lock:
+            gateway._jobs[:] = [job]
+
+        handler = self._make_handler("/api/schedule/upcoming")
+        with patch("gateway._load_schedule", return_value=[]):
+            gateway.GatewayHandler.handle_schedule_upcoming(handler)
+
+        handler.send_json.assert_called_once()
+        args = handler.send_json.call_args
+        assert args[0][0] == 200
+        body = args[0][1]
+        assert body["count"] >= 1
+        assert body["upcoming"][0]["id"] == "handler-test"
+
+    def test_deduplication_between_jobs_and_schedule(self):
+        """A job present in both _jobs and schedule.json should appear only once."""
+        now = time.time()
+        job = {
+            "id": "dup-job",
+            "name": "dup job",
+            "type": "script",
+            "text": None,
+            "command": "echo hi",
+            "cron": "0 * * * *",
+            "fire_at": None,
+            "recurring_seconds": None,
+            "enabled": True,
+            "fired": False,
+            "last_run": None,
+            "last_status": None,
+            "last_output": None,
+            "currently_running": False,
+            "created_at": "2026-03-15T10:00:00Z",
+        }
+        schedule_entry = {
+            "id": "dup-job",
+            "cron": "0 * * * *",
+            "source": "/some/recipe.yaml",
+            "paused": False,
+        }
+        with gateway._jobs_lock:
+            gateway._jobs[:] = [job]
+        with patch("gateway._load_schedule", return_value=[schedule_entry]):
+            result = gateway.get_upcoming_jobs(hours=24)
+        ids = [r["id"] for r in result]
+        assert ids.count("dup-job") == 1
+
 
 if __name__ == "__main__":
     unittest.main()

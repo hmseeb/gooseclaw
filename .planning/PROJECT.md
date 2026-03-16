@@ -2,27 +2,11 @@
 
 ## What This Is
 
-A self-hosted personal AI agent platform built on Block's Goose. Users deploy on Railway, configure via setup wizard, and interact through Telegram or any channel plugin. Gateway manages goose web lifecycle, job scheduling, notification bus, and channel plugin system. Supports 23+ LLM providers.
+A self-hosted personal AI agent platform built on Block's Goose. Users deploy on Railway, configure via setup wizard, and interact through Telegram or any channel plugin. Gateway manages goose web lifecycle, job scheduling, notification bus, and channel plugin system. Supports 23+ LLM providers. Production-hardened with PBKDF2 auth, structured JSON logging, and 103-test automated suite.
 
 ## Core Value
 
 A user with zero DevOps knowledge can deploy GooseClaw and configure it correctly on the first try, every time. If they can paste an API key, they can run their own AI agent.
-
-## Current Milestone: v4.0 Production Hardening
-
-**Goal:** Make GooseClaw production-ready with critical security fixes, infrastructure hardening, and comprehensive test coverage.
-
-**Target features:**
-- Security: fix shell injection (entrypoint.sh, secret.sh), replace shell=True with safe execution, swap SHA-256 for argon2/bcrypt password hashing, stop leaking recovery secrets
-- Hardening: Docker resource limits, structured JSON logging, graceful shutdown timeouts, dependency lock files, CVE scanning, request body size limits, HTTP security headers (Referrer-Policy, Permissions-Policy)
-- Testing: gateway HTTP endpoint tests, shell script tests (job.sh, remind.sh, notify.sh), git persistence tests, discord integration tests, entrypoint bootstrap tests, e2e workflow tests
-
-**Previous milestones:**
-- v1.0 Setup Wizard (shipped 2026-03-11)
-- v2.0 Multi-Channel & Multi-Bot (shipped 2026-03-13)
-- v3.0 Rich Media & Channel Flexibility (shipped 2026-03-13)
-- Watcher Engine (Phase 16, shipped 2026-03-14)
-- Vector Knowledge Base (Phase 17, shipped 2026-03-15)
 
 ## Requirements
 
@@ -38,10 +22,19 @@ A user with zero DevOps knowledge can deploy GooseClaw and configure it correctl
 - ✓ Job engine with cron, timers, provider override, auto-expiry — v1.0
 - ✓ Notification bus with per-job channel targeting — v1.0
 - ✓ Per-channel verbosity settings — v1.0
+- ✓ Shell injection eliminated across secret.sh, entrypoint.sh, gateway.py — v4.0
+- ✓ PBKDF2 password hashing with lazy SHA-256 migration — v4.0
+- ✓ Recovery secret leak sealed, request body limits enforced — v4.0
+- ✓ Complete HTTP security headers (COOP, Referrer-Policy, Permissions-Policy) — v4.0
+- ✓ Structured JSON logging (254 print() calls migrated) — v4.0
+- ✓ Graceful shutdown with 5s watchdog — v4.0
+- ✓ Dependency pinning with hash verification support — v4.0
+- ✓ CVE scanning via Dependabot — v4.0
+- ✓ 103-test automated suite (HTTP endpoints, shell scripts, entrypoint, e2e) — v4.0
 
 ### Active
 
-(Defined in REQUIREMENTS.md for v2.0)
+(None — define in next milestone)
 
 ### Out of Scope
 
@@ -49,29 +42,31 @@ A user with zero DevOps knowledge can deploy GooseClaw and configure it correctl
 - Custom extension management in wizard — separate concern, goose web handles this
 - OAuth flows (OpenRouter OAuth, GitHub Copilot device flow) — too complex for single HTML file
 - Multiple goose web processes — single process, sessions provide isolation
-- Platform-specific rich UI (cards, carousels, adaptive cards) — beyond v3.0, send_buttons is the escape hatch
+- Platform-specific rich UI (cards, carousels, adaptive cards) — send_buttons is the escape hatch
+- TLS termination in container — Railway handles TLS at load balancer
+- WAF inside container — single-user auth-gated app, input sanitization + rate limiting sufficient
+- Encrypted vault at rest — single-user, Railway volumes isolated
+- Multi-factor authentication — single-user self-hosted app, Railway auth is primary gate
+- RBAC / multi-user auth — personal agent, build multi-user when use case exists
+- argon2 password hashing — PBKDF2 via stdlib achieves same security goal
+- structlog / python-json-logger — stdlib logging + custom JSON formatter sufficient
 
 ## Context
 
 GooseClaw is a Docker-based deployment template for Block's Goose AI agent. It runs on Railway with a persistent volume at /data. The architecture is:
 
 - **entrypoint.sh**: Container startup, env var setup, starts gateway.py and telegram gateway
-- **gateway.py**: Python HTTP server (stdlib only, no pip). Serves setup wizard, reverse proxies to goose web, manages goose web subprocess lifecycle
+- **gateway.py**: Python HTTP server (~10K lines, stdlib only). Serves setup wizard, reverse proxies to goose web, manages lifecycle, structured JSON logging
 - **setup.html**: Single-file HTML/CSS/JS wizard. No build step, no npm
 - **goose web**: Experimental goose CLI command that serves a chat UI on an internal port
-
-Current bugs we've already fixed (committed but deployment was broken):
-1. Env vars from setup.json not rehydrated on container restart
-2. PATH missing ~/.local/bin for claude CLI
-3. GOOSE_MODEL: default missing for claude-code provider
+- **knowledge MCP**: ChromaDB-backed semantic retrieval extension
+- **tests/**: 103 automated tests (pytest + requests against live server)
 
 Key technical constraints:
 - Python stdlib only (no pip install in gateway.py)
 - Single HTML file (no build tooling)
 - ubuntu:22.04 Docker base
 - Railway volumes for persistence
-- goose config.yaml uses GOOSE_ prefix keys
-- Env vars override config.yaml
 
 ## Constraints
 
@@ -86,11 +81,16 @@ Key technical constraints:
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Option A: one provider + easy reconfigure | Goose only uses one provider at a time, profiles add UX complexity | -- Pending |
-| Advanced toggle for lead/worker | Power users get multi-model without cluttering main flow | -- Pending |
-| Skip OAuth flows (OpenRouter, Copilot) | Too complex for single HTML file, can add later | -- Pending |
-| Keep Python stdlib only | No pip in container, keeps gateway.py simple and portable | -- Pending |
-| Provider categories in UI | Reduces decision paralysis for new users | -- Pending |
+| One provider + easy reconfigure | Goose only uses one provider at a time, profiles add UX complexity | ✓ Good |
+| Advanced toggle for lead/worker | Power users get multi-model without cluttering main flow | ✓ Good |
+| Skip OAuth flows (OpenRouter, Copilot) | Too complex for single HTML file, can add later | ✓ Good |
+| Keep Python stdlib only | No pip in container, keeps gateway.py simple and portable | ✓ Good |
+| Provider categories in UI | Reduces decision paralysis for new users | ✓ Good |
+| PBKDF2 via stdlib (not argon2/bcrypt) | Stays stdlib-only, OWASP-approved, 600K iterations | ✓ Good |
+| Lazy hash migration (SHA-256 to PBKDF2) | Prevents lockout of existing users on upgrade | ✓ Good |
+| Structured logging always-on (no toggle) | Simpler than env var toggle, Railway needs JSON anyway | ✓ Good |
+| HTTP-level tests (not function mocks) | 400KB monolith, real server on random port is more reliable | ✓ Good |
+| Shell injection fix via os.environ pattern | Mechanical, grep-verifiable, zero string interpolation into Python | ✓ Good |
 
 ---
-*Last updated: 2026-03-16 after v4.0 milestone initialization*
+*Last updated: 2026-03-16 after v4.0 milestone*

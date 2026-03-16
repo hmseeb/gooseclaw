@@ -167,7 +167,7 @@ for deeper customization, fork this repo and modify:
 
 ## credits
 
-- **[Goose](https://github.com/block/goose)** the AI agent framework that powers everything
+- **[Goose](https://github.com/block/goose)** by Block. the AI agent framework that powers everything
 - **[Railway](https://railway.com)** for one-click container deployment
 - Identity architecture inspired by **[OpenClaw](https://github.com/openclaw)**
 

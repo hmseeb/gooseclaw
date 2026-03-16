@@ -1011,6 +1011,18 @@ _background_activity_lock = threading.Lock()
 _BACKGROUND_ACTIVITY_MAX = 10   # max items per user
 _BACKGROUND_ACTIVITY_TTL = 6 * 3600  # 6 hours
 
+# ── deferred output detection (goosed stale response handling) ────────────
+# After long relays (>30s), goosed may continue processing in the background.
+# The deferred results only appear on the next /reply call, causing an off-by-one
+# response pattern where each message gets the PREVIOUS message's response.
+# This tracking enables proactive draining and stale detection.
+_sessions_long_relay = {}          # session_id -> {"ts": float, "chat_id": str, "bot_token": str}
+_sessions_long_relay_lock = threading.Lock()
+_LONG_RELAY_THRESHOLD = 30.0       # relays above this may produce deferred output
+_STALE_RESPONSE_THRESHOLD = 1.0    # responses faster than this are likely stale
+_DRAIN_MAX_CYCLES = 3              # max drain iterations per flush
+_DRAIN_DELAY = 5.0                 # seconds before first background drain attempt
+
 
 def _record_background_activity(text):
     """Record a notification sent via notify_all() for LLM context injection.
@@ -1074,6 +1086,107 @@ def _pop_background_context(chat_id):
         + "\n".join(lines)
         + "\n\n"
     )
+
+
+def _drain_deferred_output(session_id, chat_id, bot_token, reply_to_msg_id=None):
+    """Flush deferred goosed output after a long relay.
+
+    Goosed may hold deferred tool results/responses that only appear on the next
+    /reply call. This sends lightweight drain calls to flush them immediately.
+    Any flushed output is sent directly to the user's telegram chat, threaded
+    as a reply to the original long relay message for clean UX.
+    Returns True if deferred output was found and sent.
+    """
+    flushed_any = False
+    for cycle in range(_DRAIN_MAX_CYCLES):
+        t0 = time.time()
+        try:
+            text, err, media = _do_rest_relay(
+                "[continue]", session_id, timeout=15,
+            )
+        except Exception as e:
+            _gateway_log.error(f"drain cycle {cycle} failed: {e}")
+            break
+        elapsed = time.time() - t0
+
+        if err:
+            _gateway_log.info(f"drain cycle {cycle}: error ({err}), stopping")
+            break
+
+        # Fast response with real content = deferred output. Send it.
+        if elapsed < _STALE_RESPONSE_THRESHOLD and text and len(text.strip()) > 10:
+            _gateway_log.info(
+                f"drain cycle {cycle}: flushed deferred output "
+                f"({len(text)} chars in {elapsed:.1f}s)"
+            )
+            send_telegram_message(bot_token, chat_id, text,
+                                  reply_to_message_id=reply_to_msg_id)
+            flushed_any = True
+            continue
+
+        # Slow response or minimal content = no more deferred output
+        _gateway_log.info(
+            f"drain cycle {cycle}: no deferred output "
+            f"({elapsed:.1f}s, {len(text) if text else 0} chars), stopping"
+        )
+        break
+
+    with _sessions_long_relay_lock:
+        _sessions_long_relay.pop(session_id, None)
+    return flushed_any
+
+
+def _deferred_drain_loop():
+    """Background thread: proactively drain deferred goosed output.
+
+    Runs every 10 seconds. For sessions flagged after long relays, waits
+    DRAIN_DELAY seconds then flushes deferred output to telegram.
+    This ensures the bot sends deferred responses even when the user isn't texting.
+    """
+    while True:
+        time.sleep(10)
+        try:
+            with _sessions_long_relay_lock:
+                pending = dict(_sessions_long_relay)
+            if not pending:
+                continue
+
+            now = time.time()
+            for sid, info in pending.items():
+                # too soon, let goosed finalize
+                if now - info["ts"] < _DRAIN_DELAY:
+                    continue
+                # stale tracking, clean up
+                if now - info["ts"] > 600:
+                    with _sessions_long_relay_lock:
+                        _sessions_long_relay.pop(sid, None)
+                    continue
+
+                chat_id = info["chat_id"]
+                bot_token = info["bot_token"]
+                reply_mid = info.get("last_msg_id")
+
+                # non-blocking lock: skip if a user relay is active
+                chat_lock = _get_chat_lock(chat_id)
+                if not chat_lock.acquire(blocking=False):
+                    continue
+                try:
+                    _drain_deferred_output(sid, chat_id, bot_token,
+                                           reply_to_msg_id=reply_mid)
+                finally:
+                    chat_lock.release()
+                    # replay any queued messages after drain
+                    _rq = _telegram_state.pop_queued_replay(chat_id)
+                    if _rq:
+                        _, _rq_fn = _rq
+                        if _rq_fn:
+                            threading.Thread(target=_rq_fn, daemon=True).start()
+        except Exception as e:
+            _gateway_log.error(f"deferred drain loop error: {e}")
+
+
+# start the background drain thread
+threading.Thread(target=_deferred_drain_loop, daemon=True).start()
 
 # ── notification bus (channel-agnostic delivery) ─────────────────────────────
 #
@@ -1748,11 +1861,12 @@ def _make_media_content(media_key, file_bytes, file_path, mime_hint=None, filena
     return MediaContent(kind=kind, mime_type=mime_type, data=file_bytes, filename=filename)
 
 
-def send_telegram_message(bot_token, chat_id, text):
+def send_telegram_message(bot_token, chat_id, text, reply_to_message_id=None):
     """Send a message via telegram bot API. Returns (ok, error).
 
     Converts markdown to Telegram HTML first. Falls back to plain text if
-    HTML parse fails.
+    HTML parse fails. If reply_to_message_id is set, the message is sent
+    as a reply to that message (visual threading in Telegram).
     """
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     html_text = _markdown_to_telegram_html(text)
@@ -1782,12 +1896,16 @@ def send_telegram_message(bot_token, chat_id, text):
 
     for i, chunk in enumerate(html_chunks):
         try:
-            payload = urllib.parse.urlencode({
+            params = {
                 "chat_id": chat_id,
                 "text": chunk,
                 "parse_mode": "HTML",
                 "disable_web_page_preview": "true",
-            }).encode()
+            }
+            if reply_to_message_id:
+                params["reply_to_message_id"] = reply_to_message_id
+                params["allow_sending_without_reply"] = "true"
+            payload = urllib.parse.urlencode(params).encode()
             req = urllib.request.Request(url, data=payload)
             with urllib.request.urlopen(req, timeout=10) as resp:
                 result = json.loads(resp.read())
@@ -1797,11 +1915,15 @@ def send_telegram_message(bot_token, chat_id, text):
             # HTML failed — fall back to plain text for this chunk
             try:
                 fallback = plain_chunks[i] if i < len(plain_chunks) else _strip_html(chunk)
-                payload = urllib.parse.urlencode({
+                params = {
                     "chat_id": chat_id,
                     "text": fallback,
                     "disable_web_page_preview": "true",
-                }).encode()
+                }
+                if reply_to_message_id:
+                    params["reply_to_message_id"] = reply_to_message_id
+                    params["allow_sending_without_reply"] = "true"
+                payload = urllib.parse.urlencode(params).encode()
                 req = urllib.request.Request(url, data=payload)
                 urllib.request.urlopen(req, timeout=10)
             except Exception as e:
@@ -7168,11 +7290,12 @@ def _extract_response_content(content_array):
     return "\n".join(text_parts), media_blocks
 
 
-def _do_rest_relay(user_text, session_id, content_blocks=None, sock_ref=None):
+def _do_rest_relay(user_text, session_id, content_blocks=None, sock_ref=None, timeout=300):
     """POST to goosed /reply, parse SSE response.
 
     Returns (response_text, error_string, media_blocks).
     On success error_string is empty and media_blocks contains any image blocks.
+    timeout: connection timeout in seconds (default 300, use shorter for drain calls).
     """
     t0 = time.time()
     blocks = content_blocks or [{"type": "text", "text": user_text}]
@@ -7189,7 +7312,7 @@ def _do_rest_relay(user_text, session_id, content_blocks=None, sock_ref=None):
 
     conn = None
     try:
-        conn = _goosed_conn(timeout=300)
+        conn = _goosed_conn(timeout=timeout)
         if sock_ref is not None:
             sock_ref[0] = conn  # for external cancellation
 
@@ -7880,12 +8003,14 @@ def _telegram_poll_loop(bot_token):
                             typing_thread = threading.Thread(target=_typing_loop, daemon=True)
                             typing_thread.start()
 
+                            _relay_t0 = time.time()
                             try:
                                 if _tg_verbosity == "quiet":
                                     response_text, error, _leg_media = _relay_to_goosed(
                                         _text, session_id, chat_id=_chat_id, channel="telegram",
                                         sock_ref=_sock_ref, content_blocks=_leg_content_blocks,
                                     )
+                                    _relay_elapsed = time.time() - _relay_t0
                                     # relay complete, release lock before sending Telegram message
                                     _early_release_lock()
                                     if _cancelled.is_set():
@@ -7927,6 +8052,7 @@ def _telegram_poll_loop(bot_token):
                                         sock_ref=_sock_ref, flush_interval=2.0,
                                         content_blocks=_leg_content_blocks,
                                     )
+                                    _relay_elapsed = time.time() - _relay_t0
                                     # if lock wasn't released during streaming, release now
                                     _early_release_lock()
                                     if _cancelled.is_set():
@@ -7946,6 +8072,56 @@ def _telegram_poll_loop(bot_token):
                                         _route_media_blocks(_leg_media, _relay_adapter)
                                     except Exception as _media_exc:
                                         _telegram_log.error(f"media routing error: {_media_exc}")
+
+                                # ── stale response detection (Problem 1) ──
+                                # If goosed returned suspiciously fast AND this session
+                                # had a recent long relay, the response is likely deferred
+                                # output from the previous task, not a reply to the user's
+                                # message. Send the stale response, then retry for the real one.
+                                if (not error and response_text
+                                        and _relay_elapsed < _STALE_RESPONSE_THRESHOLD
+                                        and not _cancelled.is_set()):
+                                    with _sessions_long_relay_lock:
+                                        _stale_info = _sessions_long_relay.get(session_id)
+                                    if _stale_info:
+                                        _telegram_log.info(
+                                            f"stale response detected ({_relay_elapsed:.1f}s, "
+                                            f"{len(response_text)} chars), retrying for actual response"
+                                        )
+                                        # stale response already sent above. now ask goosed
+                                        # to address the user's actual message.
+                                        _retry_text, _retry_err, _retry_media = _do_rest_relay(
+                                            "[system: the previous response was deferred output from an "
+                                            "earlier task. Please respond to the user's last actual "
+                                            "message now.]",
+                                            session_id,
+                                        )
+                                        if _retry_text and not _retry_err and len(_retry_text.strip()) > 5:
+                                            send_telegram_message(_bt, _chat_id, _retry_text)
+                                            if _retry_media:
+                                                try:
+                                                    _route_media_blocks(_retry_media, _relay_adapter)
+                                                except Exception:
+                                                    pass
+                                        with _sessions_long_relay_lock:
+                                            _sessions_long_relay.pop(session_id, None)
+
+                                # ── mark session after long relays (Problem 2) ──
+                                # Flag this session so background drain and stale detection
+                                # can flush deferred output proactively. Track the last
+                                # bot message_id so deferred output can reply to it.
+                                if _relay_elapsed > _LONG_RELAY_THRESHOLD and not error:
+                                    # grab last bot message_id for reply threading
+                                    _last_mid = None
+                                    if _tg_verbosity != "quiet" and _edit_state.get("msg_id"):
+                                        _last_mid = _edit_state["msg_id"]
+                                    with _sessions_long_relay_lock:
+                                        _sessions_long_relay[session_id] = {
+                                            "ts": time.time(),
+                                            "chat_id": _chat_id,
+                                            "bot_token": _bt,
+                                            "last_msg_id": _last_mid,
+                                        }
                             finally:
                                 typing_stop.set()
                                 typing_thread.join(timeout=2)

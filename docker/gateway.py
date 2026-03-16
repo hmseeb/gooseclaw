@@ -8036,6 +8036,13 @@ def _telegram_poll_loop(bot_token):
                                         _st["accumulated"] += chunk
                                         txt = _st["accumulated"]
                                         if _st["msg_id"] is None:
+                                            # hold back the first message until we have enough
+                                            # content — avoids flashing a single word like
+                                            # "Simple" or "Good" while the LLM is still streaming.
+                                            # genuinely short responses are sent by the fallback
+                                            # send_telegram_message after the relay completes.
+                                            if len(txt.strip()) < 20:
+                                                return
                                             mid, err = _send_telegram_msg_with_id(_bt, _chat_id, txt)
                                             if mid:
                                                 _st["msg_id"] = mid

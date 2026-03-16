@@ -498,6 +498,11 @@ class BotInstance:
             _tg_setup = load_setup()
             _tg_verbosity = get_verbosity_for_channel(_tg_setup, self.channel_key) if _tg_setup else "balanced"
 
+            # inject background activity context so LLM knows what was sent
+            _bg_ctx = _pop_background_context(chat_id)
+            if _bg_ctx:
+                text = _bg_ctx + text
+
             # build content blocks from media attachments
             content_blocks = None
             if inbound_msg and inbound_msg.has_media:
@@ -982,6 +987,78 @@ _bot_manager = BotManager()
 # redundant update_provider calls.
 _session_model_cache = {}   # session_id (str) -> model_config_id (str)
 _session_model_lock = threading.Lock()
+
+# ── background activity buffer (notify context for LLM) ───────────────────
+# When jobs/reminders/watchers send messages via notify_all(), the user sees
+# them in Telegram but the LLM session has no awareness. This buffer captures
+# recent notifications so they can be prepended to the next user message,
+# giving the LLM context about what it sent to the user in the background.
+_background_activity = {}       # chat_id (str) -> list of {"text": str, "ts": float}
+_background_activity_lock = threading.Lock()
+_BACKGROUND_ACTIVITY_MAX = 10   # max items per user
+_BACKGROUND_ACTIVITY_TTL = 6 * 3600  # 6 hours
+
+
+def _record_background_activity(text):
+    """Record a notification sent via notify_all() for LLM context injection.
+
+    Stores for ALL paired chat IDs across all platforms so context is
+    available regardless of which channel the user messages from next.
+    """
+    now = time.time()
+    # truncate long output to keep context reasonable
+    entry = {"text": text[:500], "ts": now}
+    # collect all paired chat IDs
+    chat_ids = set()
+    for h in list(_notification_handlers):
+        name = h.get("name", "")
+        if name.startswith("telegram"):
+            for cid in get_paired_chat_ids(platform=name):
+                chat_ids.add(str(cid))
+    if not chat_ids:
+        # fallback: try default telegram
+        for cid in get_paired_chat_ids():
+            chat_ids.add(str(cid))
+    with _background_activity_lock:
+        for cid in chat_ids:
+            buf = _background_activity.setdefault(cid, [])
+            buf.append(entry)
+            # enforce max size
+            if len(buf) > _BACKGROUND_ACTIVITY_MAX:
+                _background_activity[cid] = buf[-_BACKGROUND_ACTIVITY_MAX:]
+
+
+def _pop_background_context(chat_id):
+    """Pop pending background activity for a chat ID and format as context string.
+
+    Returns empty string if no pending activity. Clears the buffer after pop.
+    """
+    cid = str(chat_id)
+    now = time.time()
+    with _background_activity_lock:
+        entries = _background_activity.pop(cid, [])
+    if not entries:
+        return ""
+    # filter out stale entries
+    entries = [e for e in entries if now - e["ts"] < _BACKGROUND_ACTIVITY_TTL]
+    if not entries:
+        return ""
+    lines = []
+    for e in entries:
+        ago = int(now - e["ts"])
+        if ago < 60:
+            time_str = f"{ago}s ago"
+        elif ago < 3600:
+            time_str = f"{ago // 60}m ago"
+        else:
+            time_str = f"{ago // 3600}h ago"
+        lines.append(f"  - ({time_str}) {e['text']}")
+    return (
+        "[Background: these messages were sent to the user's chat by scheduled jobs/reminders/watchers. "
+        "The user can see them. You sent them but may not remember. Reference them if the user asks.]\n"
+        + "\n".join(lines)
+        + "\n\n"
+    )
 
 # ── notification bus (channel-agnostic delivery) ─────────────────────────────
 #
@@ -1811,6 +1888,9 @@ def notify_all(text, channel=None, media=None):
     Channel names: "telegram", or "channel:<plugin_name>" for plugins (e.g. "channel:slack").
     Shorthand: just the plugin name (e.g. "slack") is also accepted.
     """
+    # record for LLM context injection on next user message
+    _record_background_activity(text)
+
     with _notification_handlers_lock:
         handlers = list(_notification_handlers)
     if not handlers:
@@ -5499,6 +5579,11 @@ class ChannelRelay:
                 session_id = f"{self._name}_{user_key}_{time.strftime('%Y%m%d_%H%M%S')}"
                 _session_manager.set(self._name, user_key, session_id)
 
+            # inject background activity context
+            _bg_ctx = _pop_background_context(user_key)
+            if _bg_ctx:
+                text = _bg_ctx + text
+
             # Active relay tracking (CHAN-03)
             cancelled = threading.Event()
             sock_ref = [None, cancelled]
@@ -7729,6 +7814,11 @@ def _telegram_poll_loop(bot_token):
 
                             _tg_setup = load_setup()
                             _tg_verbosity = get_verbosity_for_channel(_tg_setup, "telegram") if _tg_setup else "balanced"
+
+                            # inject background activity context
+                            _bg_ctx = _pop_background_context(_chat_id)
+                            if _bg_ctx:
+                                _text = _bg_ctx + _text
 
                             # build content blocks from downloaded media
                             _leg_content_blocks = None

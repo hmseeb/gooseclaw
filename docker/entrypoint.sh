@@ -78,6 +78,17 @@ else:
     echo "[init] IMPORTANT: remove GOOSECLAW_RESET_PASSWORD from Railway env vars after login"
 fi
 
+# ─── persistent pip packages ─────────────────────────────────────────────────
+# packages installed at runtime (by the bot or user) go to /data so they
+# survive container rebuilds/deploys. without this, pip installs are lost
+# every time Railway redeploys.
+
+mkdir -p /data/pip-packages/bin
+export PIP_TARGET="/data/pip-packages"
+export PYTHONPATH="/data/pip-packages:${PYTHONPATH:-}"
+export PATH="/data/pip-packages/bin:$PATH"
+echo "[init] pip packages persist to /data/pip-packages"
+
 # ─── goose config ───────────────────────────────────────────────────────────
 
 # symlink goose config directory to volume

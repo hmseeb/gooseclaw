@@ -1010,7 +1010,9 @@ def _record_background_activity(text):
     entry = {"text": text[:500], "ts": now}
     # collect all paired chat IDs
     chat_ids = set()
-    for h in list(_notification_handlers):
+    with _notification_handlers_lock:
+        handlers_snapshot = list(_notification_handlers)
+    for h in handlers_snapshot:
         name = h.get("name", "")
         if name.startswith("telegram"):
             for cid in get_paired_chat_ids(platform=name):

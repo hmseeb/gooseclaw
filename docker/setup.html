@@ -3494,14 +3494,22 @@ function renderLeadConfigSection(config) {
   if (!section || !summary) return;
 
   const lp = config.lead_provider || '';
+  section.style.display = '';
+  const routing = section.querySelector('.channel-routing');
+
   if (!lp) {
-    section.style.display = 'none';
+    if (routing) routing.classList.add('expanded');
+    summary.innerHTML = `
+      <div class="channel-route-row" style="border-bottom:none">
+        <span class="channel-route-label" style="flex:1;color:var(--text-tertiary)">
+          No lead model configured
+        </span>
+        <button class="dashboard-edit-btn" onclick="startLeadConfigEdit()">configure</button>
+      </div>`;
     return;
   }
 
-  section.style.display = '';
   /* auto-expand so lead info is visible */
-  const routing = section.querySelector('.channel-routing');
   if (routing) routing.classList.add('expanded');
 
   const prov = PROVIDERS[lp];

@@ -78,16 +78,36 @@ else:
     echo "[init] IMPORTANT: remove GOOSECLAW_RESET_PASSWORD from Railway env vars after login"
 fi
 
-# ─── persistent pip packages ─────────────────────────────────────────────────
-# packages installed at runtime (by the bot or user) go to /data so they
-# survive container rebuilds/deploys. without this, pip installs are lost
-# every time Railway redeploys.
+# ─── persistent runtime installs ─────────────────────────────────────────────
+# anything installed at runtime (pip, npm, binaries, apt, models, etc.) lives
+# on the /data volume so it survives container rebuilds/deploys.
 
-mkdir -p /data/pip-packages/bin
+mkdir -p /data/bin /data/pip-packages/bin /data/npm-global/bin /data/lib
+
+# pip → /data/pip-packages
 export PIP_TARGET="/data/pip-packages"
 export PYTHONPATH="/data/pip-packages:${PYTHONPATH:-}"
-export PATH="/data/pip-packages/bin:$PATH"
-echo "[init] pip packages persist to /data/pip-packages"
+
+# npm → /data/npm-global
+export NPM_CONFIG_PREFIX="/data/npm-global"
+
+# all persistent dirs on PATH (binaries, pip scripts, npm bins)
+export PATH="/data/bin:/data/pip-packages/bin:/data/npm-global/bin:$PATH"
+export LD_LIBRARY_PATH="/data/lib:${LD_LIBRARY_PATH:-}"
+
+echo "[init] runtime installs persist to /data (pip, npm, bin, lib)"
+
+# ─── boot setup script (re-run user installs after deploy) ───────────────────
+# /data/boot-setup.sh is a user/bot editable script that runs on every boot.
+# the bot can append commands like "apt-get install -y ffmpeg" or
+# "curl -L ... -o /data/bin/sometool" to make them survive deploys.
+
+if [ -f /data/boot-setup.sh ]; then
+    echo "[init] running /data/boot-setup.sh..."
+    chmod +x /data/boot-setup.sh
+    /data/boot-setup.sh 2>&1 | while read -r line; do echo "[boot-setup] $line"; done || true
+    echo "[init] boot-setup complete"
+fi
 
 # ─── goose config ───────────────────────────────────────────────────────────
 

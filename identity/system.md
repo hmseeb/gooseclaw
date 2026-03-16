@@ -112,6 +112,31 @@ Per-channel: `quiet`, `balanced` (default), `verbose`. Set via setup wizard or `
 
 ---
 
+## Persistence (Surviving Deploys)
+
+The container rebuilds on every deploy. Only `/data` (Railway volume) survives. Runtime installs are pre-configured to persist:
+
+| What | Persists to | How |
+|------|------------|-----|
+| pip packages | `/data/pip-packages` | `PIP_TARGET` set automatically |
+| npm packages | `/data/npm-global` | `NPM_CONFIG_PREFIX` set automatically |
+| Custom binaries | `/data/bin` | On PATH, download/compile here |
+| Shared libraries | `/data/lib` | On `LD_LIBRARY_PATH` |
+| apt packages, models, anything else | `/data/boot-setup.sh` | Commands re-run on every boot |
+
+**For apt packages or anything that can't live on /data directly:** append the install command to `/data/boot-setup.sh`. It runs automatically on every boot. Example:
+```bash
+echo 'apt-get install -y ffmpeg' >> /data/boot-setup.sh
+```
+
+**For binaries:** download to `/data/bin/` (already on PATH).
+
+**For ML models:** download to `/data/models/` or similar.
+
+When installing anything for the user, ALWAYS use the persistent paths above. Never install to the container filesystem directly — it will be lost on next deploy.
+
+---
+
 ## Extending the Platform
 
 ### Bots

@@ -6360,20 +6360,34 @@ _memory_processed_sessions = set()  # session_ids already processed
 _memory_writer_running = False
 
 MEMORY_EXTRACT_PROMPT = """You are analyzing a conversation to extract learnings about the user.
-Review the conversation below and extract ANY of these:
 
-1. **User facts**: name, role, preferences, habits, interests, people mentioned, work context
-2. **Corrections**: times the user corrected the agent ("no", "actually", "not like that")
-3. **Preferences**: communication style, format preferences, tool preferences
-4. **Important context**: deadlines, projects, relationships, recurring topics
+Route what you find based on these rules:
+
+## identity (-> user.md) — who the user IS, still true in 6 months
+- Name, role, relationships, people they mention regularly
+- Communication style, personality traits
+- Core preferences (tools, formats, habits)
+- How they think, what they care about
+
+## knowledge (-> vector knowledge base) — what's happening, temporal facts
+- Projects, deadlines, work context, current priorities
+- Integrations, services, technical facts
+- Corrections (times the user corrected the agent)
+- Lessons learned, things that went wrong
+- Anything that wouldn't fit as a 6-month-stable identity trait
 
 Output a structured JSON object with these keys (omit empty ones):
 {
-  "user_facts": ["fact1", "fact2"],
-  "corrections": ["correction1"],
-  "preferences": ["preference1"],
-  "context": ["context1"]
+  "identity": ["trait1", "trait2"],
+  "knowledge": [
+    {"key": "dot.notation.key", "content": "the fact", "type": "fact|preference|integration|procedure"}
+  ]
 }
+
+For knowledge items:
+- key: hierarchical dot notation, e.g. "project.gooseclaw.deploy-flow", "lesson.docker-networking", "integration.fireflies.usage"
+- type: one of "fact", "preference", "integration", "procedure"
+- content: the actual knowledge to store
 
 If there's nothing meaningful to extract, output: {"empty": true}
 
@@ -6466,61 +6480,33 @@ def _memory_writer_loop():
             _memory_log.error(f"loop error: {e}")
 
 
-def _classify_fact(fact):
-    """Classify a fact into the correct user.md section based on keyword heuristics.
+_knowledge_runtime_col = None
 
-    Uses word-boundary matching to avoid false positives (e.g. "woodworking"
-    should not match "work").
+def _get_knowledge_collection():
+    """Get the ChromaDB runtime collection for knowledge upserts.
+
+    Lazy-loaded, shares the same DB path as the knowledge MCP server.
     """
-    lower = fact.lower()
+    global _knowledge_runtime_col
+    if _knowledge_runtime_col is None:
+        try:
+            import chromadb
+            chroma_path = os.environ.get("KNOWLEDGE_DB_PATH", "/data/knowledge/chroma")
+            client = chromadb.PersistentClient(path=chroma_path)
+            _knowledge_runtime_col = client.get_or_create_collection(
+                "runtime", metadata={"hnsw:space": "cosine"}
+            )
+        except Exception as e:
+            _memory_log.error(f"failed to connect to ChromaDB: {e}")
+            return None
+    return _knowledge_runtime_col
 
-    def _has_word(keywords):
-        """Check if any keyword appears as a whole word (word-boundary match)."""
-        for kw in keywords:
-            if re.search(r'\b' + re.escape(kw) + r'\b', lower):
-                return True
+
+def _fact_already_exists(fact, file_content):
+    """Check if a fact already exists in file content (simple lowercase substring)."""
+    if not file_content:
         return False
-
-    # people/contacts/relationships (check first, most specific)
-    people_kw = ["cofounder", "co-founder", "manager", "colleague", "friend",
-                 "wife", "husband", "partner", "brother", "sister", "boss",
-                 "contact", "relationship", "mentor", "teammate"]
-    if _has_word(people_kw):
-        return "People"
-
-    # preferences (check before work, "want" and "like" are common)
-    pref_kw = ["prefer", "prefers", "like", "likes", "want", "wants",
-               "always use", "always uses", "rather", "favorite", "favourite"]
-    if _has_word(pref_kw):
-        return "Preferences (Observed)"
-
-    # interests / personal (check before work to avoid "woodworking" -> "work")
-    interest_kw = ["hobby", "hobbies", "interest", "interested", "personal",
-                   "side project", "passion", "curious"]
-    if _has_word(interest_kw):
-        return "Interests & Context"
-
-    # work context / projects
-    work_kw = ["project", "deadline", "company", "work", "team", "sprint",
-               "client", "standup", "roadmap", "milestone"]
-    if _has_word(work_kw):
-        return "Work Context"
-
-    return "Important Context"
-
-
-def _fact_already_exists(fact, section_content):
-    """Check if a fact (or close variant) already exists in a section. Simple lowercase substring check."""
-    if not section_content:
-        return False
-    return fact.lower() in section_content.lower()
-
-
-def _get_section_content(full_content, section_header):
-    """Extract the text between a section header and the next ## header."""
-    pattern = re.escape(section_header) + r'\n(.*?)(?=\n## |\Z)'
-    match = re.search(pattern, full_content, re.DOTALL)
-    return match.group(1) if match else ""
+    return fact.lower() in file_content.lower()
 
 
 def _append_to_section(content, section_header, additions, timestamp):
@@ -6533,18 +6519,117 @@ def _append_to_section(content, section_header, additions, timestamp):
     return content
 
 
-def _process_memory_extraction(response_text):
-    """Parse extraction response and append to identity files."""
-    # try to find JSON in the response
-    json_match = re.search(r'\{[^{}]*\}', response_text, re.DOTALL)
-    if not json_match:
-        _memory_log.info("no JSON found in response")
-        return
+def _classify_identity_section(fact):
+    """Classify an identity trait into the correct user.md section.
 
-    try:
-        data = json.loads(json_match.group())
-    except (json.JSONDecodeError, ValueError):
-        _memory_log.info("could not parse JSON from response")
+    Uses word-boundary matching against the user.schema.md section definitions.
+    Returns the section header string (e.g. "## People").
+    """
+    lower = fact.lower()
+
+    def _has_word(keywords):
+        for kw in keywords:
+            if re.search(r'\b' + re.escape(kw) + r'\b', lower):
+                return True
+        return False
+
+    # people/contacts/relationships
+    if _has_word(["cofounder", "co-founder", "manager", "colleague", "friend",
+                  "wife", "husband", "partner", "brother", "sister", "boss",
+                  "contact", "relationship", "mentor", "teammate"]):
+        return "## People"
+
+    # basics (name, role, timezone, pronouns)
+    if _has_word(["name is", "named", "goes by", "timezone", "pronouns",
+                  "lives in", "based in", "located in"]):
+        return "## Basics"
+
+    # communication preferences
+    if _has_word(["response style", "verbosity", "tone", "brief", "concise",
+                  "detailed", "format", "bullet", "numbered"]):
+        return "## Communication Preferences"
+
+    # interests & personal
+    if _has_word(["hobby", "hobbies", "interest", "interested", "personal",
+                  "side project", "passion", "curious"]):
+        return "## Interests & Context"
+
+    # observed preferences (tools, formats, domain-specific)
+    if _has_word(["prefer", "prefers", "like", "likes", "want", "wants",
+                  "always use", "always uses", "rather", "favorite", "favourite"]):
+        return "## Preferences (Observed)"
+
+    # patterns & habits
+    if _has_word(["usually", "tends to", "always", "habit", "pattern",
+                  "routine", "workflow"]):
+        return "## Patterns & Habits"
+
+    # default: Important Context (catch-all)
+    return "## Important Context"
+
+
+def _extract_json_from_response(text):
+    """Extract the first valid JSON object from LLM response text.
+
+    Tries progressively simpler strategies:
+    1. Find outermost braces and parse (handles nested objects)
+    2. Find simple non-nested JSON (fallback)
+
+    Returns parsed dict or None.
+    """
+    # strategy 1: find balanced braces from first { to matching }
+    start = text.find('{')
+    if start == -1:
+        return None
+
+    depth = 0
+    in_string = False
+    escape_next = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == '\\' and in_string:
+            escape_next = True
+            continue
+        if ch == '"' and not escape_next:
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                candidate = text[start:i + 1]
+                try:
+                    return json.loads(candidate)
+                except (json.JSONDecodeError, ValueError):
+                    break
+
+    # strategy 2: greedy regex fallback (old behavior)
+    json_match = re.search(r'\{[^{}]*\}', text, re.DOTALL)
+    if json_match:
+        try:
+            return json.loads(json_match.group())
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    return None
+
+
+def _process_memory_extraction(response_text):
+    """Parse extraction response, route identity to user.md, knowledge to ChromaDB.
+
+    Routing per turn-rules.md:
+      identity (who the user IS, stable 6+ months) -> user.md (section-routed)
+      knowledge (facts, projects, integrations, temporal) -> knowledge_upsert (ChromaDB)
+    """
+    data = _extract_json_from_response(response_text)
+    if data is None:
+        _memory_log.info("no valid JSON found in response")
         return
 
     if data.get("empty"):
@@ -6554,71 +6639,87 @@ def _process_memory_extraction(response_text):
     identity_dir = os.path.join(DATA_DIR, "identity")
     timestamp = time.strftime("%Y-%m-%d %H:%M")
 
-    # append user facts to user.md, routed to correct sections
-    user_facts = data.get("user_facts", [])
-    if user_facts:
+    # ── identity traits -> user.md (section-routed) ──
+    identity_items = data.get("identity", [])
+    if identity_items:
         user_file = os.path.join(identity_dir, "user.md")
         if os.path.exists(user_file):
             with open(user_file, "r") as f:
                 content = f.read()
 
-            # group facts by target section
+            # group by target section, dedup against full file
             by_section = {}
-            for fact in user_facts:
-                section = _classify_fact(fact)
-                section_header = f"## {section}"
-                # dedup: check if fact already exists anywhere in the file
-                if _fact_already_exists(fact, content):
-                    _memory_log.info(f"skipping duplicate fact: {fact}")
+            for item in identity_items:
+                if not isinstance(item, str) or not item.strip():
                     continue
-                by_section.setdefault(section_header, []).append(fact)
+                if _fact_already_exists(item, content):
+                    _memory_log.info(f"skipping duplicate identity: {item}")
+                    continue
+                section = _classify_identity_section(item)
+                by_section.setdefault(section, []).append(item)
 
-            # append each group to its section
             added = 0
-            for section_header, facts in by_section.items():
-                additions = "\n".join(f"- {fact}" for fact in facts)
-                content = _append_to_section(content, section_header, additions, timestamp)
-                added += len(facts)
+            for section_header, items in by_section.items():
+                additions = "\n".join(f"- {item}" for item in items)
+                if section_header in content:
+                    content = _append_to_section(content, section_header, additions, timestamp)
+                else:
+                    # section doesn't exist, append at end
+                    content += f"\n\n{section_header}\n\n<!-- auto-extracted {timestamp} -->\n{additions}\n"
+                added += len(items)
 
             if added > 0:
                 with open(user_file, "w") as f:
                     f.write(content)
-                _memory_log.info(f"added {added} facts to user.md")
+                _memory_log.info(f"added {added} identity traits to user.md")
+        else:
+            _memory_log.info("user.md not found, skipping identity writes")
 
-    # append preferences to user.md Preferences section (with dedup)
-    preferences = data.get("preferences", [])
-    if preferences:
-        user_file = os.path.join(identity_dir, "user.md")
-        if os.path.exists(user_file):
-            with open(user_file, "r") as f:
-                content = f.read()
-            section_header = "## Preferences (Observed)"
-            section_content = _get_section_content(content, section_header)
+    # ── knowledge -> ChromaDB runtime collection ──
+    knowledge_items = data.get("knowledge", [])
+    if knowledge_items:
+        col = _get_knowledge_collection()
+        if col is None:
+            _memory_log.error("ChromaDB unavailable, skipping knowledge upserts")
+            return
 
-            new_prefs = [p for p in preferences if not _fact_already_exists(p, content)]
-            if new_prefs:
-                additions = "\n".join(f"- {pref}" for pref in new_prefs)
-                content = _append_to_section(content, section_header, additions, timestamp)
-                with open(user_file, "w") as f:
-                    f.write(content)
-                _memory_log.info(f"added {len(new_prefs)} preferences to user.md")
-            else:
-                _memory_log.info(f"skipping {len(preferences)} duplicate preferences")
+        upserted = 0
+        for item in knowledge_items:
+            if not isinstance(item, dict):
+                continue
+            key = item.get("key", "")
+            content_text = item.get("content", "")
+            chunk_type = item.get("type", "fact")
 
-    # append context to memory.md
-    context = data.get("context", [])
-    if context:
-        memory_file = os.path.join(identity_dir, "memory.md")
-        if os.path.exists(memory_file):
-            with open(memory_file, "r") as f:
-                content = f.read()
-            new_ctx = [c for c in context if not _fact_already_exists(c, content)]
-            if new_ctx:
-                additions = "\n".join(f"- {ctx}" for ctx in new_ctx)
-                content = _append_to_section(content, "## Lessons Learned", additions, timestamp)
-                with open(memory_file, "w") as f:
-                    f.write(content)
-                _memory_log.info(f"added {len(new_ctx)} context items to memory.md")
+            if not key or not content_text:
+                continue
+
+            valid_types = ("fact", "preference", "integration", "procedure", "schema")
+            if chunk_type not in valid_types:
+                chunk_type = "fact"
+
+            # prefix with "memory." to identify auto-extracted chunks
+            full_key = f"memory.{key}" if not key.startswith("memory.") else key
+
+            try:
+                col.upsert(
+                    ids=[full_key],
+                    documents=[content_text],
+                    metadatas=[{
+                        "type": chunk_type,
+                        "source": "memory-writer",
+                        "section": "",
+                        "namespace": "runtime",
+                        "refs": "",
+                        "key": full_key,
+                    }],
+                )
+                upserted += 1
+            except Exception as e:
+                _memory_log.error(f"failed to upsert {full_key}: {e}")
+
+        if upserted:
+            _memory_log.info(f"upserted {upserted} knowledge chunks to ChromaDB")
 
 
 def start_memory_writer():

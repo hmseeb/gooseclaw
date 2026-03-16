@@ -8,7 +8,7 @@ Covers:
   - _memory_writer_loop: idle detection, session dedup
   - create_job: model+provider fields, validation
   - migrate_config_models: defaults, ID generation
-  - _process_memory_extraction: JSON parsing, file writes
+  - _process_memory_extraction: JSON parsing, identity->user.md, knowledge->ChromaDB
 """
 
 import json
@@ -485,13 +485,108 @@ class TestMemoryTouch(unittest.TestCase):
         assert len(gateway._memory_last_activity) == 200
 
 
+# ── _extract_json_from_response ──────────────────────────────────────────────
+
+class TestExtractJsonFromResponse(unittest.TestCase):
+    """Tests for _extract_json_from_response() balanced brace parser."""
+
+    def test_simple_json(self):
+        result = gateway._extract_json_from_response('{"empty": true}')
+        assert result == {"empty": True}
+
+    def test_nested_json(self):
+        text = 'Here is the result: {"identity": ["a"], "knowledge": [{"key": "x", "content": "y"}]}'
+        result = gateway._extract_json_from_response(text)
+        assert result["identity"] == ["a"]
+        assert result["knowledge"][0]["key"] == "x"
+
+    def test_json_with_trailing_text(self):
+        text = '{"identity": ["a"]} some trailing text and {"other": "json"}'
+        result = gateway._extract_json_from_response(text)
+        assert result == {"identity": ["a"]}
+
+    def test_no_json(self):
+        assert gateway._extract_json_from_response("no json here") is None
+
+    def test_broken_json(self):
+        assert gateway._extract_json_from_response("{broken json!!!") is None
+
+    def test_json_with_escaped_quotes(self):
+        text = '{"identity": ["he said \\"hello\\""]}'
+        result = gateway._extract_json_from_response(text)
+        assert result is not None
+        assert 'hello' in result["identity"][0]
+
+    def test_json_surrounded_by_markdown(self):
+        text = "Here's what I found:\n```json\n{\"empty\": true}\n```\nDone."
+        result = gateway._extract_json_from_response(text)
+        assert result == {"empty": True}
+
+
+# ── _classify_identity_section ────────────────────────────────────────────
+
+class TestClassifyIdentitySection(unittest.TestCase):
+    """Tests for _classify_identity_section() routing to user.md sections."""
+
+    def test_people_keywords(self):
+        assert gateway._classify_identity_section("Sarah is his cofounder") == "## People"
+        assert gateway._classify_identity_section("his wife Amy handles finances") == "## People"
+        assert gateway._classify_identity_section("relationship with manager is tense") == "## People"
+
+    def test_basics_keywords(self):
+        assert gateway._classify_identity_section("name is Haseeb") == "## Basics"
+        assert gateway._classify_identity_section("based in Islamabad") == "## Basics"
+        assert gateway._classify_identity_section("timezone is PKT") == "## Basics"
+
+    def test_communication_keywords(self):
+        assert gateway._classify_identity_section("prefers concise response style") == "## Communication Preferences"
+        assert gateway._classify_identity_section("hates verbose format") == "## Communication Preferences"
+
+    def test_interests_keywords(self):
+        assert gateway._classify_identity_section("hobby is woodworking") == "## Interests & Context"
+        assert gateway._classify_identity_section("interested in machine learning") == "## Interests & Context"
+
+    def test_preferences_keywords(self):
+        assert gateway._classify_identity_section("prefers dark mode") == "## Preferences (Observed)"
+        assert gateway._classify_identity_section("likes using vim") == "## Preferences (Observed)"
+        assert gateway._classify_identity_section("always uses bun over npm") == "## Preferences (Observed)"
+
+    def test_patterns_keywords(self):
+        assert gateway._classify_identity_section("usually works late at night") == "## Patterns & Habits"
+        assert gateway._classify_identity_section("tends to ask short questions") == "## Patterns & Habits"
+
+    def test_default_fallback(self):
+        assert gateway._classify_identity_section("has a cat") == "## Important Context"
+        assert gateway._classify_identity_section("random trait") == "## Important Context"
+
+
 # ── _process_memory_extraction ──────────────────────────────────────────────
 
 class TestProcessMemoryExtraction(unittest.TestCase):
-    """Tests for _process_memory_extraction() JSON parsing and file writes."""
+    """Tests for _process_memory_extraction() JSON parsing and routing."""
+
+    def _make_user_md(self, tmpdir, content=None):
+        """Helper: create a user.md with standard sections."""
+        identity_dir = os.path.join(tmpdir, "identity")
+        os.makedirs(identity_dir, exist_ok=True)
+        user_file = os.path.join(identity_dir, "user.md")
+        if content is None:
+            content = (
+                "# User\n"
+                "## Basics\n\n"
+                "## Work Context\n\n"
+                "## Communication Preferences\n\n"
+                "## Interests & Context\n\n"
+                "## People\n\n"
+                "## Patterns & Habits\n\n"
+                "## Preferences (Observed)\n\n"
+                "## Important Context\n\n"
+            )
+        with open(user_file, "w") as f:
+            f.write(content)
+        return user_file
 
     def test_no_json_in_response(self):
-        # should not raise, just print and return
         gateway._process_memory_extraction("no json here at all")
 
     def test_empty_extraction(self):
@@ -500,57 +595,216 @@ class TestProcessMemoryExtraction(unittest.TestCase):
     def test_invalid_json(self):
         gateway._process_memory_extraction("{broken json")
 
-    @patch("builtins.open", mock_open(read_data="# User\n## Important Context\n- stuff\n"))
-    @patch("os.path.exists", return_value=True)
-    def test_user_facts_appended(self, _exists):
-        response = json.dumps({"user_facts": ["likes coffee", "works at ACME"]})
-        gateway._process_memory_extraction(response)
-        handle = open
-        # verify write was called
-        written = "".join(call.args[0] for call in handle().write.call_args_list)
-        assert "likes coffee" in written or handle().write.called
+    def test_identity_routes_to_correct_sections(self):
+        """Identity traits should route to their matching user.md sections."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            user_file = self._make_user_md(tmpdir)
+            with patch.object(gateway, "DATA_DIR", tmpdir):
+                response = json.dumps({
+                    "identity": [
+                        "name is Haseeb",           # -> Basics
+                        "Sarah is his cofounder",    # -> People
+                        "prefers dark mode",         # -> Preferences (Observed)
+                    ]
+                })
+                gateway._process_memory_extraction(response)
 
-    @patch("builtins.open", mock_open())
-    @patch("os.path.exists", return_value=True)
-    def test_corrections_appended(self, _exists):
-        response = json.dumps({"corrections": ["use bun not npm"]})
-        gateway._process_memory_extraction(response)
-        handle = open
-        written = "".join(call.args[0] for call in handle().write.call_args_list)
-        assert "use bun not npm" in written or handle().write.called
+            with open(user_file) as f:
+                content = f.read()
 
+            # verify each fact landed in the right section
+            basics_idx = content.index("## Basics")
+            work_idx = content.index("## Work Context")
+            people_idx = content.index("## People")
+            patterns_idx = content.index("## Patterns & Habits")
+            pref_idx = content.index("## Preferences (Observed)")
+            important_idx = content.index("## Important Context")
 
-# ── _classify_fact ──────────────────────────────────────────────────────────
+            name_idx = content.index("name is Haseeb")
+            assert basics_idx < name_idx < work_idx, "name should be in Basics"
 
-class TestClassifyFact(unittest.TestCase):
-    """Tests for _classify_fact() keyword-based section routing."""
+            sarah_idx = content.index("Sarah is his cofounder")
+            assert people_idx < sarah_idx < patterns_idx, "people fact should be in People"
 
-    def test_people_keywords(self):
-        assert gateway._classify_fact("Sarah is his cofounder") == "People"
-        assert gateway._classify_fact("met with his contact John") == "People"
-        assert gateway._classify_fact("his wife Amy handles finances") == "People"
-        assert gateway._classify_fact("relationship with manager is tense") == "People"
+            dark_idx = content.index("prefers dark mode")
+            assert pref_idx < dark_idx < important_idx, "preference should be in Preferences"
 
-    def test_work_context_keywords(self):
-        assert gateway._classify_fact("the project deadline is Friday") == "Work Context"
-        assert gateway._classify_fact("works at ACME company") == "Work Context"
-        assert gateway._classify_fact("his work involves data pipelines") == "Work Context"
-        assert gateway._classify_fact("deadline for Q2 report is March 30") == "Work Context"
+    def test_identity_dedup_skips_existing(self):
+        """Identity traits already in user.md should not be duplicated."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            user_file = self._make_user_md(tmpdir, content=(
+                "# User\n"
+                "## Preferences (Observed)\n\n"
+                "- prefers dark mode\n\n"
+                "## Important Context\n\n"
+            ))
+            with patch.object(gateway, "DATA_DIR", tmpdir):
+                response = json.dumps({"identity": ["prefers dark mode"]})
+                gateway._process_memory_extraction(response)
 
-    def test_preferences_keywords(self):
-        assert gateway._classify_fact("prefers dark mode") == "Preferences (Observed)"
-        assert gateway._classify_fact("likes using vim") == "Preferences (Observed)"
-        assert gateway._classify_fact("wants responses in bullet points") == "Preferences (Observed)"
-        assert gateway._classify_fact("always uses bun over npm") == "Preferences (Observed)"
+            with open(user_file) as f:
+                content = f.read()
+            count = content.lower().count("prefers dark mode")
+            assert count == 1, f"Expected 1 occurrence, found {count}"
 
-    def test_interests_keywords(self):
-        assert gateway._classify_fact("hobby is woodworking") == "Interests & Context"
-        assert gateway._classify_fact("interested in machine learning") == "Interests & Context"
-        assert gateway._classify_fact("personal goal is to run a marathon") == "Interests & Context"
+    def test_identity_skips_non_string_items(self):
+        """Non-string identity items should be silently skipped."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            user_file = self._make_user_md(tmpdir)
+            with patch.object(gateway, "DATA_DIR", tmpdir):
+                response = json.dumps({
+                    "identity": [42, None, "", "valid trait", {"not": "a string"}]
+                })
+                gateway._process_memory_extraction(response)
 
-    def test_default_fallback(self):
-        assert gateway._classify_fact("has a meeting tomorrow at 3pm") == "Important Context"
-        assert gateway._classify_fact("random fact about stuff") == "Important Context"
+            with open(user_file) as f:
+                content = f.read()
+            assert "valid trait" in content
+            assert "42" not in content
+
+    def test_identity_no_user_md_no_crash(self):
+        """If user.md doesn't exist, identity extraction should not crash."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.makedirs(os.path.join(tmpdir, "identity"))
+            # no user.md created
+            with patch.object(gateway, "DATA_DIR", tmpdir):
+                response = json.dumps({"identity": ["some trait"]})
+                gateway._process_memory_extraction(response)  # should not raise
+
+    def test_knowledge_items_upserted_to_chromadb(self):
+        """Knowledge items should be upserted to the ChromaDB runtime collection."""
+        mock_col = MagicMock()
+        with patch.object(gateway, "_get_knowledge_collection", return_value=mock_col):
+            with patch.object(gateway, "DATA_DIR", "/tmp/fake"):
+                response = json.dumps({
+                    "knowledge": [
+                        {"key": "project.gooseclaw.deploy", "content": "uses Railway", "type": "fact"},
+                        {"key": "lesson.bun-over-npm", "content": "always use bun", "type": "preference"},
+                    ]
+                })
+                gateway._process_memory_extraction(response)
+
+        assert mock_col.upsert.call_count == 2
+        first_call = mock_col.upsert.call_args_list[0]
+        assert first_call[1]["ids"] == ["memory.project.gooseclaw.deploy"]
+        assert first_call[1]["documents"] == ["uses Railway"]
+        assert first_call[1]["metadatas"][0]["type"] == "fact"
+        assert first_call[1]["metadatas"][0]["source"] == "memory-writer"
+
+    def test_knowledge_invalid_type_defaults_to_fact(self):
+        """Invalid chunk types should default to 'fact'."""
+        mock_col = MagicMock()
+        with patch.object(gateway, "_get_knowledge_collection", return_value=mock_col):
+            with patch.object(gateway, "DATA_DIR", "/tmp/fake"):
+                response = json.dumps({
+                    "knowledge": [
+                        {"key": "test.item", "content": "something", "type": "bogus"},
+                    ]
+                })
+                gateway._process_memory_extraction(response)
+
+        assert mock_col.upsert.call_count == 1
+        assert mock_col.upsert.call_args_list[0][1]["metadatas"][0]["type"] == "fact"
+
+    def test_knowledge_skips_items_without_key_or_content(self):
+        """Knowledge items missing key or content should be skipped."""
+        mock_col = MagicMock()
+        with patch.object(gateway, "_get_knowledge_collection", return_value=mock_col):
+            with patch.object(gateway, "DATA_DIR", "/tmp/fake"):
+                response = json.dumps({
+                    "knowledge": [
+                        {"key": "", "content": "no key", "type": "fact"},
+                        {"key": "has.key", "content": "", "type": "fact"},
+                        {"content": "no key field at all", "type": "fact"},
+                        {"key": "valid.item", "content": "good", "type": "fact"},
+                    ]
+                })
+                gateway._process_memory_extraction(response)
+
+        assert mock_col.upsert.call_count == 1
+        assert mock_col.upsert.call_args_list[0][1]["ids"] == ["memory.valid.item"]
+
+    def test_knowledge_key_prefixed_with_memory(self):
+        """Keys should be prefixed with 'memory.' unless already prefixed."""
+        mock_col = MagicMock()
+        with patch.object(gateway, "_get_knowledge_collection", return_value=mock_col):
+            with patch.object(gateway, "DATA_DIR", "/tmp/fake"):
+                response = json.dumps({
+                    "knowledge": [
+                        {"key": "test.unprefixed", "content": "a", "type": "fact"},
+                        {"key": "memory.already.prefixed", "content": "b", "type": "fact"},
+                    ]
+                })
+                gateway._process_memory_extraction(response)
+
+        ids = [call[1]["ids"][0] for call in mock_col.upsert.call_args_list]
+        assert ids == ["memory.test.unprefixed", "memory.already.prefixed"]
+
+    def test_chromadb_unavailable_gracefully_handled(self):
+        """If ChromaDB is unavailable, knowledge items should be skipped without crashing."""
+        with patch.object(gateway, "_get_knowledge_collection", return_value=None):
+            with patch.object(gateway, "DATA_DIR", "/tmp/fake"):
+                response = json.dumps({
+                    "knowledge": [
+                        {"key": "test.item", "content": "something", "type": "fact"},
+                    ]
+                })
+                gateway._process_memory_extraction(response)
+
+    def test_chromadb_upsert_error_continues(self):
+        """If one upsert fails, remaining items should still be processed."""
+        mock_col = MagicMock()
+        mock_col.upsert.side_effect = [Exception("db error"), None]
+        with patch.object(gateway, "_get_knowledge_collection", return_value=mock_col):
+            with patch.object(gateway, "DATA_DIR", "/tmp/fake"):
+                response = json.dumps({
+                    "knowledge": [
+                        {"key": "fail.item", "content": "will fail", "type": "fact"},
+                        {"key": "ok.item", "content": "will succeed", "type": "fact"},
+                    ]
+                })
+                gateway._process_memory_extraction(response)
+
+        assert mock_col.upsert.call_count == 2
+
+    def test_mixed_identity_and_knowledge(self):
+        """Both identity and knowledge items should be processed in one extraction."""
+        mock_col = MagicMock()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            user_file = self._make_user_md(tmpdir)
+            with patch.object(gateway, "DATA_DIR", tmpdir), \
+                 patch.object(gateway, "_get_knowledge_collection", return_value=mock_col):
+                response = json.dumps({
+                    "identity": ["name is Haseeb"],
+                    "knowledge": [
+                        {"key": "project.gooseclaw", "content": "personal AI agent", "type": "fact"},
+                    ]
+                })
+                gateway._process_memory_extraction(response)
+
+            with open(user_file) as f:
+                content = f.read()
+            assert "name is Haseeb" in content
+            assert mock_col.upsert.call_count == 1
+
+    def test_nested_json_in_llm_response(self):
+        """LLM responses often wrap JSON in explanation text."""
+        mock_col = MagicMock()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            user_file = self._make_user_md(tmpdir)
+            with patch.object(gateway, "DATA_DIR", tmpdir), \
+                 patch.object(gateway, "_get_knowledge_collection", return_value=mock_col):
+                response = (
+                    "Here's what I extracted from the conversation:\n\n"
+                    '{"identity": ["name is Haseeb"], "knowledge": [{"key": "project.x", "content": "a thing", "type": "fact"}]}\n\n'
+                    "Hope that helps!"
+                )
+                gateway._process_memory_extraction(response)
+
+            with open(user_file) as f:
+                content = f.read()
+            assert "name is Haseeb" in content
+            assert mock_col.upsert.call_count == 1
 
 
 # ── _fact_already_exists ───────────────────────────────────────────────────
@@ -581,230 +835,6 @@ class TestFactAlreadyExists(unittest.TestCase):
         """Fact is longer but section contains the core."""
         section = "- dark mode\n"
         assert gateway._fact_already_exists("dark mode", section) is True
-
-
-# ── _process_memory_extraction dedup ───────────────────────────────────────
-
-class TestMemoryExtractionDedup(unittest.TestCase):
-    """Tests that _process_memory_extraction skips duplicate facts."""
-
-    def test_user_fact_already_in_section_skipped(self):
-        """If a fact already exists in the target section, it should not be appended again."""
-        existing = (
-            "# User\n"
-            "## Work Context\n\n"
-            "## Preferences (Observed)\n\n"
-            "- prefers dark mode\n\n"
-            "## Important Context\n\n"
-            "- likes coffee\n"
-        )
-        with tempfile.TemporaryDirectory() as tmpdir:
-            identity_dir = os.path.join(tmpdir, "identity")
-            os.makedirs(identity_dir)
-            user_file = os.path.join(identity_dir, "user.md")
-            with open(user_file, "w") as f:
-                f.write(existing)
-
-            with patch.object(gateway, "DATA_DIR", tmpdir):
-                response = json.dumps({"user_facts": ["prefers dark mode"]})
-                gateway._process_memory_extraction(response)
-
-            with open(user_file) as f:
-                content = f.read()
-            # should only appear once (the original)
-            count = content.lower().count("prefers dark mode")
-            assert count == 1, f"Expected 1 occurrence, found {count}"
-
-    def test_preference_already_in_section_skipped(self):
-        """Preferences that already exist should not be duplicated."""
-        existing = (
-            "# User\n"
-            "## Preferences (Observed)\n\n"
-            "- always uses bun\n\n"
-            "## Important Context\n"
-        )
-        with tempfile.TemporaryDirectory() as tmpdir:
-            identity_dir = os.path.join(tmpdir, "identity")
-            os.makedirs(identity_dir)
-            user_file = os.path.join(identity_dir, "user.md")
-            with open(user_file, "w") as f:
-                f.write(existing)
-
-            with patch.object(gateway, "DATA_DIR", tmpdir):
-                response = json.dumps({"preferences": ["always uses bun"]})
-                gateway._process_memory_extraction(response)
-
-            with open(user_file) as f:
-                content = f.read()
-            count = content.lower().count("always uses bun")
-            assert count == 1, f"Expected 1 occurrence, found {count}"
-
-
-# ── _process_memory_extraction section routing ─────────────────────────────
-
-class TestMemoryExtractionRouting(unittest.TestCase):
-    """Tests that user_facts route to the correct sections based on content."""
-
-    def _make_user_md(self, tmpdir):
-        identity_dir = os.path.join(tmpdir, "identity")
-        os.makedirs(identity_dir, exist_ok=True)
-        user_file = os.path.join(identity_dir, "user.md")
-        with open(user_file, "w") as f:
-            f.write(
-                "# User\n"
-                "## Basics\n\n"
-                "## Work Context\n\n"
-                "## Communication Preferences\n\n"
-                "## Interests & Context\n\n"
-                "## People\n\n"
-                "## Patterns & Habits\n\n"
-                "## Preferences (Observed)\n\n"
-                "## Important Context\n\n"
-            )
-        return user_file
-
-    def test_people_fact_routed_to_people_section(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            user_file = self._make_user_md(tmpdir)
-            with patch.object(gateway, "DATA_DIR", tmpdir):
-                response = json.dumps({"user_facts": ["Sarah is his cofounder"]})
-                gateway._process_memory_extraction(response)
-            with open(user_file) as f:
-                content = f.read()
-            # fact should be between ## People and ## Patterns & Habits
-            people_idx = content.index("## People")
-            patterns_idx = content.index("## Patterns & Habits")
-            fact_idx = content.index("Sarah is his cofounder")
-            assert people_idx < fact_idx < patterns_idx, \
-                "People fact should be in the People section"
-
-    def test_work_fact_routed_to_work_context(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            user_file = self._make_user_md(tmpdir)
-            with patch.object(gateway, "DATA_DIR", tmpdir):
-                response = json.dumps({"user_facts": ["the project deadline is Friday"]})
-                gateway._process_memory_extraction(response)
-            with open(user_file) as f:
-                content = f.read()
-            work_idx = content.index("## Work Context")
-            comm_idx = content.index("## Communication Preferences")
-            fact_idx = content.index("the project deadline is Friday")
-            assert work_idx < fact_idx < comm_idx, \
-                "Work fact should be in the Work Context section"
-
-    def test_preference_fact_routed_to_preferences(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            user_file = self._make_user_md(tmpdir)
-            with patch.object(gateway, "DATA_DIR", tmpdir):
-                response = json.dumps({"user_facts": ["prefers dark mode"]})
-                gateway._process_memory_extraction(response)
-            with open(user_file) as f:
-                content = f.read()
-            pref_idx = content.index("## Preferences (Observed)")
-            important_idx = content.index("## Important Context")
-            fact_idx = content.index("prefers dark mode")
-            assert pref_idx < fact_idx < important_idx, \
-                "Preference fact should be in the Preferences (Observed) section"
-
-    def test_interest_fact_routed_to_interests(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            user_file = self._make_user_md(tmpdir)
-            with patch.object(gateway, "DATA_DIR", tmpdir):
-                response = json.dumps({"user_facts": ["hobby is woodworking"]})
-                gateway._process_memory_extraction(response)
-            with open(user_file) as f:
-                content = f.read()
-            interest_idx = content.index("## Interests & Context")
-            people_idx = content.index("## People")
-            fact_idx = content.index("hobby is woodworking")
-            assert interest_idx < fact_idx < people_idx, \
-                "Interest fact should be in the Interests & Context section"
-
-    def test_default_fact_routed_to_important_context(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            user_file = self._make_user_md(tmpdir)
-            with patch.object(gateway, "DATA_DIR", tmpdir):
-                response = json.dumps({"user_facts": ["has a meeting tomorrow at 3pm"]})
-                gateway._process_memory_extraction(response)
-            with open(user_file) as f:
-                content = f.read()
-            important_idx = content.index("## Important Context")
-            fact_idx = content.index("has a meeting tomorrow at 3pm")
-            assert fact_idx > important_idx, \
-                "Default fact should be in Important Context section"
-
-
-# ── _process_memory_extraction learnings format ────────────────────────────
-
-class TestMemoryExtractionLearningsFormat(unittest.TestCase):
-    """Tests that corrections are written with the full learnings schema."""
-
-    def test_correction_has_full_schema_fields(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            identity_dir = os.path.join(tmpdir, "identity")
-            learnings_dir = os.path.join(identity_dir, "learnings")
-            os.makedirs(learnings_dir)
-            learnings_file = os.path.join(learnings_dir, "LEARNINGS.md")
-            with open(learnings_file, "w") as f:
-                f.write("# Learnings\n")
-
-            with patch.object(gateway, "DATA_DIR", tmpdir):
-                response = json.dumps({"corrections": ["use bun not npm"]})
-                gateway._process_memory_extraction(response)
-
-            with open(learnings_file) as f:
-                content = f.read()
-
-            # check for the full schema fields
-            assert "## [LRN-" in content, "Should use ## heading with [LRN-...] format"
-            assert "**Priority**: low" in content, "Should include Priority field"
-            assert "**Status**: active" in content, "Should include Status field"
-            assert "**Category**: auto-extracted" in content, "Should include Category field"
-            assert "### Summary" in content, "Should include Summary subsection"
-            assert "use bun not npm" in content, "Should contain the correction text"
-
-    def test_correction_entry_id_format(self):
-        """Entry ID should be LRN-YYYYMMDD-AUTO."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            identity_dir = os.path.join(tmpdir, "identity")
-            learnings_dir = os.path.join(identity_dir, "learnings")
-            os.makedirs(learnings_dir)
-            learnings_file = os.path.join(learnings_dir, "LEARNINGS.md")
-            with open(learnings_file, "w") as f:
-                f.write("# Learnings\n")
-
-            with patch.object(gateway, "DATA_DIR", tmpdir):
-                response = json.dumps({"corrections": ["test correction"]})
-                gateway._process_memory_extraction(response)
-
-            with open(learnings_file) as f:
-                content = f.read()
-
-            # should match pattern like ## [LRN-20260313-AUTO]
-            assert re.search(r'## \[LRN-\d{8}-AUTO\]', content), \
-                f"Entry ID should match LRN-YYYYMMDD-AUTO format, got:\n{content}"
-
-    def test_multiple_corrections_numbered(self):
-        """Multiple corrections in one extraction should get unique IDs."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            identity_dir = os.path.join(tmpdir, "identity")
-            learnings_dir = os.path.join(identity_dir, "learnings")
-            os.makedirs(learnings_dir)
-            learnings_file = os.path.join(learnings_dir, "LEARNINGS.md")
-            with open(learnings_file, "w") as f:
-                f.write("# Learnings\n")
-
-            with patch.object(gateway, "DATA_DIR", tmpdir):
-                response = json.dumps({"corrections": ["fix A", "fix B"]})
-                gateway._process_memory_extraction(response)
-
-            with open(learnings_file) as f:
-                content = f.read()
-
-            # both should be present with different IDs
-            ids = re.findall(r'## \[LRN-\d{8}-AUTO-(\d+)\]', content)
-            assert len(ids) == 2, f"Expected 2 unique IDs, got {ids} in:\n{content}"
-            assert ids[0] != ids[1], "IDs should be unique"
 
 
 # ── _memory_writer_loop idle detection ──────────────────────────────────────

@@ -8117,6 +8117,10 @@ def _telegram_poll_loop(bot_token):
                                 # Flag this session so background drain and stale detection
                                 # can flush deferred output proactively. Track the last
                                 # bot message_id so deferred output can reply to it.
+                                _telegram_log.info(
+                                    f"relay finished: elapsed={_relay_elapsed:.1f}s "
+                                    f"threshold={_LONG_RELAY_THRESHOLD}s error={bool(error)}"
+                                )
                                 if _relay_elapsed > _LONG_RELAY_THRESHOLD and not error:
                                     # grab last bot message_id for reply threading
                                     _last_mid = None
@@ -8129,6 +8133,10 @@ def _telegram_poll_loop(bot_token):
                                             "bot_token": _bt,
                                             "last_msg_id": _last_mid,
                                         }
+                                    _telegram_log.info(
+                                        f"flagged session {session_id} for deferred drain "
+                                        f"(relay took {_relay_elapsed:.1f}s, last_msg_id={_last_mid})"
+                                    )
                             finally:
                                 typing_stop.set()
                                 typing_thread.join(timeout=2)

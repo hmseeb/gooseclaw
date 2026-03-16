@@ -2295,44 +2295,6 @@ def check_auth(handler):
     return False
 
 
-# ── safe setup redaction ────────────────────────────────────────────────────
-
-_REDACTED = "***REDACTED***"
-
-_SENSITIVE_KEYS = (
-    "api_key",
-    "password_hash",
-    "web_auth_token_hash",
-    "claude_setup_token",
-    "azure_key",
-    "telegram_bot_token",
-    "litellm_host",
-)
-
-
-def get_safe_setup():
-    """Return a redacted copy of setup config, safe for API responses."""
-    setup = load_setup()
-    if setup is None:
-        return None
-    safe = {**setup}
-    for key in _SENSITIVE_KEYS:
-        if key in safe:
-            safe[key] = _REDACTED
-    # redact saved_keys (provider credentials)
-    if "saved_keys" in safe and isinstance(safe["saved_keys"], dict):
-        redacted_keys = {}
-        for provider_id, val in safe["saved_keys"].items():
-            if isinstance(val, str):
-                redacted_keys[provider_id] = _REDACTED
-            elif isinstance(val, dict):
-                redacted_keys[provider_id] = {k: _REDACTED for k in val}
-            else:
-                redacted_keys[provider_id] = val
-        safe["saved_keys"] = redacted_keys
-    return safe
-
-
 # ── login page HTML ─────────────────────────────────────────────────────────
 
 LOGIN_HTML = """<!DOCTYPE html>
@@ -8482,6 +8444,27 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                 config["web_auth_token_hash"] = existing_setup["web_auth_token_hash"]
             # remove plaintext from config dict before saving
             config.pop("web_auth_token", None)
+
+            # preserve existing credentials when client sends redacted values
+            # (reconfigure flow: wizard loads masked config, user changes one field,
+            # sends everything back including ***REDACTED*** for unchanged keys)
+            if existing_setup:
+                for key in SENSITIVE_KEYS:
+                    if key == "web_auth_token_hash":
+                        continue  # handled above
+                    if config.get(key) == _REDACTED and key in existing_setup:
+                        config[key] = existing_setup[key]
+                # preserve saved_keys (per-provider credential store)
+                if "saved_keys" in config and "saved_keys" in existing_setup:
+                    for provider_id, val in config["saved_keys"].items():
+                        if val == _REDACTED and provider_id in existing_setup["saved_keys"]:
+                            config["saved_keys"][provider_id] = existing_setup["saved_keys"][provider_id]
+                        elif isinstance(val, dict) and provider_id in existing_setup["saved_keys"]:
+                            existing_val = existing_setup["saved_keys"][provider_id]
+                            if isinstance(existing_val, dict):
+                                for k, v in val.items():
+                                    if v == _REDACTED and k in existing_val:
+                                        val[k] = existing_val[k]
 
             save_setup(config)
             apply_config(config)

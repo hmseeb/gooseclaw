@@ -2015,8 +2015,9 @@ def _edit_telegram_message(bot_token, chat_id, message_id, text):
 def notify_all(text, channel=None, media=None):
     """Send a message to notification channels.
 
-    If channel is None, broadcasts to all registered channels.
-    If channel is set, targets that specific channel. Falls back to notify_all
+    If channel is None, checks for a global default_notify_channel in setup.
+    If neither is set, broadcasts to all registered channels.
+    If channel is set, targets that specific channel. Falls back to broadcast
     with an error prefix if the channel is not found.
 
     media: optional list of media blocks (e.g. [{"type":"image","data":"...","mimeType":"image/png"}]).
@@ -2027,6 +2028,12 @@ def notify_all(text, channel=None, media=None):
     """
     # record for LLM context injection on next user message
     _record_background_activity(text)
+
+    # apply global default if no explicit channel specified
+    if channel is None:
+        setup = load_setup()
+        if setup:
+            channel = setup.get("default_notify_channel") or None
 
     with _notification_handlers_lock:
         handlers = list(_notification_handlers)

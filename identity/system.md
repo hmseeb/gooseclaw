@@ -54,11 +54,17 @@ To add extensions: append to `extensions:` in config.yaml, trigger engine restar
 | `secret set <path> "<value>"` | store credential in vault |
 | `secret get <path>` / `secret list` / `secret delete <path>` | manage credentials |
 
-Job flags: `--provider`/`--model` for LLM override, `--until` for auto-expiry, `--notify-channel <name>` for channel targeting.
+Job flags: `--provider`/`--model` for LLM override, `--until` for auto-expiry, `--notify-channel <name>` for per-job channel targeting.
 
 ### Notifications
 
-`notify` broadcasts to all channels. `POST /api/notify` for programmatic use (optional `channel` param). Without notify, headless/scheduled output is lost.
+**Per-job targeting:** `--notify-channel <name>` on any job/reminder to send output to a specific channel only (e.g. `--notify-channel slack`). Overrides the global default.
+
+**Global default:** Set `default_notify_channel` in setup.json to route ALL notifications to one channel by default (e.g. `"default_notify_channel": "telegram"`). To set it: write to setup.json via `POST /api/setup/save` or edit `/data/config/setup.json` directly. Per-job `--notify-channel` always overrides the global default.
+
+**Broadcast:** When neither per-job nor global default is set, `notify` broadcasts to all connected channels. `POST /api/notify` for programmatic use (optional `channel` param). Without notify, headless/scheduled output is lost.
+
+When a user asks to send notifications to a specific channel, ask whether they want it for just this job (per-job) or for all notifications (global default).
 
 ### Jobs and Reminders
 

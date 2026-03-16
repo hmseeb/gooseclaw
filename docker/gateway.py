@@ -451,6 +451,23 @@ class BotInstance:
             self.state.queue_message(chat_id, text, replay_fn=_replay)
             send_telegram_message(bot_token, chat_id, "got it, i'll get to this next")
             return
+
+        # Early lock release: once the first response chunk is sent to Telegram,
+        # the relay is established and the lock can be released so new messages
+        # are not blocked for the entire duration of long AI responses.
+        _lock_released = [False]
+
+        def _early_release_lock():
+            if not _lock_released[0]:
+                _lock_released[0] = True
+                _chat_lock.release()
+                # fire queued replay now, not at relay end
+                _queued = self.state.pop_queued_replay(chat_id)
+                if _queued:
+                    _, _replay_fn = _queued
+                    if _replay_fn:
+                        threading.Thread(target=_replay_fn, daemon=True).start()
+
         try:
             # download media in relay thread (not poll loop) to keep poll responsive
             if inbound_msg and inbound_msg.media:
@@ -503,6 +520,8 @@ class BotInstance:
                         text, session_id, chat_id=chat_id, channel=self.channel_key,
                         sock_ref=_sock_ref, content_blocks=content_blocks,
                     )
+                    # relay complete, release lock before sending Telegram message
+                    _early_release_lock()
                     if _cancelled.is_set():
                         pass
                     elif error:
@@ -522,6 +541,8 @@ class BotInstance:
                             mid, err = _send_telegram_msg_with_id(bot_token, chat_id, txt)
                             if mid:
                                 _st["msg_id"] = mid
+                                # first chunk sent to Telegram, release the lock
+                                _early_release_lock()
                             else:
                                 _telegram_log.error(f"[telegram:{self.name}] edit-stream: initial send failed: {err}")
                         elif len(txt) > 3800:
@@ -540,6 +561,8 @@ class BotInstance:
                         sock_ref=_sock_ref, flush_interval=2.0,
                         content_blocks=content_blocks,
                     )
+                    # if lock wasn't released during streaming (e.g. no chunks arrived), release now
+                    _early_release_lock()
                     if _cancelled.is_set():
                         pass
                     elif _edit_state["msg_id"] and response_text and not error:
@@ -569,13 +592,16 @@ class BotInstance:
                     pass
         finally:
             self.state.pop_active_relay(chat_id)
-            _chat_lock.release()
-            # process queued messages
-            _queued = self.state.pop_queued_replay(chat_id)
-            if _queued:
-                _, _replay_fn = _queued
-                if _replay_fn:
-                    threading.Thread(target=_replay_fn, daemon=True).start()
+            # release lock if not already released early
+            if not _lock_released[0]:
+                _lock_released[0] = True
+                _chat_lock.release()
+                # process queued messages
+                _queued = self.state.pop_queued_replay(chat_id)
+                if _queued:
+                    _, _replay_fn = _queued
+                    if _replay_fn:
+                        threading.Thread(target=_replay_fn, daemon=True).start()
 
     def _flush_media_group_v2(self, group_id):
         """Flush a buffered media group: combine all refs and relay as one message."""
@@ -5432,6 +5458,22 @@ class ChannelRelay:
                 send_fn("got it, i'll get to this next")
             return ""
 
+        # Early lock release: once the first response chunk is delivered,
+        # the relay is established and the lock can be released so new
+        # messages are not blocked for the entire duration of long AI responses.
+        _lock_released = [False]
+
+        def _early_release_lock():
+            if not _lock_released[0]:
+                _lock_released[0] = True
+                user_lock.release()
+                # fire queued replay now, not at relay end
+                _queued = self._state.pop_queued_replay(user_key)
+                if _queued:
+                    _, _replay_fn = _queued
+                    if _replay_fn:
+                        threading.Thread(target=_replay_fn, daemon=True).start()
+
         try:
             # Typing indicator loop (CHAN-06)
             typing_stop = threading.Event()
@@ -5473,10 +5515,21 @@ class ChannelRelay:
                 if isinstance(user_id_or_msg, InboundMessage) and user_id_or_msg.has_media:
                     _cb = _build_content_blocks(text, user_id_or_msg)
 
+                # Wrap send_fn to release lock on first chunk in streaming mode
+                _wrapped_send_fn = send_fn
+                if use_streaming and send_fn:
+                    _first_chunk_sent = [False]
+                    _orig_send_fn = send_fn
+                    def _wrapped_send_fn(chunk, _osf=_orig_send_fn):
+                        _osf(chunk)
+                        if not _first_chunk_sent[0]:
+                            _first_chunk_sent[0] = True
+                            _early_release_lock()
+
                 if use_streaming:
                     response_text, error, _media = _relay_to_goosed(
                         text, session_id, chat_id=user_key, channel=self._name,
-                        flush_cb=send_fn, verbosity=verbosity,
+                        flush_cb=_wrapped_send_fn, verbosity=verbosity,
                         sock_ref=sock_ref, flush_interval=2.0,
                         content_blocks=_cb,
                     )
@@ -5485,6 +5538,9 @@ class ChannelRelay:
                         text, session_id, chat_id=user_key, channel=self._name,
                         sock_ref=sock_ref, content_blocks=_cb,
                     )
+
+                # release lock after relay completes (if not already released during streaming)
+                _early_release_lock()
 
                 if cancelled.is_set():
                     return ""
@@ -5496,7 +5552,7 @@ class ChannelRelay:
                     if use_streaming:
                         response_text, error, _media = _relay_to_goosed(
                             text, session_id, chat_id=user_key, channel=self._name,
-                            flush_cb=send_fn, verbosity=verbosity,
+                            flush_cb=_wrapped_send_fn, verbosity=verbosity,
                             sock_ref=sock_ref, flush_interval=2.0,
                             content_blocks=_cb,
                         )
@@ -5525,13 +5581,16 @@ class ChannelRelay:
                 self._state.pop_active_relay(user_key)
         finally:
             typing_stop.set()  # stop typing loop
-            user_lock.release()
-            # process queued messages
-            _queued = self._state.pop_queued_replay(user_key)
-            if _queued:
-                _, _replay_fn = _queued
-                if _replay_fn:
-                    threading.Thread(target=_replay_fn, daemon=True).start()
+            # release lock if not already released early
+            if not _lock_released[0]:
+                _lock_released[0] = True
+                user_lock.release()
+                # process queued messages
+                _queued = self._state.pop_queued_replay(user_key)
+                if _queued:
+                    _, _replay_fn = _queued
+                    if _replay_fn:
+                        threading.Thread(target=_replay_fn, daemon=True).start()
 
     def reset_session(self, user_id):
         """Reset a user's session (for /clear command)."""
@@ -7331,6 +7390,20 @@ def _flush_media_group(group_id, bot_token):
             _telegram_state.queue_message(_chat_id, _text, replay_fn=_mreplay)
             send_telegram_message(_bt, _chat_id, "got it, i'll get to this next")
             return
+
+        # Early lock release helper
+        _lock_released = [False]
+
+        def _early_release_lock():
+            if not _lock_released[0]:
+                _lock_released[0] = True
+                _chat_lock.release()
+                _mq = _telegram_state.pop_queued_replay(_chat_id)
+                if _mq:
+                    _, _mq_fn = _mq
+                    if _mq_fn:
+                        threading.Thread(target=_mq_fn, daemon=True).start()
+
         try:
             downloaded = []
             for ref in _refs:
@@ -7372,6 +7445,8 @@ def _flush_media_group(group_id, bot_token):
                     _text, session_id, chat_id=_chat_id, channel="telegram",
                     content_blocks=_leg_cb, sock_ref=_sock_ref,
                 )
+                # relay complete, release lock before sending Telegram message
+                _early_release_lock()
                 if _cancelled.is_set():
                     pass
                 elif error:
@@ -7389,12 +7464,14 @@ def _flush_media_group(group_id, bot_token):
         except Exception as exc:
             _telegram_log.error(f"media group relay exception for chat {_chat_id}: {exc}")
         finally:
-            _chat_lock.release()
-            _mq = _telegram_state.pop_queued_replay(_chat_id)
-            if _mq:
-                _, _mq_fn = _mq
-                if _mq_fn:
-                    threading.Thread(target=_mq_fn, daemon=True).start()
+            if not _lock_released[0]:
+                _lock_released[0] = True
+                _chat_lock.release()
+                _mq = _telegram_state.pop_queued_replay(_chat_id)
+                if _mq:
+                    _, _mq_fn = _mq
+                    if _mq_fn:
+                        threading.Thread(target=_mq_fn, daemon=True).start()
 
     threading.Thread(target=_do_group_relay, daemon=True).start()
 
@@ -7498,6 +7575,20 @@ def _telegram_poll_loop(bot_token):
                                 _telegram_state.queue_message(_chat_id, _text, replay_fn=_mreplay)
                                 send_telegram_message(_bt, _chat_id, "got it, i'll get to this next")
                                 return
+
+                            # Early lock release helper
+                            _lock_released = [False]
+
+                            def _early_release_lock():
+                                if not _lock_released[0]:
+                                    _lock_released[0] = True
+                                    _chat_lock.release()
+                                    _mq = _telegram_state.pop_queued_replay(_chat_id)
+                                    if _mq:
+                                        _, _mq_fn = _mq
+                                        if _mq_fn:
+                                            threading.Thread(target=_mq_fn, daemon=True).start()
+
                             try:
                                 # download media in relay thread
                                 downloaded = []
@@ -7524,6 +7615,8 @@ def _telegram_poll_loop(bot_token):
                                     _text, session_id, chat_id=_chat_id, channel="telegram",
                                     content_blocks=_leg_cb,
                                 )
+                                # relay complete, release lock before sending Telegram message
+                                _early_release_lock()
                                 if error:
                                     send_telegram_message(_bt, _chat_id, f"Error: {error}")
                                 elif response_text:
@@ -7537,13 +7630,14 @@ def _telegram_poll_loop(bot_token):
                             except Exception as exc:
                                 _telegram_log.error(f"media relay exception for chat {_chat_id}: {exc}")
                             finally:
-                                _chat_lock.release()
-                                # process queued messages
-                                _mq = _telegram_state.pop_queued_replay(_chat_id)
-                                if _mq:
-                                    _, _mq_fn = _mq
-                                    if _mq_fn:
-                                        threading.Thread(target=_mq_fn, daemon=True).start()
+                                if not _lock_released[0]:
+                                    _lock_released[0] = True
+                                    _chat_lock.release()
+                                    _mq = _telegram_state.pop_queued_replay(_chat_id)
+                                    if _mq:
+                                        _, _mq_fn = _mq
+                                        if _mq_fn:
+                                            threading.Thread(target=_mq_fn, daemon=True).start()
                         threading.Thread(target=_do_media_relay, daemon=True).start()
                     continue
 
@@ -7592,6 +7686,22 @@ def _telegram_poll_loop(bot_token):
                             _telegram_state.queue_message(_chat_id, _text, replay_fn=_rreplay)
                             send_telegram_message(_bt, _chat_id, "got it, i'll get to this next")
                             return
+
+                        # Early lock release: once the first response chunk is sent to
+                        # Telegram, the relay is established and the lock can be released
+                        # so new messages are not blocked for the full AI response duration.
+                        _lock_released = [False]
+
+                        def _early_release_lock():
+                            if not _lock_released[0]:
+                                _lock_released[0] = True
+                                _chat_lock.release()
+                                _rq = _telegram_state.pop_queued_replay(_chat_id)
+                                if _rq:
+                                    _, _rq_fn = _rq
+                                    if _rq_fn:
+                                        threading.Thread(target=_rq_fn, daemon=True).start()
+
                         try:
                             # download media in relay thread
                             if _media_refs:
@@ -7644,6 +7754,8 @@ def _telegram_poll_loop(bot_token):
                                         _text, session_id, chat_id=_chat_id, channel="telegram",
                                         sock_ref=_sock_ref, content_blocks=_leg_content_blocks,
                                     )
+                                    # relay complete, release lock before sending Telegram message
+                                    _early_release_lock()
                                     if _cancelled.is_set():
                                         pass  # /stop was called, don't send anything
                                     elif error:
@@ -7663,6 +7775,8 @@ def _telegram_poll_loop(bot_token):
                                             mid, err = _send_telegram_msg_with_id(_bt, _chat_id, txt)
                                             if mid:
                                                 _st["msg_id"] = mid
+                                                # first chunk sent to Telegram, release the lock
+                                                _early_release_lock()
                                             else:
                                                 _telegram_log.error(f"edit-stream: initial send failed: {err}")
                                         elif len(txt) > 3800:
@@ -7681,6 +7795,8 @@ def _telegram_poll_loop(bot_token):
                                         sock_ref=_sock_ref, flush_interval=2.0,
                                         content_blocks=_leg_content_blocks,
                                     )
+                                    # if lock wasn't released during streaming, release now
+                                    _early_release_lock()
                                     if _cancelled.is_set():
                                         pass  # /stop was called, don't send final edit
                                     elif _edit_state["msg_id"] and response_text and not error:
@@ -7710,13 +7826,15 @@ def _telegram_poll_loop(bot_token):
                                     pass
                         finally:
                             _telegram_state.pop_active_relay(_chat_id)
-                            _chat_lock.release()
-                            # process queued messages
-                            _rq = _telegram_state.pop_queued_replay(_chat_id)
-                            if _rq:
-                                _, _rq_fn = _rq
-                                if _rq_fn:
-                                    threading.Thread(target=_rq_fn, daemon=True).start()
+                            # release lock if not already released early
+                            if not _lock_released[0]:
+                                _lock_released[0] = True
+                                _chat_lock.release()
+                                _rq = _telegram_state.pop_queued_replay(_chat_id)
+                                if _rq:
+                                    _, _rq_fn = _rq
+                                    if _rq_fn:
+                                        threading.Thread(target=_rq_fn, daemon=True).start()
 
                     threading.Thread(target=_do_relay, daemon=True).start()
                 else:

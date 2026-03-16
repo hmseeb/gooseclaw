@@ -4114,7 +4114,7 @@ def _run_script(job):
                 full_output += f"\nstdout: {output}"
         else:
             status = "ok"
-            full_output = output or "(no output)"
+            full_output = output or ""
 
     except subprocess.TimeoutExpired:
         status = "timeout"

@@ -37,6 +37,7 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - Lock audit: map all 17 locks and their acquisition paths
 - Queue consecutive messages instead of bouncing with "Still thinking"
 - Hide internal file references and tool usage from user-facing LLM output
+- Revisit memory files idle poll
 - Investigate Goose multi-agent spawning with goosed
 - Generate requirements.lock via generate-lockfile.sh --docker
 - Validate e2e tests in CI pipeline

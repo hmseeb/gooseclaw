@@ -6132,7 +6132,7 @@ def _handle_cmd_clear(ctx):
     # remove only this user's session for the requesting channel
     old = _session_manager.pop(channel, chat_key)
 
-    ctx["send_fn"]("\U0001f504 Session cleared. Restarting engine, give it ~15s...")
+    ctx["send_fn"]("\U0001f504 Session cleared. Restarting engine, give it a few seconds...")
     threading.Thread(
         target=_restart_goose_and_prewarm,
         args=(chat_id,),
@@ -6152,7 +6152,7 @@ def _handle_cmd_restart(ctx):
     state.kill_relay(chat_key)
 
     # NOTE: intentionally NOT popping the session -- that's /clear's job
-    ctx["send_fn"]("\U0001f504 Restarting engine, give me ~10 seconds...")
+    ctx["send_fn"]("\U0001f504 Restarting engine, give it a few seconds...")
     threading.Thread(
         target=_restart_goose_and_prewarm,
         args=(chat_id,),

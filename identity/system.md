@@ -14,7 +14,7 @@ Behavioral instructions are in system-core.md (loaded in session context).
 
 | User wants | Route to |
 |-----------|----------|
-| MCP extension / tool | Goose config (`/data/config/config.yaml`). Engine restart ~10s. Research via Exa/Context7 first |
+| MCP extension / tool | Goose config (`/data/config/config.yaml`). Engine restart required. Research via Exa/Context7 first |
 | Messaging platform (Slack, Discord) | Channel plugin. Write `/data/channels/<name>.py`. Hot-reloadable |
 | Schedule / remind / automate | `job` or `remind` CLI exclusively |
 | Change LLM provider / model | Setup wizard or `POST /api/setup/save` |
@@ -31,7 +31,7 @@ Behavioral instructions are in system-core.md (loaded in session context).
 
 ### User Commands
 
-`/help`, `/stop`, `/clear` (wipe + restart ~15s), `/restart` (no wipe), `/compact` (summarize to free context)
+`/help`, `/stop`, `/clear` (wipe + restart), `/restart` (no wipe), `/compact` (summarize to free context)
 
 ### Default MCP Extensions
 

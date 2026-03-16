@@ -2055,7 +2055,7 @@ def migrate_config_models(config):
     config.setdefault("channel_routes", {})
     config.setdefault("channel_verbosity", {})
     config.setdefault("memory_idle_minutes", 10)
-    config.setdefault("memory_writer_enabled", True)
+    config.setdefault("memory_writer_enabled", False)
     return config
 
 
@@ -6437,7 +6437,7 @@ def _memory_writer_loop():
             setup = load_setup()
             if not setup:
                 continue
-            if not setup.get("memory_writer_enabled", True):
+            if not setup.get("memory_writer_enabled", False):
                 continue
             idle_minutes = setup.get("memory_idle_minutes", 10)
             idle_threshold = idle_minutes * 60

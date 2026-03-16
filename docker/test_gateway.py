@@ -131,7 +131,7 @@ class TestMigrateConfigModels(unittest.TestCase):
         config = {"provider_type": "anthropic", "model": "test"}
         result = gateway.migrate_config_models(config)
         assert result["memory_idle_minutes"] == 10
-        assert result["memory_writer_enabled"] is True
+        assert result["memory_writer_enabled"] is False
 
     def test_channel_route_defaults_added(self):
         config = {"provider_type": "anthropic", "model": "test"}

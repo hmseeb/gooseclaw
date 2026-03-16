@@ -25,7 +25,7 @@ Overview of the platform architecture.
 
 ### Architecture
 
-Two layers. Goose (framework): AI agent by Block. GooseClaw (application):
+Two layers. Goose (framework): AI agent framework. GooseClaw (application):
 personal assistant deployed on Railway.
 
 ### Default MCP Extensions

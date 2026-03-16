@@ -40,7 +40,7 @@ class TestKnowledgeSearch(_ServerTestBase):
         self.system_col.add(
             ids=["sys.platform", "sys.rules.security", "sys.tools.jobs"],
             documents=[
-                "Goose is an AI agent framework by Block for autonomous coding.",
+                "Goose is an AI agent framework for autonomous coding.",
                 "Never expose API keys in logs. Always use environment variables for secrets.",
                 "Jobs run scheduled tasks via cron expressions. Use /jobs to manage.",
             ],

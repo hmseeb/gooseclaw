@@ -2,7 +2,7 @@
 
 > personal AI agent in 5 minutes. deploy on railway, chat on telegram or web.
 
-gooseclaw is a personal AI agent built on [Goose](https://github.com/block/goose) by Block. it runs on Railway, talks to you on Telegram and via a web UI, and learns who you are over time.
+gooseclaw is a personal AI agent by Haseeb, built on [Goose](https://github.com/block/goose). it runs on Railway, talks to you on Telegram and via a web UI, and learns who you are over time.
 
 [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/AD_ArJ?referralCode=Rnr2IU)
 
@@ -167,7 +167,7 @@ for deeper customization, fork this repo and modify:
 
 ## credits
 
-- **[Goose](https://github.com/block/goose)** by Block. the AI agent framework that powers everything
+- **[Goose](https://github.com/block/goose)** the AI agent framework that powers everything
 - **[Railway](https://railway.com)** for one-click container deployment
 - Identity architecture inspired by **[OpenClaw](https://github.com/openclaw)**
 

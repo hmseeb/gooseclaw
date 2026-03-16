@@ -8044,12 +8044,24 @@ def _telegram_poll_loop(bot_token):
                                             else:
                                                 _telegram_log.error(f"edit-stream: initial send failed: {err}")
                                         elif len(txt) > 3800:
+                                            # split at a clean line boundary to avoid
+                                            # breaking markdown mid-tag (bold, code, etc.)
+                                            _split = txt.rfind("\n\n", 0, 3800)
+                                            if _split < 200:
+                                                _split = txt.rfind("\n", 0, 3800)
+                                            if _split < 200:
+                                                _split = 3800
+                                            # finalize old message at the clean break
+                                            _edit_telegram_message(_bt, _chat_id, _st["msg_id"], txt[:_split])
                                             _st["overflow"].append(_st["msg_id"])
-                                            _st["accumulated"] = chunk
+                                            # new message starts with the remainder
+                                            _remainder = txt[_split:].lstrip("\n")
+                                            _st["accumulated"] = _remainder
                                             _st["msg_id"] = None
-                                            mid, err = _send_telegram_msg_with_id(_bt, _chat_id, chunk)
-                                            if mid:
-                                                _st["msg_id"] = mid
+                                            if _remainder:
+                                                mid, err = _send_telegram_msg_with_id(_bt, _chat_id, _remainder)
+                                                if mid:
+                                                    _st["msg_id"] = mid
                                         else:
                                             _edit_telegram_message(_bt, _chat_id, _st["msg_id"], txt)
 

@@ -124,6 +124,8 @@ Channel plugins: platform-native access control, no pairing needed.
 
 Python files in `/data/channels/` exporting `CHANNEL` dict. Required: `send(text)` → `{"sent": bool, "error": str}`. Optional: `poll()`, `setup()`/`teardown()`, `typing`, custom `commands`. Files starting with `_` skipped.
 
+v2 contract: plugins can pass `InboundMessage(user_id, text, channel, media, reply_to_text)` to the relay. When `reply_to_text` is set, the gateway prepends `[replying to: "..."]` context so the LLM knows which message the user is responding to. Truncated to 500 chars. Telegram bots extract this automatically from `reply_to_message`.
+
 ### Integrations
 
 1. Research service (Exa/Context7)

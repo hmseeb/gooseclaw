@@ -503,6 +503,10 @@ class BotInstance:
             if _bg_ctx:
                 text = _bg_ctx + text
 
+            # inject reply context so goose knows what user is replying to
+            if inbound_msg and inbound_msg.reply_to_text:
+                text = f'[replying to: "{inbound_msg.reply_to_text}"]\n{text}'
+
             # build content blocks from media attachments
             content_blocks = None
             if inbound_msg and inbound_msg.has_media:
@@ -618,13 +622,14 @@ class BotInstance:
         chat_id = group["chat_id"]
         text = group["text"]
         refs = group["refs"]
+        _reply_text = group.get("reply_to_text", "")
 
         paired_ids = get_paired_chat_ids(platform=self.channel_key)
         if chat_id not in paired_ids:
             return
 
         # build InboundMessage with all refs from the group
-        inbound_msg = InboundMessage(user_id=chat_id, text=text, channel=self.channel_key, media=refs)
+        inbound_msg = InboundMessage(user_id=chat_id, text=text, channel=self.channel_key, media=refs, reply_to_text=_reply_text)
 
         self._do_message_relay(chat_id=chat_id, text=text, bot_token=self.token, inbound_msg=inbound_msg)
 
@@ -664,6 +669,12 @@ class BotInstance:
                     if not chat_id:
                         continue
 
+                    # extract reply context (truncate to 500 chars)
+                    _reply_msg = msg.get("reply_to_message")
+                    _reply_to_text = ""
+                    if _reply_msg:
+                        _reply_to_text = (_reply_msg.get("text") or _reply_msg.get("caption") or "").strip()[:500]
+
                     # build InboundMessage envelope (v2 contract)
                     has_media = _has_media(msg)
                     media_list = []
@@ -702,6 +713,7 @@ class BotInstance:
                                     "chat_id": chat_id,
                                     "text": text or msg.get("caption", "").strip(),
                                     "refs": list(media_list),
+                                    "reply_to_text": _reply_to_text,
                                 }
                                 group = self._media_group_buffer[mg_id]
                             # set/reset 1s flush timer
@@ -714,6 +726,7 @@ class BotInstance:
                     inbound_msg = InboundMessage(
                         user_id=chat_id, text=text,
                         channel=self.channel_key, media=media_list,
+                        reply_to_text=_reply_to_text,
                     )
 
                     # media-only or text+media from paired users: relay (downloads happen in relay thread)
@@ -5184,12 +5197,13 @@ def start_cron_scheduler():
 
 class InboundMessage:
     """Channel-agnostic inbound message envelope."""
-    def __init__(self, user_id, text="", channel="", media=None, metadata=None):
+    def __init__(self, user_id, text="", channel="", media=None, metadata=None, reply_to_text=""):
         self.user_id = str(user_id)
         self.text = text or ""
         self.channel = channel or ""
         self.media = media if media is not None else []
         self.metadata = metadata if metadata is not None else {}
+        self.reply_to_text = reply_to_text or ""
 
     @property
     def has_media(self):
@@ -5506,11 +5520,13 @@ class ChannelRelay:
         on the channel's verbosity setting. Backward compatible: plugins that
         don't pass send_fn get the original single-response behavior.
         """
+        _reply_to_text = ""
         if isinstance(user_id_or_msg, InboundMessage):
             msg = user_id_or_msg
             send_fn = text  # second arg is send_fn in v2 signature
             text = msg.text
             user_key = msg.user_id
+            _reply_to_text = msg.reply_to_text
         else:
             user_key = str(user_id_or_msg)
 
@@ -5585,6 +5601,10 @@ class ChannelRelay:
             _bg_ctx = _pop_background_context(user_key)
             if _bg_ctx:
                 text = _bg_ctx + text
+
+            # inject reply context so goose knows what user is replying to
+            if _reply_to_text:
+                text = f'[replying to: "{_reply_to_text}"]\n{text}'
 
             # Active relay tracking (CHAN-03)
             cancelled = threading.Event()
@@ -7461,12 +7481,13 @@ def _flush_media_group(group_id, bot_token):
     chat_id = group["chat_id"]
     text = group["text"]
     refs = group["refs"]
+    _reply_text = group.get("reply_to_text", "")
 
     paired_ids = get_paired_chat_ids()
     if chat_id not in paired_ids:
         return
 
-    def _do_group_relay(_text=text, _chat_id=chat_id, _bt=bot_token, _refs=refs):
+    def _do_group_relay(_text=text, _chat_id=chat_id, _bt=bot_token, _refs=refs, _reply_text=_reply_text):
         _memory_touch(_chat_id)
         _pending_greet = _legacy_greeting_events.get(str(_chat_id))
         if _pending_greet:
@@ -7508,6 +7529,11 @@ def _flush_media_group(group_id, bot_token):
             _leg_adapter = TelegramOutboundAdapter(_bt, _chat_id)
             _leg_adapter.send_typing(_chat_id)
             session_id = _get_session_id(_chat_id)
+
+            # inject reply context
+            if _reply_text:
+                _text = f'[replying to: "{_reply_text}"]\n{_text}'
+
             _inbound = InboundMessage(user_id=_chat_id, text=_text, channel="telegram")
             _inbound.media = downloaded
             _leg_cb = _build_content_blocks(_text, _inbound) if _inbound.has_media else None
@@ -7600,6 +7626,12 @@ def _telegram_poll_loop(bot_token):
                 if not chat_id:
                     continue
 
+                # extract reply context (truncate to 500 chars)
+                _reply_msg = msg.get("reply_to_message")
+                _reply_to_text = ""
+                if _reply_msg:
+                    _reply_to_text = (_reply_msg.get("text") or _reply_msg.get("caption") or "").strip()[:500]
+
                 # build media file_id references for deferred download
                 has_media = _has_media(msg)
                 media_refs = []
@@ -7636,6 +7668,7 @@ def _telegram_poll_loop(bot_token):
                                 "chat_id": chat_id,
                                 "text": text or msg.get("caption", "").strip(),
                                 "refs": list(media_refs),
+                                "reply_to_text": _reply_to_text,
                             }
                             group = _media_group_buffer[mg_id]
                         # set/reset 1s flush timer
@@ -7650,7 +7683,7 @@ def _telegram_poll_loop(bot_token):
                 if has_media and not text:
                     paired_ids = get_paired_chat_ids()
                     if chat_id in paired_ids:
-                        def _do_media_relay(_text="", _chat_id=chat_id, _bt=bot_token, _refs=media_refs):
+                        def _do_media_relay(_text="", _chat_id=chat_id, _bt=bot_token, _refs=media_refs, _reply_text=_reply_to_text):
                             _memory_touch(_chat_id)
                             # Change 5: wait for pending greeting before acquiring lock
                             _pending_greet = _legacy_greeting_events.get(str(_chat_id))
@@ -7694,6 +7727,9 @@ def _telegram_poll_loop(bot_token):
                                 _media_adapter = TelegramOutboundAdapter(_bt, _chat_id)
                                 _media_adapter.send_typing(_chat_id)
                                 session_id = _get_session_id(_chat_id)
+                                # inject reply context
+                                if _reply_text:
+                                    _text = f'[replying to: "{_reply_text}"]\n{_text}'
                                 # build content blocks from downloaded media
                                 _inbound = InboundMessage(user_id=_chat_id, text=_text, channel="telegram")
                                 _inbound.media = downloaded
@@ -7760,7 +7796,7 @@ def _telegram_poll_loop(bot_token):
                     # ── relay to goosed (runs in a background thread) ──
                     # threaded so the poll loop stays responsive for /stop commands.
                     # per-chat lock prevents concurrent relays per user.
-                    def _do_relay(_text=text, _chat_id=chat_id, _bt=bot_token, _media_refs=media_refs):
+                    def _do_relay(_text=text, _chat_id=chat_id, _bt=bot_token, _media_refs=media_refs, _reply_text=_reply_to_text):
                         _memory_touch(_chat_id)
                         # Change 5: wait for pending greeting before acquiring lock
                         _pending_greet = _legacy_greeting_events.get(str(_chat_id))
@@ -7821,6 +7857,10 @@ def _telegram_poll_loop(bot_token):
                             _bg_ctx = _pop_background_context(_chat_id)
                             if _bg_ctx:
                                 _text = _bg_ctx + _text
+
+                            # inject reply context
+                            if _reply_text:
+                                _text = f'[replying to: "{_reply_text}"]\n{_text}'
 
                             # build content blocks from downloaded media
                             _leg_content_blocks = None

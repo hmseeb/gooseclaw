@@ -793,6 +793,10 @@ body::after {
   background: rgba(52, 211, 153, 0.1);
   color: var(--success);
 }
+.model-badge.lead {
+  background: rgba(251, 191, 36, 0.15);
+  color: #fbbf24;
+}
 .model-card-actions {
   position: absolute;
   top: 8px;
@@ -1855,6 +1859,52 @@ body::after {
           <span class="channel-routing-toggle">&#9654;</span>
         </div>
         <div class="channel-routing-body" id="channelRoutingBody"></div>
+      </div>
+    </div>
+
+    <!-- lead model config section -->
+    <div class="lead-config-section" id="leadConfigSection" style="display:none">
+      <div class="channel-routing show">
+        <div class="channel-routing-header" onclick="toggleLeadConfig()">
+          <h3>Lead Model</h3>
+          <span class="channel-routing-toggle">&#9654;</span>
+        </div>
+        <div class="channel-routing-body" id="leadConfigBody">
+          <div class="lead-config-summary" id="leadConfigSummary"></div>
+          <div class="lead-config-edit" id="leadConfigEdit" style="display:none">
+            <div class="field" style="margin-bottom:10px">
+              <label style="font-size:12px;color:var(--text-secondary)">Provider</label>
+              <select id="dashLeadProvider" onchange="onDashLeadProviderChange()"></select>
+            </div>
+            <div class="field" style="margin-bottom:10px">
+              <label style="font-size:12px;color:var(--text-secondary)">Model</label>
+              <select id="dashLeadModelSelect" style="display:none" onchange="onDashLeadModelSelectChange()"></select>
+              <input type="text" id="dashLeadModel" placeholder="e.g. claude-sonnet-4-20250514">
+              <input type="text" id="dashLeadModelCustom" style="display:none" placeholder="Custom model ID...">
+            </div>
+            <div class="field" style="margin-bottom:10px">
+              <label style="font-size:12px;color:var(--text-secondary)">Turn Count</label>
+              <input type="number" id="dashLeadTurnCount" min="1" max="50" placeholder="3">
+            </div>
+            <div class="field" style="margin-bottom:10px">
+              <label style="font-size:12px;color:var(--text-secondary)">Failure Threshold</label>
+              <input type="number" id="dashLeadFailureThreshold" min="1" max="20" placeholder="3">
+            </div>
+            <div class="field" style="margin-bottom:10px">
+              <label style="font-size:12px;color:var(--text-secondary)">Fallback Turns</label>
+              <input type="number" id="dashLeadFallbackTurns" min="1" max="100" placeholder="5">
+            </div>
+            <div class="field" style="margin-bottom:10px">
+              <label style="font-size:12px;color:var(--text-secondary)">Context Limit</label>
+              <input type="number" id="dashLeadContextLimit" min="1000" max="2000000" placeholder="128000">
+            </div>
+            <div class="edit-actions">
+              <button class="save-btn" onclick="saveLeadConfig()">Save</button>
+              <button class="cancel-btn" onclick="cancelLeadConfigEdit()">Cancel</button>
+              <button class="cancel-btn" onclick="removeLeadConfig()" style="color:var(--error);margin-left:auto">Remove</button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -2942,12 +2992,18 @@ function buildSummary() {
   const leadProv = document.getElementById('leadProvider')?.value || '';
   if (leadProv) {
     const leadProvObj = PROVIDERS[leadProv];
-    const leadProvName = leadProvObj ? leadProvObj.name : leadProv;
+    const leadProvName = leadProvObj ? (leadProvObj.icon + ' ' + leadProvObj.name) : leadProv;
     const leadMod = document.getElementById('leadModel')?.value || (leadProvObj && leadProvObj.defaultModel) || 'default';
     const leadTurns = document.getElementById('leadTurnCount')?.value || '3';
+    const leadFT = document.getElementById('leadFailureThreshold')?.value || '3';
+    const leadFBT = document.getElementById('leadFallbackTurns')?.value || '5';
+    const leadCL = document.getElementById('leadContextLimit')?.value || '128000';
     rows.push({ key: 'Lead Provider', val: leadProvName, cls: '' });
     rows.push({ key: 'Lead Model', val: leadMod, cls: '' });
     rows.push({ key: 'Lead Turns', val: leadTurns, cls: '' });
+    rows.push({ key: 'Failure Threshold', val: leadFT, cls: '' });
+    rows.push({ key: 'Fallback Turns', val: leadFBT, cls: '' });
+    rows.push({ key: 'Context Limit', val: parseInt(leadCL).toLocaleString(), cls: '' });
   }
 
   const html = `<div class="summary-container">
@@ -3427,6 +3483,239 @@ function renderDashboardValues(config) {
     afv.className = 'dashboard-field-value ok';
   }
 
+  /* lead config */
+  renderLeadConfigSection(config);
+}
+
+/* ── lead config on dashboard ── */
+function renderLeadConfigSection(config) {
+  const section = document.getElementById('leadConfigSection');
+  const summary = document.getElementById('leadConfigSummary');
+  if (!section || !summary) return;
+
+  const lp = config.lead_provider || '';
+  if (!lp) {
+    section.style.display = 'none';
+    return;
+  }
+
+  section.style.display = '';
+  /* auto-expand so lead info is visible */
+  const routing = section.querySelector('.channel-routing');
+  if (routing) routing.classList.add('expanded');
+
+  const prov = PROVIDERS[lp];
+  const provName = prov ? prov.name : lp;
+  const provIcon = prov ? prov.icon : '';
+  const model = config.lead_model || (prov && prov.defaultModel) || 'default';
+  const turns = config.lead_turn_count || 3;
+
+  summary.innerHTML = `
+    <div class="channel-route-row" style="border-bottom:none">
+      <span class="channel-route-label" style="flex:1">
+        ${provIcon} ${provName} <span style="color:var(--text-tertiary);font-weight:400;margin-left:4px">${model}</span>
+      </span>
+      <span style="color:var(--text-tertiary);font-size:12px">${turns} turns</span>
+      <button class="dashboard-edit-btn" onclick="startLeadConfigEdit()">edit</button>
+    </div>`;
+}
+
+function toggleLeadConfig() {
+  const section = document.getElementById('leadConfigSection');
+  const routing = section?.querySelector('.channel-routing');
+  if (!routing) return;
+  routing.classList.toggle('expanded');
+}
+
+function populateDashLeadProviders() {
+  const sel = document.getElementById('dashLeadProvider');
+  if (!sel) return;
+  const currentVal = sel.value;
+  sel.innerHTML = '<option value="">None (disable lead model)</option>';
+  const categoryOrder = ['cloud', 'subscription', 'local', 'enterprise'];
+  categoryOrder.forEach(cat => {
+    Object.entries(PROVIDERS).forEach(([id, p]) => {
+      if (p.category !== cat || p.category === 'custom') return;
+      const opt = document.createElement('option');
+      opt.value = id;
+      opt.textContent = p.name;
+      if (id === currentVal) opt.selected = true;
+      sel.appendChild(opt);
+    });
+  });
+}
+
+function onDashLeadProviderChange() {
+  const provSel = document.getElementById('dashLeadProvider');
+  const modelInput = document.getElementById('dashLeadModel');
+  const modelSelect = document.getElementById('dashLeadModelSelect');
+  const modelCustom = document.getElementById('dashLeadModelCustom');
+  if (!provSel) return;
+  const val = provSel.value;
+
+  modelSelect.style.display = 'none';
+  modelSelect.innerHTML = '';
+  modelCustom.style.display = 'none';
+  modelCustom.value = '';
+  modelInput.style.display = '';
+
+  if (!val) { if (modelInput) modelInput.value = ''; return; }
+  const provider = PROVIDERS[val];
+  if (provider && provider.models && provider.models.length > 0) {
+    provider.models.forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m; opt.textContent = m;
+      modelSelect.appendChild(opt);
+    });
+    const customOpt = document.createElement('option');
+    customOpt.value = '__custom__';
+    customOpt.textContent = 'Custom model ID\u2026';
+    modelSelect.appendChild(customOpt);
+    if (provider.defaultModel) {
+      const defOpt = modelSelect.querySelector('option[value="' + provider.defaultModel + '"]');
+      if (defOpt) defOpt.selected = true;
+    }
+    modelSelect.style.display = '';
+    modelInput.style.display = 'none';
+    modelInput.value = modelSelect.value === '__custom__' ? '' : modelSelect.value;
+  }
+  if (modelInput.style.display !== 'none' && !modelInput.value && provider && provider.defaultModel) {
+    modelInput.value = provider.defaultModel;
+  }
+}
+
+function onDashLeadModelSelectChange() {
+  const sel = document.getElementById('dashLeadModelSelect');
+  const modelInput = document.getElementById('dashLeadModel');
+  const modelCustom = document.getElementById('dashLeadModelCustom');
+  if (sel.value === '__custom__') {
+    modelCustom.style.display = '';
+    modelCustom.focus();
+    modelInput.value = '';
+  } else {
+    modelCustom.style.display = 'none';
+    modelCustom.value = '';
+    modelInput.value = sel.value;
+  }
+}
+
+function startLeadConfigEdit() {
+  const summary = document.getElementById('leadConfigSummary');
+  const edit = document.getElementById('leadConfigEdit');
+  if (summary) summary.style.display = 'none';
+  if (edit) edit.style.display = '';
+
+  populateDashLeadProviders();
+
+  const config = dashboardConfig;
+  const lp = config.lead_provider || '';
+  const sel = document.getElementById('dashLeadProvider');
+  if (sel && lp) { sel.value = lp; onDashLeadProviderChange(); }
+
+  const lm = document.getElementById('dashLeadModel');
+  if (lm && config.lead_model) lm.value = config.lead_model;
+  const ltc = document.getElementById('dashLeadTurnCount');
+  if (ltc) ltc.value = config.lead_turn_count || '';
+  const lft = document.getElementById('dashLeadFailureThreshold');
+  if (lft) lft.value = config.lead_failure_threshold || '';
+  const lfbt = document.getElementById('dashLeadFallbackTurns');
+  if (lfbt) lfbt.value = config.lead_fallback_turns || '';
+  const lcl = document.getElementById('dashLeadContextLimit');
+  if (lcl) lcl.value = config.lead_context_limit || '';
+}
+
+function cancelLeadConfigEdit() {
+  const summary = document.getElementById('leadConfigSummary');
+  const edit = document.getElementById('leadConfigEdit');
+  if (summary) summary.style.display = '';
+  if (edit) edit.style.display = 'none';
+}
+
+async function saveLeadConfig() {
+  const config = { ...dashboardConfig };
+  const lp = document.getElementById('dashLeadProvider')?.value || '';
+
+  if (lp) {
+    config.lead_provider = lp;
+    /* resolve model from custom input or select */
+    const customVal = document.getElementById('dashLeadModelCustom');
+    const modelInput = document.getElementById('dashLeadModel');
+    config.lead_model = (customVal && customVal.style.display !== 'none' && customVal.value)
+      ? customVal.value : (modelInput?.value || '');
+    const tc = document.getElementById('dashLeadTurnCount')?.value;
+    const ft = document.getElementById('dashLeadFailureThreshold')?.value;
+    const fbt = document.getElementById('dashLeadFallbackTurns')?.value;
+    const cl = document.getElementById('dashLeadContextLimit')?.value;
+    config.lead_turn_count = tc ? parseInt(tc, 10) : 3;
+    if (ft) config.lead_failure_threshold = parseInt(ft, 10);
+    if (fbt) config.lead_fallback_turns = parseInt(fbt, 10);
+    if (cl) config.lead_context_limit = parseInt(cl, 10);
+  } else {
+    delete config.lead_provider;
+    delete config.lead_model;
+    delete config.lead_turn_count;
+    delete config.lead_failure_threshold;
+    delete config.lead_fallback_turns;
+    delete config.lead_context_limit;
+  }
+
+  config.saved_keys = savedKeys;
+
+  try {
+    const resp = await fetch('/api/setup/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    });
+    const data = await resp.json();
+    if (data.success) {
+      dashboardConfig = config;
+      cancelLeadConfigEdit();
+      renderLeadConfigSection(config);
+      renderModelCards(config);
+      const successEl = document.getElementById('dashboardSuccess');
+      if (successEl) successEl.classList.add('show');
+      pollDashboardRestart();
+    } else {
+      alert('Save failed: ' + (data.error || 'unknown error'));
+    }
+  } catch(e) {
+    alert('Could not save lead config');
+  }
+}
+
+async function removeLeadConfig() {
+  if (!confirm('Remove lead model configuration?')) return;
+  const config = { ...dashboardConfig };
+  config.lead_provider = '';
+  config.lead_model = '';
+  delete config.lead_turn_count;
+  delete config.lead_failure_threshold;
+  delete config.lead_fallback_turns;
+  delete config.lead_context_limit;
+  config.saved_keys = savedKeys;
+
+  try {
+    const resp = await fetch('/api/setup/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    });
+    const data = await resp.json();
+    if (data.success) {
+      dashboardConfig = config;
+      cancelLeadConfigEdit();
+      renderLeadConfigSection(config);
+      renderModelCards(config);
+      const successEl = document.getElementById('dashboardSuccess');
+      if (successEl) successEl.classList.add('show');
+      pollDashboardRestart();
+    } else {
+      alert('Remove failed: ' + (data.error || 'unknown error'));
+    }
+  } catch(e) {
+    alert('Could not remove lead config');
+  }
 }
 
 function startDashboardEdit(field) {
@@ -3534,6 +3823,9 @@ function renderModelCards(config) {
     routeMap[mid].push(ch);
   }
 
+  const leadProv = config.lead_provider || '';
+  const leadModel = config.lead_model || '';
+
   let html = '';
   models.forEach(m => {
     const prov = PROVIDERS[m.provider];
@@ -3541,6 +3833,7 @@ function renderModelCards(config) {
     const provName = prov ? prov.name : m.provider;
     const isDefault = m.is_default;
     const channels = routeMap[m.id] || [];
+    const isLead = leadProv && m.provider === leadProv && leadModel && m.model === leadModel;
 
     const needsKey = m.provider !== 'github-copilot' && !['ollama','lm-studio','docker-model-runner','ramalama'].includes(m.provider);
     const isEditing = _openEditModelId === m.id;
@@ -3553,6 +3846,7 @@ function renderModelCards(config) {
       <div class="model-card-name">${m.model}</div>
       <div class="model-card-badges">
         ${isDefault ? '<span class="model-badge default">default</span>' : '<span class="model-badge" style="opacity:0.5">click to set default</span>'}
+        ${isLead ? '<span class="model-badge lead">lead</span>' : ''}
         ${channels.map(ch => `<span class="model-badge channel">${ch}</span>`).join('')}
       </div>`;
 

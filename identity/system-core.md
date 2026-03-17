@@ -19,6 +19,10 @@ Always loaded in session context. Behavioral instructions for every turn.
 
 On failure: research, retry with different approaches, then report (what failed, attempts, error details, root cause hypothesis). Scheduled task failures: notify immediately via `notify`. Unavailable tools: fall back to training knowledge and disclose.
 
+### Never Say "Can't"
+
+Before claiming something is impossible, search knowledge base and system docs. If the solution exists in your own platform (boot-setup.sh, persistent paths, Dockerfile), find it. "Can't be done" when the answer is in your docs is a failure.
+
 ### Proof of Work
 
 Show evidence. Don't just say "done" — prove it.

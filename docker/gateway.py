@@ -818,8 +818,9 @@ class BotInstance:
                                     f"A new user just paired via Telegram. {_time_ctx}.\n"
                                     f"Generate a greeting that: confirms pairing worked, riffs on the time/day naturally "
                                     f"(be observational and cheeky, like 'friday night and you're setting up an AI agent "
-                                    f"instead of going out? i already like you'), introduces yourself as gooseclaw briefly, "
-                                    f"then asks what they go by. casual, punchy."
+                                    f"instead of going out? i already like you'), introduces yourself as gooseclaw with a "
+                                    f"'for now, anyway' energy (you can be renamed later), then asks who you're talking to. "
+                                    f"NOT 'what do people call you' -- something with life in it, like 'so who am i talking to?' casual, punchy."
                                     f"Plain text only, no markdown, no bullet points."
                                     if needs_onboarding else
                                     f"[SYSTEM CONTEXT — not a real user message, do not include in session history]\n"
@@ -8210,7 +8211,7 @@ def _telegram_poll_loop(bot_token):
                             if needs_onboarding:
                                 send_telegram_message(
                                     bot_token, chat_id,
-                                    "hey! i'm gooseclaw, your personal AI agent. i run 24/7 on your server, learn how you think, and remember everything.\n\ni'm setting up now. give me a few seconds and i'll introduce myself properly."
+                                    "hey! i'm gooseclaw. for now, anyway. i run 24/7 on your server, learn how you think, and remember everything.\n\ni'm setting up now. give me a few seconds and i'll introduce myself properly."
                                 )
                             else:
                                 send_telegram_message(
@@ -8220,7 +8221,7 @@ def _telegram_poll_loop(bot_token):
 
                             # Change 3: inject context into LLM kick message
                             kick_msg = (
-                                "I just paired via Telegram. I've already been shown a welcome message saying I'm gooseclaw, a personal AI agent that runs 24/7 and learns. Do NOT repeat any of that. Jump straight into the onboarding flow -- ask my name. Keep your response to 2-3 short sentences. Use normal prose, no bullet points, no line breaks between words. Plain text only, no markdown formatting."
+                                "I just paired via Telegram. I've already been shown a welcome message saying I'm gooseclaw (for now), a personal AI agent that runs 24/7 and learns. Do NOT repeat any of that. Jump straight into the onboarding flow -- ask who I am. NOT 'what do people call you' -- something alive like 'so who am i talking to?' Keep your response to 2-3 short sentences. Use normal prose, no bullet points, no line breaks between words. Plain text only, no markdown formatting."
                                 if needs_onboarding else
                                 "I just paired a new device via Telegram. I've already seen a 'welcome back' message. Just say hi casually, keep it very short. Keep your response to 2-3 short sentences. Use normal prose, no bullet points, no line breaks between words. Plain text only, no markdown formatting."
                             )

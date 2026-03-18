@@ -21,17 +21,29 @@ Per-turn critical rules are in turn-rules.md (injected via MOIM, always visible)
 # System procedures, platform docs, schemas, and runtime facts are stored in
 # a ChromaDB vector database. Use the Knowledge MCP extension to access them:
 #
-# knowledge_search(query, type?, limit?) - Semantic search across all knowledge.
+# knowledge_search(query, type?, limit?, since?) - Semantic search across all knowledge.
 #   Types: fact, procedure, preference, integration, schema
+#   since: optional ISO date filter, e.g. "2026-03-17" (only chunks created on/after)
 #   Example: knowledge_search("how to store credentials", type="procedure")
+#   Example: knowledge_search("project updates", since="2026-03-18")
 #
 # knowledge_upsert(key, content, type, refs?) - Store or update a runtime fact.
+#   Automatically tracks created_at and updated_at timestamps.
 #   Example: knowledge_upsert("integration.slack", "Slack webhook at ...", "integration")
 #
 # knowledge_get(key) - Exact key lookup (faster than search when you know the key).
+#   Returns timestamps (created_at, updated_at) in the output.
 #   Example: knowledge_get("system.rules.credentials-and-security")
+#
+# knowledge_delete(key) - Delete a runtime chunk by key. System chunks cannot be deleted.
+#   Example: knowledge_delete("integration.old-service")
+#
+# knowledge_recent(limit?) - Get most recently created/updated chunks, newest first.
+#   Use this when asked "what did you store recently?" or "show latest entries".
+#   Example: knowledge_recent(5)
 #
 # Do NOT read system.md, memory.md, or onboarding.md directly.
 # Do NOT write facts, integrations, or preferences to user.md or memory.md.
 # Use knowledge_upsert to store ALL new facts, integrations, and learned information.
 # Use knowledge_search to find relevant procedures, facts, and integrations on demand.
+# Use knowledge_recent when the user asks about recently stored entries or wants a timeline.

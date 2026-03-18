@@ -5,6 +5,7 @@ in ChromaDB. Idempotent: uses upsert so re-running is safe.
 """
 import os
 import re
+import time
 import chromadb
 
 
@@ -62,6 +63,7 @@ def migrate(identity_dir=None, chroma_path=None):
         chunk_id = "memory.{}".format(slug)
         chunk_type = _map_type(title)
 
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         chunks.append({
             "id": chunk_id,
             "text": "## {}\n\n{}".format(title, body),
@@ -72,6 +74,8 @@ def migrate(identity_dir=None, chroma_path=None):
                 "namespace": "runtime",
                 "refs": "",
                 "key": chunk_id,
+                "created_at": now,
+                "updated_at": now,
             },
         })
 

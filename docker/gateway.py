@@ -7005,6 +7005,18 @@ def _process_memory_extraction(response_text):
             # prefix with "memory." to identify auto-extracted chunks
             full_key = f"memory.{key}" if not key.startswith("memory.") else key
 
+            now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+            # preserve created_at if chunk already exists
+            created_at = now
+            try:
+                existing = col.get(ids=[full_key], include=["metadatas"])
+                if existing["ids"]:
+                    old_meta = existing["metadatas"][0] if existing["metadatas"] else {}
+                    created_at = old_meta.get("created_at", now)
+            except Exception:
+                pass
+
             try:
                 col.upsert(
                     ids=[full_key],
@@ -7016,6 +7028,8 @@ def _process_memory_extraction(response_text):
                         "namespace": "runtime",
                         "refs": "",
                         "key": full_key,
+                        "created_at": created_at,
+                        "updated_at": now,
                     }],
                 )
                 upserted += 1

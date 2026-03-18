@@ -1,12 +1,14 @@
-"""FastMCP knowledge server with 4 tools wrapping ChromaDB.
+"""FastMCP knowledge server with 5 tools wrapping ChromaDB.
 
 Two-namespace architecture: system (rebuilt on deploy) + runtime (persists).
+All chunks carry created_at/updated_at timestamps (ISO 8601 UTC).
 All logging to stderr to avoid corrupting MCP stdio protocol.
 """
 
 import os
 import sys
 import logging
+import time
 import chromadb
 from mcp.server.fastmcp import FastMCP
 
@@ -28,13 +30,14 @@ mcp = FastMCP("knowledge")
 
 
 @mcp.tool()
-def knowledge_search(query: str, type: str = "", limit: int = 5) -> str:
+def knowledge_search(query: str, type: str = "", limit: int = 5, since: str = "") -> str:
     """Search the knowledge base semantically. Returns top matching chunks with similarity scores.
 
     Args:
         query: Natural language search query
         type: Optional filter by chunk type (fact, procedure, preference, integration, schema)
         limit: Max results (default 5, max 10)
+        since: Optional ISO date filter, e.g. "2026-03-17". Only returns chunks created on or after this date.
     """
     limit = max(1, min(limit, 10))
     where_filter = {"type": type} if type else None
@@ -55,12 +58,22 @@ def knowledge_search(query: str, type: str = "", limit: int = 5) -> str:
                 dist = r["distances"][0][i] if r["distances"] else None
                 meta = r["metadatas"][0][i] if r["metadatas"] else {}
                 score = round(1 - dist, 3) if dist is not None else None
+                created = meta.get("created_at", "")
+                updated = meta.get("updated_at", "")
+
+                # apply since filter: exclude chunks without timestamps or before cutoff
+                if since:
+                    if not created or str(created) < since:
+                        continue
+
                 results.append({
                     "text": doc,
                     "score": score,
                     "key": r["ids"][0][i],
                     "type": meta.get("type", "?"),
                     "refs": meta.get("refs", ""),
+                    "created_at": created,
+                    "updated_at": updated,
                 })
 
     results.sort(key=lambda x: x.get("score", 0), reverse=True)
@@ -71,7 +84,16 @@ def knowledge_search(query: str, type: str = "", limit: int = 5) -> str:
 
     lines = []
     for r in results:
-        lines.append(f"[{r.get('type', '?')}] (score: {r.get('score', '?')}) {r['key']}")
+        ts_parts = []
+        if r.get("created_at"):
+            ts_parts.append(f"created: {r['created_at']}")
+        if r.get("updated_at"):
+            ts_parts.append(f"updated: {r['updated_at']}")
+        ts_str = " | ".join(ts_parts)
+        header = f"[{r.get('type', '?')}] (score: {r.get('score', '?')}) {r['key']}"
+        if ts_str:
+            header += f" ({ts_str})"
+        lines.append(header)
         lines.append(r["text"])
         if r.get("refs"):
             lines.append(f"  refs: {r['refs']}")
@@ -93,6 +115,15 @@ def knowledge_upsert(key: str, content: str, type: str, refs: str = "") -> str:
     if type not in valid_types:
         return f"Invalid type '{type}'. Must be one of: {', '.join(valid_types)}"
 
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    # check if chunk already exists to preserve created_at
+    existing = runtime_col.get(ids=[key], include=["metadatas"])
+    created_at = now
+    if existing["ids"]:
+        old_meta = existing["metadatas"][0] if existing["metadatas"] else {}
+        created_at = old_meta.get("created_at", now)
+
     try:
         runtime_col.upsert(
             ids=[key],
@@ -104,6 +135,8 @@ def knowledge_upsert(key: str, content: str, type: str, refs: str = "") -> str:
                 "namespace": "runtime",
                 "refs": refs,
                 "key": key,
+                "created_at": created_at,
+                "updated_at": now,
             }],
         )
     except Exception as e:
@@ -125,10 +158,15 @@ def knowledge_get(key: str) -> str:
         if got["ids"]:
             doc = got["documents"][0]
             meta = got["metadatas"][0] if got["metadatas"] else {}
-            lines = [
-                f"[{meta.get('type', '?')}] {key}",
-                doc,
-            ]
+            header = f"[{meta.get('type', '?')}] {key}"
+            ts_parts = []
+            if meta.get("created_at"):
+                ts_parts.append(f"created: {meta['created_at']}")
+            if meta.get("updated_at"):
+                ts_parts.append(f"updated: {meta['updated_at']}")
+            if ts_parts:
+                header += f" ({' | '.join(ts_parts)})"
+            lines = [header, doc]
             if meta.get("refs"):
                 lines.append(f"  refs: {meta['refs']}")
             return "\n".join(lines)
@@ -156,6 +194,69 @@ def knowledge_delete(key: str) -> str:
         return f"Deleted knowledge chunk: {key}"
 
     return f"No chunk found with key: {key}"
+
+
+@mcp.tool()
+def knowledge_recent(limit: int = 5) -> str:
+    """Get the most recently created or updated knowledge chunks, sorted by time (newest first).
+
+    Use this to answer "what did you store recently?" or "show me latest knowledge entries".
+
+    Args:
+        limit: Max results (default 5, max 20)
+    """
+    limit = max(1, min(limit, 20))
+
+    all_entries = []
+    for col in [system_col, runtime_col]:
+        try:
+            # fetch all entries with metadata
+            got = col.get(include=["documents", "metadatas"])
+            if not got["ids"]:
+                continue
+            for i, chunk_id in enumerate(got["ids"]):
+                doc = got["documents"][i] if got["documents"] else ""
+                meta = got["metadatas"][i] if got["metadatas"] else {}
+                created = str(meta.get("created_at", ""))
+                updated = str(meta.get("updated_at", ""))
+                # use the most recent timestamp for sorting
+                sort_ts = updated or created or ""
+                all_entries.append({
+                    "key": chunk_id,
+                    "text": doc,
+                    "type": meta.get("type", "?"),
+                    "created_at": created,
+                    "updated_at": updated,
+                    "sort_ts": sort_ts,
+                    "namespace": meta.get("namespace", "?"),
+                })
+        except Exception as e:
+            logger.warning("failed to fetch from collection: %s", e)
+
+    # sort by timestamp descending, entries without timestamps go last
+    all_entries.sort(key=lambda x: x["sort_ts"] or "0000", reverse=True)
+    all_entries = all_entries[:limit]
+
+    if not all_entries:
+        return "No knowledge entries found."
+
+    lines = []
+    for e in all_entries:
+        ts_parts = []
+        if e["created_at"]:
+            ts_parts.append(f"created: {e['created_at']}")
+        if e["updated_at"]:
+            ts_parts.append(f"updated: {e['updated_at']}")
+        ts_str = " | ".join(ts_parts) if ts_parts else "no timestamp"
+        lines.append(f"[{e['type']}] [{e['namespace']}] {e['key']} ({ts_str})")
+        # show first 200 chars of content for brevity
+        preview = e["text"][:200].replace("\n", " ")
+        if len(e["text"]) > 200:
+            preview += "..."
+        lines.append(f"  {preview}")
+        lines.append("")
+
+    return "\n".join(lines)
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ chunks them, and indexes into ChromaDB's "system" collection. Leaves the
 "runtime" collection untouched.
 """
 import os
+import time
 import logging
 import chromadb
 from knowledge.chunker import chunk_file
@@ -54,6 +55,12 @@ def run_index(client=None, identity_dir=None):
                 chunks.extend(chunk_file(path, "schemas/{}".format(fname)))
 
     if chunks:
+        # stamp all system chunks with the deploy time
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        for c in chunks:
+            c["metadata"]["created_at"] = now
+            c["metadata"]["updated_at"] = now
+
         try:
             system_col.add(
                 ids=[c["id"] for c in chunks],

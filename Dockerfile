@@ -14,7 +14,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # docker/requirements.lock has hash-pinned transitive deps (generate via docker/generate-lockfile.sh)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-      curl git python3 python3-pip python3-yaml ca-certificates jq bzip2 libgomp1 tzdata libssl3 && \
+      curl git sudo python3 python3-pip python3-yaml ca-certificates jq bzip2 libgomp1 tzdata libssl3 && \
     rm -rf /var/lib/apt/lists/*
 
 # install node 20 LTS (ubuntu 22.04 apt ships v12, MCP tools need 18+)
@@ -43,7 +43,8 @@ RUN curl -fsSL https://github.com/block/goose/releases/download/stable/download_
 # for gateway.py and all goose/claude processes. This is required because
 # claude CLI refuses --dangerously-skip-permissions when running as root.
 RUN groupadd -r gooseclaw && \
-    useradd -r -g gooseclaw -m -d /home/gooseclaw -s /bin/sh gooseclaw
+    useradd -r -g gooseclaw -m -d /home/gooseclaw -s /bin/sh gooseclaw && \
+    echo 'gooseclaw ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/gooseclaw
 
 # app directory
 WORKDIR /app

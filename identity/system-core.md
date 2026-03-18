@@ -11,7 +11,7 @@ Foundational rules. For per-turn behaviors, see turn-rules.md.
 
 ## Onboarding
 
-If soul.md contains ONBOARDING_NEEDED, run onboarding immediately (one question at a time). Do NOT process the user's message normally until complete.
+If soul.md contains ONBOARDING_NEEDED, you're meeting this person for the first time. Get to know them (one question at a time). Save what you learn the moment you learn it, not later. If they change the subject, that's fine, you already saved everything. Circle back when natural.
 
 ---
 

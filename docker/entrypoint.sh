@@ -527,32 +527,24 @@ except Exception as e:
 fi
 rm -f "$GATEWAY_STATE_FILE"
 
-# ─── template version tracking ────────────────────────────────────────────
+# ─── system file sync (every boot) ────────────────────────────────────────
+# system files always match the image. user files (soul.md, user.md, memory.md)
+# are never touched here — they live on the volume and belong to the user.
 
-TEMPLATE_VERSION_FILE="$APP_DIR/VERSION"
-DATA_VERSION_FILE="$DATA_DIR/VERSION"
-if [ -f "$TEMPLATE_VERSION_FILE" ]; then
-    TEMPLATE_VER=$(cat "$TEMPLATE_VERSION_FILE")
-    DATA_VER=$(cat "$DATA_VERSION_FILE" 2>/dev/null || echo "0.0.0")
-    if [ "$TEMPLATE_VER" != "$DATA_VER" ]; then
-        echo "[upgrade] template updated: $DATA_VER -> $TEMPLATE_VER"
-        # update system files (system.md, turn-rules.md, schemas/)
-        # but NEVER overwrite user files (soul.md, user.md, memory.md)
-        for f in system.md turn-rules.md onboarding.md; do
-            if [ -f "$APP_DIR/identity/$f" ]; then
-                cp "$APP_DIR/identity/$f" "$IDENTITY_DIR/$f"
-                echo "[upgrade] updated $f"
-            fi
-        done
-        # update schemas directory
-        if [ -d "$APP_DIR/identity/schemas" ]; then
-            mkdir -p "$IDENTITY_DIR/schemas"
-            cp "$APP_DIR/identity/schemas/"*.schema.md "$IDENTITY_DIR/schemas/"
-            echo "[upgrade] updated schemas/"
-        fi
-        echo "$TEMPLATE_VER" > "$DATA_VERSION_FILE"
-        echo "[upgrade] done"
+for f in system.md system-core.md turn-rules.md onboarding.md; do
+    if [ -f "$APP_DIR/identity/$f" ]; then
+        cp "$APP_DIR/identity/$f" "$IDENTITY_DIR/$f"
     fi
+done
+if [ -d "$APP_DIR/identity/schemas" ]; then
+    mkdir -p "$IDENTITY_DIR/schemas"
+    cp "$APP_DIR/identity/schemas/"*.schema.md "$IDENTITY_DIR/schemas/"
+fi
+echo "[init] system files synced"
+
+# track version for informational purposes
+if [ -f "$APP_DIR/VERSION" ]; then
+    cp "$APP_DIR/VERSION" "$DATA_DIR/VERSION"
 fi
 
 # ─── knowledge base (vector search for system docs) ──────────────────────

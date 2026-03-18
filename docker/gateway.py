@@ -6333,23 +6333,31 @@ def _handle_cmd_help(ctx):
     ctx["send_fn"](help_text)
 
 
+def _restart_goosed():
+    """Kill and restart goosed subprocess to cancel all in-flight work."""
+    _gateway_log.info("restarting goosed (stop requested)")
+    stop_goosed()
+    start_goosed()
+
+
 def _handle_cmd_stop(ctx):
     """Handle /stop command."""
     chat_id = ctx["user_id"]
     state = ctx.get("channel_state", _telegram_state)
     channel = ctx.get("channel", "telegram")
     sock_ref = state.pop_active_relay(chat_id)
-    if sock_ref and sock_ref[0]:
-        try:
-            if len(sock_ref) > 1 and hasattr(sock_ref[1], 'set'):
-                sock_ref[1].set()
-            sid = _session_manager.get(channel, chat_id)
+    if sock_ref:
+        # set cancel event regardless of whether socket is established yet
+        if len(sock_ref) > 1 and hasattr(sock_ref[1], 'set'):
+            sock_ref[1].set()
+        # close socket if it exists
+        if sock_ref[0]:
             try:
                 sock_ref[0].close()
             except Exception:
                 pass
-        except Exception:
-            pass
+        # restart goosed to kill any in-flight LLM work
+        threading.Thread(target=_restart_goosed, daemon=True).start()
         ctx["send_fn"]("Stopped.")
         _gateway_log.info(f"[{channel}] /stop killed relay for chat {chat_id}")
     else:
@@ -7340,6 +7348,10 @@ def _do_rest_relay(user_text, session_id, content_blocks=None, sock_ref=None, ti
         media_blocks = []
 
         for event in _parse_sse_events(resp):
+            # check if relay was cancelled (e.g. /stop)
+            if sock_ref and len(sock_ref) > 1 and hasattr(sock_ref[1], 'is_set') and sock_ref[1].is_set():
+                break
+
             etype = event.get("type", "")
 
             if etype == "Message":
@@ -7438,6 +7450,10 @@ def _do_rest_relay_streaming(user_text, session_id, flush_cb, verbosity="balance
             return "", f"goosed /reply returned {resp.status}: {body[:200]}", []
 
         for event in _parse_sse_events(resp):
+            # check if relay was cancelled (e.g. /stop)
+            if sock_ref and len(sock_ref) > 1 and hasattr(sock_ref[1], 'is_set') and sock_ref[1].is_set():
+                break
+
             etype = event.get("type", "")
 
             if etype == "Message":

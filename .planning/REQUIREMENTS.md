@@ -23,10 +23,10 @@
 
 ### Gateway Integration
 
-- [ ] **GW-01**: Gateway memory writer uses mem0.add() instead of manual chromadb extraction
-- [ ] **GW-02**: Memory extraction runs async in background thread with timeout (no blocking)
-- [ ] **GW-03**: Identity routing preserved — user.md/soul.md stay file-based, mem0 handles knowledge only
-- [ ] **GW-04**: Identity/knowledge routing rule enforced: traits stable 6+ months (name, role, preferences, communication style) → user.md via separate prompt. Everything else (projects, facts, events, integrations) → mem0 via add(). No duplication between the two.
+- [x] **GW-01**: Gateway memory writer uses mem0.add() instead of manual chromadb extraction
+- [x] **GW-02**: Memory extraction runs async in background thread with timeout (no blocking)
+- [x] **GW-03**: Identity routing preserved — user.md/soul.md stay file-based, mem0 handles knowledge only
+- [x] **GW-04**: Identity/knowledge routing rule enforced: traits stable 6+ months (name, role, preferences, communication style) → user.md via separate prompt. Everything else (projects, facts, events, integrations) → mem0 via add(). No duplication between the two.
 
 ### Migration
 
@@ -76,10 +76,10 @@
 | CFG-02 | Phase 22 | Pending |
 | CFG-03 | Phase 22 | Pending |
 | CFG-04 | Phase 22 | Pending |
-| GW-01 | Phase 23 | Pending |
-| GW-02 | Phase 23 | Pending |
-| GW-03 | Phase 23 | Pending |
-| GW-04 | Phase 23 | Pending |
+| GW-01 | Phase 23 | Complete |
+| GW-02 | Phase 23 | Complete |
+| GW-03 | Phase 23 | Complete |
+| GW-04 | Phase 23 | Complete |
 | MIG-01 | Phase 24 | Pending |
 | MIG-02 | Phase 24 | Pending |
 | MIG-03 | Phase 24 | Pending |

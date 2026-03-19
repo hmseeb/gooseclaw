@@ -675,6 +675,7 @@ class TestProcessMemoryExtraction(unittest.TestCase):
                 response = json.dumps({"identity": ["some trait"]})
                 gateway._process_memory_extraction(response)  # should not raise
 
+    @unittest.skip("ChromaDB knowledge path removed in Phase 23 - replaced by mem0.add()")
     def test_knowledge_items_upserted_to_chromadb(self):
         """Knowledge items should be upserted to the ChromaDB runtime collection."""
         mock_col = MagicMock()
@@ -695,6 +696,7 @@ class TestProcessMemoryExtraction(unittest.TestCase):
         assert first_call[1]["metadatas"][0]["type"] == "fact"
         assert first_call[1]["metadatas"][0]["source"] == "memory-writer"
 
+    @unittest.skip("ChromaDB knowledge path removed in Phase 23 - replaced by mem0.add()")
     def test_knowledge_invalid_type_defaults_to_fact(self):
         """Invalid chunk types should default to 'fact'."""
         mock_col = MagicMock()
@@ -710,6 +712,7 @@ class TestProcessMemoryExtraction(unittest.TestCase):
         assert mock_col.upsert.call_count == 1
         assert mock_col.upsert.call_args_list[0][1]["metadatas"][0]["type"] == "fact"
 
+    @unittest.skip("ChromaDB knowledge path removed in Phase 23 - replaced by mem0.add()")
     def test_knowledge_skips_items_without_key_or_content(self):
         """Knowledge items missing key or content should be skipped."""
         mock_col = MagicMock()
@@ -728,6 +731,7 @@ class TestProcessMemoryExtraction(unittest.TestCase):
         assert mock_col.upsert.call_count == 1
         assert mock_col.upsert.call_args_list[0][1]["ids"] == ["memory.valid.item"]
 
+    @unittest.skip("ChromaDB knowledge path removed in Phase 23 - replaced by mem0.add()")
     def test_knowledge_key_prefixed_with_memory(self):
         """Keys should be prefixed with 'memory.' unless already prefixed."""
         mock_col = MagicMock()
@@ -744,6 +748,7 @@ class TestProcessMemoryExtraction(unittest.TestCase):
         ids = [call[1]["ids"][0] for call in mock_col.upsert.call_args_list]
         assert ids == ["memory.test.unprefixed", "memory.already.prefixed"]
 
+    @unittest.skip("ChromaDB knowledge path removed in Phase 23 - replaced by mem0.add()")
     def test_chromadb_unavailable_gracefully_handled(self):
         """If ChromaDB is unavailable, knowledge items should be skipped without crashing."""
         with patch.object(gateway, "_get_knowledge_collection", return_value=None):
@@ -755,6 +760,7 @@ class TestProcessMemoryExtraction(unittest.TestCase):
                 })
                 gateway._process_memory_extraction(response)
 
+    @unittest.skip("ChromaDB knowledge path removed in Phase 23 - replaced by mem0.add()")
     def test_chromadb_upsert_error_continues(self):
         """If one upsert fails, remaining items should still be processed."""
         mock_col = MagicMock()
@@ -771,6 +777,7 @@ class TestProcessMemoryExtraction(unittest.TestCase):
 
         assert mock_col.upsert.call_count == 2
 
+    @unittest.skip("ChromaDB knowledge path removed in Phase 23 - replaced by mem0.add()")
     def test_mixed_identity_and_knowledge(self):
         """Both identity and knowledge items should be processed in one extraction."""
         mock_col = MagicMock()
@@ -791,6 +798,7 @@ class TestProcessMemoryExtraction(unittest.TestCase):
             assert "name is Haseeb" in content
             assert mock_col.upsert.call_count == 1
 
+    @unittest.skip("ChromaDB knowledge path removed in Phase 23 - replaced by mem0.add()")
     def test_nested_json_in_llm_response(self):
         """LLM responses often wrap JSON in explanation text."""
         mock_col = MagicMock()
@@ -809,6 +817,392 @@ class TestProcessMemoryExtraction(unittest.TestCase):
                 content = f.read()
             assert "name is Haseeb" in content
             assert mock_col.upsert.call_count == 1
+
+
+# ── mem0 integration tests (Phase 23) ──────────────────────────────────────
+
+class TestConvertToMem0Messages(unittest.TestCase):
+    """Tests for _convert_to_mem0_messages() format conversion."""
+
+    @unittest.skip("Waiting for Plan 23-02 implementation")
+    def test_basic_conversion(self):
+        """Gateway format [role/text] converts to mem0 format [role/content]."""
+        messages = [
+            {"role": "user", "text": "hello"},
+            {"role": "assistant", "text": "hi there"},
+        ]
+        result = gateway._convert_to_mem0_messages(messages)
+        assert len(result) == 2
+        assert result[0] == {"role": "user", "content": "hello"}
+        assert result[1] == {"role": "assistant", "content": "hi there"}
+
+    @unittest.skip("Waiting for Plan 23-02 implementation")
+    def test_empty_messages_filtered(self):
+        """Messages with empty or whitespace-only text are filtered out."""
+        messages = [
+            {"role": "user", "text": "hello"},
+            {"role": "assistant", "text": ""},
+            {"role": "user", "text": "   "},
+        ]
+        result = gateway._convert_to_mem0_messages(messages)
+        assert len(result) == 1
+        assert result[0]["content"] == "hello"
+
+    @unittest.skip("Waiting for Plan 23-02 implementation")
+    def test_unknown_roles_mapped_to_user(self):
+        """Roles not in (user, assistant, system) map to user."""
+        messages = [
+            {"role": "bot", "text": "something"},
+            {"role": "tool", "text": "result"},
+        ]
+        result = gateway._convert_to_mem0_messages(messages)
+        assert all(m["role"] == "user" for m in result)
+
+    @unittest.skip("Waiting for Plan 23-02 implementation")
+    def test_text_truncated_to_2000_chars(self):
+        """Message text is truncated to 2000 characters."""
+        messages = [{"role": "user", "text": "x" * 5000}]
+        result = gateway._convert_to_mem0_messages(messages)
+        assert len(result[0]["content"]) == 2000
+
+    @unittest.skip("Waiting for Plan 23-02 implementation")
+    def test_empty_list_returns_empty(self):
+        """Empty input returns empty output."""
+        result = gateway._convert_to_mem0_messages([])
+        assert result == []
+
+
+class TestGetMem0(unittest.TestCase):
+    """Tests for _get_mem0() lazy initialization."""
+
+    @unittest.skip("Waiting for Plan 23-02 implementation")
+    def test_lazy_init_creates_on_first_call(self):
+        """First call creates mem0 instance, second returns cached."""
+        mock_memory = MagicMock()
+        mock_config = {"version": "v1.1"}
+        with patch("gateway._mem0_instance", None), \
+             patch("gateway._mem0_init_lock", threading.Lock()), \
+             patch.dict("sys.modules", {"mem0": MagicMock()}), \
+             patch("gateway.os.environ", {}, create=True):
+            # Mock the imports inside _get_mem0
+            import importlib
+            mock_mem0_module = MagicMock()
+            mock_mem0_module.Memory.from_config.return_value = mock_memory
+            mock_config_module = MagicMock()
+            mock_config_module.build_mem0_config.return_value = mock_config
+            with patch.dict("sys.modules", {
+                "mem0": mock_mem0_module,
+                "mem0_config": mock_config_module,
+            }):
+                gateway._mem0_instance = None
+                result1 = gateway._get_mem0()
+                result2 = gateway._get_mem0()
+                assert result1 is result2
+                # from_config called only once (cached)
+                assert mock_mem0_module.Memory.from_config.call_count == 1
+        # cleanup
+        gateway._mem0_instance = None
+
+    @unittest.skip("Waiting for Plan 23-02 implementation")
+    def test_thread_safety(self):
+        """Concurrent calls don't create multiple instances."""
+        call_count = {"n": 0}
+        mock_memory = MagicMock()
+
+        original_get = gateway._get_mem0
+
+        def slow_init():
+            call_count["n"] += 1
+            time.sleep(0.05)
+            return mock_memory
+
+        gateway._mem0_instance = None
+        mock_mem0_module = MagicMock()
+        mock_mem0_module.Memory.from_config.side_effect = lambda c: slow_init()
+        mock_config_module = MagicMock()
+        mock_config_module.build_mem0_config.return_value = {}
+
+        with patch.dict("sys.modules", {
+            "mem0": mock_mem0_module,
+            "mem0_config": mock_config_module,
+        }):
+            threads = []
+            results = []
+            def call_get():
+                results.append(gateway._get_mem0())
+            for _ in range(4):
+                t = threading.Thread(target=call_get)
+                threads.append(t)
+                t.start()
+            for t in threads:
+                t.join()
+            # Only one instance created despite concurrent calls
+            assert mock_mem0_module.Memory.from_config.call_count == 1
+        gateway._mem0_instance = None
+
+    @unittest.skip("Waiting for Plan 23-02 implementation")
+    def test_telemetry_disabled(self):
+        """MEM0_TELEMETRY set to 'false' during init."""
+        gateway._mem0_instance = None
+        mock_mem0_module = MagicMock()
+        mock_mem0_module.Memory.from_config.return_value = MagicMock()
+        mock_config_module = MagicMock()
+        mock_config_module.build_mem0_config.return_value = {}
+
+        with patch.dict("sys.modules", {
+            "mem0": mock_mem0_module,
+            "mem0_config": mock_config_module,
+        }), patch.dict(os.environ, {}, clear=False):
+            gateway._get_mem0()
+            assert os.environ.get("MEM0_TELEMETRY") == "false"
+        gateway._mem0_instance = None
+
+    @unittest.skip("Waiting for Plan 23-02 implementation")
+    def test_init_failure_returns_none(self):
+        """Exception during init returns None and logs error."""
+        gateway._mem0_instance = None
+        mock_mem0_module = MagicMock()
+        mock_mem0_module.Memory.from_config.side_effect = RuntimeError("init boom")
+        mock_config_module = MagicMock()
+        mock_config_module.build_mem0_config.return_value = {}
+
+        with patch.dict("sys.modules", {
+            "mem0": mock_mem0_module,
+            "mem0_config": mock_config_module,
+        }):
+            result = gateway._get_mem0()
+            assert result is None
+        gateway._mem0_instance = None
+
+
+class TestMem0Knowledge(unittest.TestCase):
+    """Tests for _mem0_add_knowledge() mem0.add() integration."""
+
+    @unittest.skip("Waiting for Plan 23-02 implementation")
+    def test_calls_mem0_add_with_converted_messages(self):
+        """_mem0_add_knowledge calls m.add(messages=..., user_id=...)."""
+        mock_memory = MagicMock()
+        mock_memory.add.return_value = {"results": [{"id": "test", "event": "ADD"}]}
+        with patch.object(gateway, "_get_mem0", return_value=mock_memory):
+            messages = [
+                {"role": "user", "text": "hello world"},
+                {"role": "assistant", "text": "hi there"},
+            ]
+            gateway._mem0_add_knowledge(messages, user_id="test-user")
+
+        mock_memory.add.assert_called_once()
+        call_kwargs = mock_memory.add.call_args
+        assert call_kwargs[1]["user_id"] == "test-user"
+        # Messages should be in mem0 format (content, not text)
+        msgs = call_kwargs[1]["messages"]
+        assert msgs[0]["content"] == "hello world"
+        assert msgs[0]["role"] == "user"
+
+    @unittest.skip("Waiting for Plan 23-02 implementation")
+    def test_skips_when_mem0_unavailable(self):
+        """When _get_mem0() returns None, skips without error."""
+        with patch.object(gateway, "_get_mem0", return_value=None):
+            result = gateway._mem0_add_knowledge(
+                [{"role": "user", "text": "hello"}], user_id="test"
+            )
+            assert result is None
+
+    @unittest.skip("Waiting for Plan 23-02 implementation")
+    def test_skips_when_messages_empty(self):
+        """Empty messages list skips mem0.add() call."""
+        mock_memory = MagicMock()
+        with patch.object(gateway, "_get_mem0", return_value=mock_memory):
+            gateway._mem0_add_knowledge([], user_id="test")
+        mock_memory.add.assert_not_called()
+
+    @unittest.skip("Waiting for Plan 23-02 implementation")
+    def test_skips_when_all_messages_empty_text(self):
+        """Messages with only whitespace text result in no mem0.add() call."""
+        mock_memory = MagicMock()
+        with patch.object(gateway, "_get_mem0", return_value=mock_memory):
+            gateway._mem0_add_knowledge(
+                [{"role": "user", "text": ""}, {"role": "assistant", "text": "  "}],
+                user_id="test",
+            )
+        mock_memory.add.assert_not_called()
+
+
+class TestMem0AddWithTimeout(unittest.TestCase):
+    """Tests for _mem0_add_with_timeout() ThreadPoolExecutor wrapper."""
+
+    @unittest.skip("Waiting for Plan 23-02 implementation")
+    def test_successful_add_returns_result(self):
+        """Successful mem0.add() returns result within timeout."""
+        expected = {"results": [{"id": "abc", "event": "ADD"}]}
+        mock_memory = MagicMock()
+        mock_memory.add.return_value = expected
+        with patch.object(gateway, "_get_mem0", return_value=mock_memory):
+            result = gateway._mem0_add_with_timeout(
+                [{"role": "user", "text": "hello"}],
+                user_id="test",
+                timeout=5,
+            )
+        assert result == expected
+
+    @unittest.skip("Waiting for Plan 23-02 implementation")
+    def test_timeout_returns_none(self):
+        """TimeoutError after N seconds returns None and logs."""
+        mock_memory = MagicMock()
+        def slow_add(**kwargs):
+            time.sleep(5)
+            return {"results": []}
+        mock_memory.add.side_effect = slow_add
+        with patch.object(gateway, "_get_mem0", return_value=mock_memory):
+            result = gateway._mem0_add_with_timeout(
+                [{"role": "user", "text": "hello"}],
+                user_id="test",
+                timeout=0.1,
+            )
+        assert result is None
+
+    @unittest.skip("Waiting for Plan 23-02 implementation")
+    def test_exception_returns_none(self):
+        """Generic Exception returns None and logs."""
+        mock_memory = MagicMock()
+        mock_memory.add.side_effect = RuntimeError("mem0 exploded")
+        with patch.object(gateway, "_get_mem0", return_value=mock_memory):
+            result = gateway._mem0_add_with_timeout(
+                [{"role": "user", "text": "hello"}],
+                user_id="test",
+                timeout=5,
+            )
+        assert result is None
+
+
+class TestIdentityExtractPrompt(unittest.TestCase):
+    """Tests for IDENTITY_EXTRACT_PROMPT content validation."""
+
+    @unittest.skip("Waiting for Plan 23-02 implementation")
+    def test_prompt_mentions_identity(self):
+        """Prompt contains 'identity' (not just 'knowledge')."""
+        prompt = gateway.IDENTITY_EXTRACT_PROMPT
+        assert "identity" in prompt.lower() or "IDENTITY" in prompt
+
+    @unittest.skip("Waiting for Plan 23-02 implementation")
+    def test_prompt_mentions_stable_traits(self):
+        """Prompt mentions '6+ months' or 'stable' for trait duration."""
+        prompt = gateway.IDENTITY_EXTRACT_PROMPT
+        assert "6+ months" in prompt or "stable" in prompt.lower()
+
+    @unittest.skip("Waiting for Plan 23-02 implementation")
+    def test_prompt_excludes_temporal_items(self):
+        """DO NOT section excludes projects, deadlines, integrations."""
+        prompt = gateway.IDENTITY_EXTRACT_PROMPT
+        lower = prompt.lower()
+        assert "project" in lower  # mentioned in DO NOT section
+        assert "deadline" in lower or "current work" in lower
+
+    @unittest.skip("Waiting for Plan 23-02 implementation")
+    def test_prompt_requests_json_with_identity_key(self):
+        """Prompt requests JSON output with 'identity' key."""
+        prompt = gateway.IDENTITY_EXTRACT_PROMPT
+        assert '"identity"' in prompt
+
+
+class TestProcessIdentityExtraction(unittest.TestCase):
+    """Tests for _process_identity_extraction() identity-only routing."""
+
+    def _make_user_md(self, tmpdir, content=None):
+        """Helper: create a user.md with standard sections."""
+        identity_dir = os.path.join(tmpdir, "identity")
+        os.makedirs(identity_dir, exist_ok=True)
+        user_file = os.path.join(identity_dir, "user.md")
+        if content is None:
+            content = (
+                "# User\n"
+                "## Basics\n\n"
+                "## Work Context\n\n"
+                "## Communication Preferences\n\n"
+                "## Interests & Context\n\n"
+                "## People\n\n"
+                "## Patterns & Habits\n\n"
+                "## Preferences (Observed)\n\n"
+                "## Important Context\n\n"
+            )
+        with open(user_file, "w") as f:
+            f.write(content)
+        return user_file
+
+    @unittest.skip("Waiting for Plan 23-02 implementation")
+    def test_identity_routes_to_correct_sections(self):
+        """Identity traits route to matching user.md sections."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            user_file = self._make_user_md(tmpdir)
+            with patch.object(gateway, "DATA_DIR", tmpdir):
+                response = json.dumps({
+                    "identity": [
+                        "name is Haseeb",
+                        "Sarah is his cofounder",
+                        "prefers dark mode",
+                    ]
+                })
+                gateway._process_identity_extraction(response)
+
+            with open(user_file) as f:
+                content = f.read()
+            assert "name is Haseeb" in content
+            assert "Sarah is his cofounder" in content
+            assert "prefers dark mode" in content
+
+    @unittest.skip("Waiting for Plan 23-02 implementation")
+    def test_duplicate_identity_skipped(self):
+        """Duplicate identity items are skipped via _fact_already_exists."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            user_file = self._make_user_md(tmpdir, content=(
+                "# User\n"
+                "## Preferences (Observed)\n\n"
+                "- prefers dark mode\n\n"
+                "## Important Context\n\n"
+            ))
+            with patch.object(gateway, "DATA_DIR", tmpdir):
+                response = json.dumps({"identity": ["prefers dark mode"]})
+                gateway._process_identity_extraction(response)
+
+            with open(user_file) as f:
+                content = f.read()
+            count = content.lower().count("prefers dark mode")
+            assert count == 1
+
+    @unittest.skip("Waiting for Plan 23-02 implementation")
+    def test_empty_extraction_does_nothing(self):
+        """Empty extraction ({"empty": true}) does nothing."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            user_file = self._make_user_md(tmpdir)
+            with patch.object(gateway, "DATA_DIR", tmpdir):
+                gateway._process_identity_extraction('{"empty": true}')
+
+            with open(user_file) as f:
+                content = f.read()
+            # no auto-extracted comments added
+            assert "auto-extracted" not in content
+
+    @unittest.skip("Waiting for Plan 23-02 implementation")
+    def test_no_json_does_nothing(self):
+        """No valid JSON in response does nothing."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            user_file = self._make_user_md(tmpdir)
+            with patch.object(gateway, "DATA_DIR", tmpdir):
+                gateway._process_identity_extraction("no json here")
+
+    @unittest.skip("Waiting for Plan 23-02 implementation")
+    def test_knowledge_key_ignored(self):
+        """Identity extraction ignores 'knowledge' key in response."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            user_file = self._make_user_md(tmpdir)
+            with patch.object(gateway, "DATA_DIR", tmpdir):
+                response = json.dumps({
+                    "identity": ["name is Haseeb"],
+                    "knowledge": [{"key": "test", "content": "ignored"}],
+                })
+                gateway._process_identity_extraction(response)
+            with open(user_file) as f:
+                content = f.read()
+            assert "name is Haseeb" in content
 
 
 # ── _fact_already_exists ───────────────────────────────────────────────────

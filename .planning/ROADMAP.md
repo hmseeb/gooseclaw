@@ -121,11 +121,11 @@ Plans:
   2. When user mentions relationships ("Alice is my manager", "Project X uses React"), entities and relationships are extracted and stored in the graph
   3. Memory search results are augmented with graph context. Asking about "Alice" also surfaces her relationship to user's projects.
   4. User can explore entity relationships through MCP tools (memory_entities, memory_relations)
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 25-01: TBD
-- [ ] 25-02: TBD
+- [ ] 25-01-PLAN.md — Neo4j in-container install, entrypoint startup, mem0 graph_store config (GRAPH-01, GRAPH-02)
+- [ ] 25-02-PLAN.md — Graph-augmented search + memory_entities/memory_relations MCP tools (GRAPH-03, GRAPH-04)
 
 ## Progress
 

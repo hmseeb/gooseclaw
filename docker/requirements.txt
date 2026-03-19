@@ -8,6 +8,6 @@
 PyYAML==6.0.2
 websocket-client==1.8.0
 chromadb==1.5.5
-mem0ai==1.0.6
+mem0ai[graph]==1.0.6
 sentence-transformers>=5.0.0
 mcp[cli]==1.26.0

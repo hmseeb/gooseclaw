@@ -591,6 +591,47 @@ fi
 
 export KNOWLEDGE_DB_PATH="/data/knowledge/chroma"
 
+# ---- neo4j graph database (background) ----
+if command -v neo4j &>/dev/null; then
+    echo "[neo4j] starting graph database..."
+    mkdir -p /data/neo4j
+    chown -R neo4j:neo4j /data/neo4j 2>/dev/null || true
+
+    export NEO4J_AUTH=none
+    export NEO4J_server_memory_heap_initial__size=256m
+    export NEO4J_server_memory_heap_max__size=512m
+    export NEO4J_server_memory_pagecache__size=128m
+    export NEO4J_server_directories_data=/data/neo4j
+    export NEO4J_server_analytics_enabled=false
+
+    neo4j console &
+    NEO4J_PID=$!
+
+    echo "[neo4j] waiting for bolt://localhost:7687..."
+    NEO4J_READY=false
+    for i in $(seq 1 60); do
+        if neo4j status 2>/dev/null | grep -q "running"; then
+            NEO4J_READY=true
+            echo "[neo4j] ready (${i}s)"
+            break
+        fi
+        if ! kill -0 "$NEO4J_PID" 2>/dev/null; then
+            echo "[neo4j] FAILED to start (process exited)"
+            break
+        fi
+        sleep 1
+    done
+
+    if [ "$NEO4J_READY" = "true" ]; then
+        export NEO4J_ENABLED=true
+        echo "[neo4j] graph memory enabled"
+    else
+        echo "[neo4j] graph memory disabled (neo4j not ready)"
+    fi
+else
+    echo "[neo4j] not installed, graph memory disabled"
+fi
+
 # ─── MOIM (critical rules injected every turn, slim ~100 lines) ────────────
 # Full session context (onboarding, procedures, docs) loads via .goosehints
 # at session start. Only critical per-turn rules go through MOIM.

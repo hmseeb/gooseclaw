@@ -14,12 +14,20 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # docker/requirements.lock has hash-pinned transitive deps (generate via docker/generate-lockfile.sh)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-      curl git sudo python3 python3-pip python3-yaml ca-certificates jq bzip2 libgomp1 tzdata libssl3 && \
+      curl wget git sudo python3 python3-pip python3-yaml ca-certificates jq bzip2 libgomp1 tzdata libssl3 gpg && \
     rm -rf /var/lib/apt/lists/*
 
 # install node 20 LTS (ubuntu 22.04 apt ships v12, MCP tools need 18+)
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     apt-get install -y --no-install-recommends nodejs && \
+    rm -rf /var/lib/apt/lists/*
+
+# install Neo4j Community + OpenJDK 21 for graph memory (Phase 25)
+RUN mkdir -p /etc/apt/keyrings && \
+    wget -O - https://debian.neo4j.com/neotechnology.gpg.key | gpg --dearmor -o /etc/apt/keyrings/neotechnology.gpg && \
+    echo 'deb [signed-by=/etc/apt/keyrings/neotechnology.gpg] https://debian.neo4j.com stable latest' > /etc/apt/sources.list.d/neo4j.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends neo4j && \
     rm -rf /var/lib/apt/lists/*
 
 # install goosed (extracted from desktop app .deb — no pre-built binary published separately)

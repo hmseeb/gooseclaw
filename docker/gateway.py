@@ -382,16 +382,18 @@ class BotInstance:
             self._thread = None
 
     def _register_commands(self):
-        """Register slash commands with Telegram API for autocomplete."""
+        """Register slash commands with Telegram API for autocomplete.
+
+        Pulls dynamically from _command_router so custom commands from
+        channel plugins (e.g. /clockin) show up in Telegram's autocomplete.
+        """
         try:
             commands = [
-                {"command": "stop", "description": "Cancel the current response"},
-                {"command": "clear", "description": "Wipe conversation and start fresh"},
-                {"command": "compact", "description": "Summarize history to save tokens"},
-                {"command": "help", "description": "Show available commands"},
-                {"command": "restart", "description": "Restart the engine without clearing history"},
-                {"command": "status", "description": "Show session and provider info"},
+                {"command": cmd, "description": desc[:256]}
+                for cmd, desc in sorted(_command_router._help_text.items())
             ]
+            if not commands:
+                return
             payload = json.dumps({"commands": commands}).encode()
             req = urllib.request.Request(
                 f"https://api.telegram.org/bot{self.token}/setMyCommands",
@@ -399,7 +401,7 @@ class BotInstance:
                 headers={"Content-Type": "application/json"},
             )
             urllib.request.urlopen(req, timeout=10)
-            _telegram_log.info(f"[telegram:{self.name}] registered slash commands for autocomplete")
+            _telegram_log.info(f"[telegram:{self.name}] registered {len(commands)} slash commands for autocomplete")
         except Exception as e:
             _telegram_log.warning(f"[telegram:{self.name}] warn: could not register commands: {e}")
 
@@ -6025,6 +6027,9 @@ def _reload_channels():
     for name in names:
         _unload_channel(name)
     _load_all_channels()
+    # sync Telegram autocomplete with any new/removed custom commands
+    for bot in _bot_manager.get_all().values():
+        bot._register_commands()
     with _channels_lock:
         return list(_loaded_channels.keys())
 
@@ -10521,6 +10526,11 @@ def main():
 
         # load channel plugins from /data/channels/
         _load_all_channels()
+
+        # re-register Telegram commands now that channel plugins (and their
+        # custom commands like /clockin) have been loaded into _command_router
+        for bot in _bot_manager.get_all().values():
+            bot._register_commands()
 
         # env-var-only deployments: start default bot if not already started by apply_config
         tg_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")

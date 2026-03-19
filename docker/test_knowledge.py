@@ -568,5 +568,180 @@ class TestGoosehints(unittest.TestCase):
         self.assertIn("knowledge_search", self.content)
 
 
+class TestMem0Migration(unittest.TestCase):
+    """MIG-01, MIG-02, MIG-04: migrate_to_mem0.py migrates runtime entries to mem0."""
+
+    def test_migration_skips_if_sentinel_exists(self):
+        """If sentinel file exists, migration is skipped entirely."""
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sentinel = os.path.join(tmpdir, ".mem0_migrated")
+            with open(sentinel, "w") as f:
+                f.write("migrated: 2026-01-01T00:00:00Z\n")
+
+            from knowledge.migrate_to_mem0 import migrate
+
+            # When sentinel exists, migrate returns early before importing
+            # chromadb or mem0, so we just verify it returns 0 and doesn't
+            # touch the chromadb path (which doesn't even exist here).
+            with patch("chromadb.PersistentClient") as mock_client:
+                result = migrate(
+                    chroma_path=os.path.join(tmpdir, "chroma"),
+                    sentinel_path=sentinel,
+                )
+
+            self.assertEqual(result, 0)
+            mock_client.assert_not_called()
+
+    def test_migration_handles_missing_collection(self):
+        """If no runtime collection exists, migration touches sentinel and returns 0."""
+        import chromadb
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            chroma_path = os.path.join(tmpdir, "chroma")
+            sentinel = os.path.join(tmpdir, ".mem0_migrated")
+
+            # Create a chromadb with no runtime collection
+            client = chromadb.PersistentClient(path=chroma_path)
+            client.get_or_create_collection("system")
+            del client
+
+            from knowledge.migrate_to_mem0 import migrate
+
+            result = migrate(chroma_path=chroma_path, sentinel_path=sentinel)
+
+            self.assertEqual(result, 0)
+            self.assertTrue(os.path.exists(sentinel))
+
+    def test_migration_handles_empty_collection(self):
+        """If runtime collection is empty, migration touches sentinel and returns 0."""
+        import chromadb
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            chroma_path = os.path.join(tmpdir, "chroma")
+            sentinel = os.path.join(tmpdir, ".mem0_migrated")
+
+            # Create runtime collection but leave it empty
+            client = chromadb.PersistentClient(path=chroma_path)
+            client.get_or_create_collection("runtime")
+            del client
+
+            from knowledge.migrate_to_mem0 import migrate
+
+            result = migrate(chroma_path=chroma_path, sentinel_path=sentinel)
+
+            self.assertEqual(result, 0)
+            self.assertTrue(os.path.exists(sentinel))
+
+    def test_migration_uses_infer_false(self):
+        """MIG-02: migration calls memory.add with infer=False for each entry."""
+        import chromadb
+        from unittest.mock import patch, MagicMock
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            chroma_path = os.path.join(tmpdir, "chroma")
+            sentinel = os.path.join(tmpdir, ".mem0_migrated")
+
+            # Create runtime collection with 2 entries
+            client = chromadb.PersistentClient(path=chroma_path)
+            rt_col = client.get_or_create_collection("runtime")
+            rt_col.add(
+                ids=["fact-1", "fact-2"],
+                documents=["user likes dark mode", "user uses vscode"],
+                metadatas=[
+                    {"type": "preference"},
+                    {"type": "fact"},
+                ],
+            )
+            del client
+
+            mock_memory_instance = MagicMock()
+            mock_memory_cls = MagicMock()
+            mock_memory_cls.from_config.return_value = mock_memory_instance
+
+            from knowledge.migrate_to_mem0 import migrate
+
+            with patch("mem0.Memory", mock_memory_cls), \
+                 patch("mem0_config.build_mem0_config", return_value={}):
+                result = migrate(chroma_path=chroma_path, sentinel_path=sentinel)
+
+            self.assertEqual(result, 2)
+            self.assertEqual(mock_memory_instance.add.call_count, 2)
+
+            # Verify infer=False was passed in each call
+            for call in mock_memory_instance.add.call_args_list:
+                self.assertFalse(call.kwargs.get("infer", True))
+
+    def test_migration_creates_sentinel_after_success(self):
+        """MIG-04: sentinel file is created with timestamp after successful migration."""
+        import chromadb
+        from unittest.mock import patch, MagicMock
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            chroma_path = os.path.join(tmpdir, "chroma")
+            sentinel = os.path.join(tmpdir, ".mem0_migrated")
+
+            # Create runtime collection with 1 entry
+            client = chromadb.PersistentClient(path=chroma_path)
+            rt_col = client.get_or_create_collection("runtime")
+            rt_col.add(
+                ids=["fact-1"],
+                documents=["user likes coffee"],
+                metadatas=[{"type": "fact"}],
+            )
+            del client
+
+            mock_memory_instance = MagicMock()
+            mock_memory_cls = MagicMock()
+            mock_memory_cls.from_config.return_value = mock_memory_instance
+
+            from knowledge.migrate_to_mem0 import migrate
+
+            with patch("mem0.Memory", mock_memory_cls), \
+                 patch("mem0_config.build_mem0_config", return_value={}):
+                result = migrate(chroma_path=chroma_path, sentinel_path=sentinel)
+
+            self.assertEqual(result, 1)
+            self.assertTrue(os.path.exists(sentinel))
+            with open(sentinel) as f:
+                content = f.read()
+            self.assertIn("migrated:", content)
+
+    def test_migration_continues_on_single_failure(self):
+        """Migration should continue past failures and still create sentinel."""
+        import chromadb
+        from unittest.mock import patch, MagicMock
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            chroma_path = os.path.join(tmpdir, "chroma")
+            sentinel = os.path.join(tmpdir, ".mem0_migrated")
+
+            # Create runtime collection with 3 entries
+            client = chromadb.PersistentClient(path=chroma_path)
+            rt_col = client.get_or_create_collection("runtime")
+            rt_col.add(
+                ids=["fact-1", "fact-2", "fact-3"],
+                documents=["one", "two", "three"],
+                metadatas=[{"type": "fact"}] * 3,
+            )
+            del client
+
+            mock_memory_instance = MagicMock()
+            # Second call raises exception
+            mock_memory_instance.add.side_effect = [None, Exception("boom"), None]
+            mock_memory_cls = MagicMock()
+            mock_memory_cls.from_config.return_value = mock_memory_instance
+
+            from knowledge.migrate_to_mem0 import migrate
+
+            with patch("mem0.Memory", mock_memory_cls), \
+                 patch("mem0_config.build_mem0_config", return_value={}):
+                result = migrate(chroma_path=chroma_path, sentinel_path=sentinel)
+
+            self.assertEqual(result, 2)  # 3 entries, 1 failed = 2 migrated
+            self.assertTrue(os.path.exists(sentinel))
+
+
 if __name__ == "__main__":
     unittest.main()

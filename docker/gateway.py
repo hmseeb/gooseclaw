@@ -3133,14 +3133,18 @@ def _setup_claude_cli():
         _gateway_log.info("installing claude CLI...")
         installed = False
         # try npm first (more reliable than curl to claude.ai which can 403)
-        try:
-            _gateway_log.info("trying npm install...")
-            subprocess.run(
-                ["bash", "-c", "npm install -g @anthropic-ai/claude-code 2>&1 | tail -3"],
-                check=True, timeout=180,
-            )
-            installed = True
-        except Exception:
+        for npm_cmd in ["sudo npm install -g @anthropic-ai/claude-code", "npm install -g @anthropic-ai/claude-code"]:
+            try:
+                _gateway_log.info(f"trying: {npm_cmd.split()[0]} npm install...")
+                subprocess.run(
+                    ["bash", "-c", f"{npm_cmd} 2>&1 | tail -3"],
+                    check=True, timeout=180,
+                )
+                installed = True
+                break
+            except Exception:
+                continue
+        if not installed:
             _gateway_log.warning("npm install failed, trying curl...")
         # fallback to curl install script
         if not installed:

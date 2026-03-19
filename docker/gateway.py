@@ -3131,27 +3131,41 @@ def _setup_claude_cli():
         _gateway_log.info("claude CLI already installed")
     else:
         _gateway_log.info("installing claude CLI...")
-        is_root = os.getuid() == 0
+        installed = False
+        # try npm first (more reliable than curl to claude.ai which can 403)
         try:
+            _gateway_log.info("trying npm install...")
             subprocess.run(
-                ["bash", "-c", "curl -fsSL https://claude.ai/install.sh | bash"],
-                check=True, timeout=120,
+                ["bash", "-c", "npm install -g @anthropic-ai/claude-code 2>&1 | tail -3"],
+                check=True, timeout=180,
             )
+            installed = True
         except Exception:
-            if is_root:
-                _gateway_log.error("native install failed, trying npm...")
-                try:
-                    subprocess.run(
-                        ["bash", "-c", "apt-get update -qq && apt-get install -y -qq nodejs npm >/dev/null 2>&1 && npm install -g @anthropic-ai/claude-code 2>/dev/null"],
-                        check=True, timeout=180,
-                    )
-                except Exception as e:
-                    _gateway_log.error(f"could not install claude CLI: {e}")
-                    return
-            else:
-                _gateway_log.error("claude CLI install failed (running as non-root, apt not available)")
-                _gateway_log.info("claude CLI should be pre-installed by entrypoint.sh")
-                return
+            _gateway_log.warning("npm install failed, trying curl...")
+        # fallback to curl install script
+        if not installed:
+            try:
+                subprocess.run(
+                    ["bash", "-c", "curl -fsSL https://claude.ai/install.sh | bash"],
+                    check=True, timeout=120,
+                )
+                installed = True
+            except Exception:
+                _gateway_log.warning("curl install failed too")
+        # last resort: sudo npm (if running as non-root with sudo access)
+        if not installed and os.getuid() != 0:
+            try:
+                _gateway_log.info("trying sudo npm install...")
+                subprocess.run(
+                    ["sudo", "npm", "install", "-g", "@anthropic-ai/claude-code"],
+                    check=True, timeout=180, capture_output=True,
+                )
+                installed = True
+            except Exception:
+                pass
+        if not installed:
+            _gateway_log.error("could not install claude CLI via any method")
+            return
 
     # create ~/.claude.json if missing
     claude_json = os.path.join(home, ".claude.json")

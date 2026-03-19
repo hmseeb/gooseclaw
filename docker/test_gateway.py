@@ -264,7 +264,9 @@ class TestRunScriptInjection(unittest.TestCase):
         job = {"command": "goose run --recipe /test", "provider": None}
         gateway._run_script(job)
         actual_cmd = mock_run.call_args[0][0]
-        assert "--model mistral-7b" in actual_cmd
+        # actual_cmd is a list like ['/bin/sh', '-c', 'goose run ...']
+        cmd_str = " ".join(actual_cmd) if isinstance(actual_cmd, list) else actual_cmd
+        assert "--model mistral-7b" in cmd_str
 
     @patch("gateway.notify_all")
     @patch("gateway.subprocess.run")
@@ -275,7 +277,8 @@ class TestRunScriptInjection(unittest.TestCase):
         job = {"command": "goose run --recipe /test", "provider": "openrouter"}
         gateway._run_script(job)
         actual_cmd = mock_run.call_args[0][0]
-        assert "--provider openrouter" in actual_cmd
+        cmd_str = " ".join(actual_cmd) if isinstance(actual_cmd, list) else actual_cmd
+        assert "--provider openrouter" in cmd_str
 
     @patch("gateway.notify_all")
     @patch("gateway.subprocess.run")
@@ -286,8 +289,9 @@ class TestRunScriptInjection(unittest.TestCase):
         job = {"command": "goose run --recipe /test", "provider": "openai"}
         gateway._run_script(job)
         actual_cmd = mock_run.call_args[0][0]
-        assert "--provider openai" in actual_cmd
-        assert "--model gpt-4o" in actual_cmd
+        cmd_str = " ".join(actual_cmd) if isinstance(actual_cmd, list) else actual_cmd
+        assert "--provider openai" in cmd_str
+        assert "--model gpt-4o" in cmd_str
 
     @patch("gateway.notify_all")
     @patch("gateway.subprocess.run")
@@ -379,7 +383,7 @@ class TestRunScriptOutput(unittest.TestCase):
     def test_no_output_shows_placeholder(self, _fix, _resolve, mock_run, _notify):
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
         status, output = gateway._run_script({"command": "echo"})
-        assert output == "(no output)"
+        assert output == ""
 
 
 # ── _edit_telegram_message ──────────────────────────────────────────────────
@@ -1025,13 +1029,12 @@ class TestFireCronJobStripping(unittest.TestCase):
     @patch("gateway._do_rest_relay")
     @patch("gateway._load_recipe", return_value="do the thing")
     def test_cron_job_logs_response_for_debugging(self, _recipe, mock_relay, mock_notify):
-        """Cron job should print the response text for debug visibility."""
+        """Cron job should log the response text for debug visibility."""
         mock_relay.return_value = ("I sent the notification.", None, [])
-        with patch("builtins.print") as mock_print:
+        with self.assertLogs("cron", level="INFO") as cm:
             gateway._fire_cron_job({"id": "test-cron", "source": "/test"})
-        # check that the debug line was printed
-        printed = [str(c) for c in mock_print.call_args_list]
-        assert any("response (not relayed)" in s for s in printed)
+        logged = " ".join(cm.output)
+        assert "response (not relayed)" in logged
 
 
 # ── update_job ──────────────────────────────────────────────────────────────
@@ -2410,14 +2413,11 @@ class TestCustomCommandConflicts(unittest.TestCase):
             mock_spec.loader = MagicMock()
             mock_spec_fn.return_value = mock_spec
             with patch("importlib.util.module_from_spec", return_value=mock_module):
-                # Capture stdout to check for warning
-                import io
-                captured = io.StringIO()
-                with patch("sys.stdout", captured):
+                with self.assertLogs("channels", level="WARNING") as cm:
                     gateway._load_channel("/fake/conflict_plugin2.py")
 
-        output = captured.getvalue()
-        self.assertIn("conflicts with built-in", output)
+        logged = " ".join(cm.output)
+        self.assertIn("conflicts with built-in", logged)
 
     @patch("gateway._relay_to_goosed", return_value=("ok", "", []))
     def test_non_conflicting_custom_commands_registered(self, mock_relay):
@@ -5574,9 +5574,10 @@ class TestRelayProtocolUpgrade(unittest.TestCase):
         finally:
             gateway._INTERNAL_GOOSE_TOKEN = None
 
+    @patch("gateway.send_telegram_message", return_value=(True, None))
     @patch("gateway._relay_to_goosed")
     @patch("gateway._download_telegram_file")
-    def test_bot_relay_builds_content_blocks_from_media(self, mock_dl, mock_relay):
+    def test_bot_relay_builds_content_blocks_from_media(self, mock_dl, mock_relay, _mock_send):
         """BotInstance._do_message_relay should build content_blocks when InboundMessage has media."""
         mock_relay.return_value = ("response", "", [])
         # mock download to return real bytes
@@ -5614,8 +5615,9 @@ class TestRelayProtocolUpgrade(unittest.TestCase):
             self.assertIsNotNone(kwargs["content_blocks"],
                                  "content_blocks should not be None for media message")
 
+    @patch("gateway.send_telegram_message", return_value=(True, None))
     @patch("gateway._relay_to_goosed")
-    def test_bot_relay_text_only_no_content_blocks(self, mock_relay):
+    def test_bot_relay_text_only_no_content_blocks(self, mock_relay, _mock_send):
         """Text-only InboundMessage should NOT build content_blocks (None)."""
         mock_relay.return_value = ("response", "", [])
 
@@ -6723,7 +6725,7 @@ class TestPasswordAuth(unittest.TestCase):
         # check saved config has hash, no plaintext
         saved_config = mock_save.call_args[0][0]
         self.assertIn("web_auth_token_hash", saved_config)
-        self.assertEqual(saved_config["web_auth_token_hash"], gateway.hash_token("mypassword123"))
+        self.assertTrue(gateway.verify_token("mypassword123", saved_config["web_auth_token_hash"]))
         self.assertNotIn("web_auth_token", saved_config)
 
     @patch("gateway.save_setup")

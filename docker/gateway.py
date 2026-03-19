@@ -468,6 +468,7 @@ class BotInstance:
                     if _replay_fn:
                         threading.Thread(target=_replay_fn, daemon=True).start()
 
+        _cancelled = threading.Event()
         try:
             # download media in relay thread (not poll loop) to keep poll responsive
             if inbound_msg and inbound_msg.media:
@@ -490,7 +491,6 @@ class BotInstance:
             _adapter = TelegramOutboundAdapter(bot_token, chat_id)
             _adapter.send_typing(chat_id)
             session_id = _get_session_id(chat_id, channel=self.channel_key)
-            _cancelled = threading.Event()
             _sock_ref = [None, _cancelled]
 
             self.state.set_active_relay(chat_id, _sock_ref)
@@ -1289,7 +1289,7 @@ _stderr_buffer = collections.deque(maxlen=50)  # last 50 lines of stderr
 _stderr_lock = threading.Lock()
 
 # internal token used for gateway -> goosed communication (never exposed to users)
-_INTERNAL_GOOSE_TOKEN = None
+_INTERNAL_GOOSE_TOKEN = ""  # type: str
 
 
 def _set_startup_state(state, message="", error=""):
@@ -1618,7 +1618,7 @@ def get_paired_chat_ids(platform="telegram"):
                     val = stripped.split(":", 1)[1].strip().strip("'\"")
                     current_entry["user_id"] = val
                 elif stripped.startswith("state:") and "paired" in stripped:
-                    current_entry["paired"] = True
+                    current_entry["paired"] = "true"
         # catch last entry
         if current_entry.get("platform") == platform and current_entry.get("user_id"):
             chat_ids.append(current_entry["user_id"])
@@ -1993,7 +1993,7 @@ def _edit_telegram_message(bot_token, chat_id, message_id, text):
         err_body = ""
         if hasattr(e, 'read'):
             try:
-                err_body = e.read().decode()
+                err_body = e.read().decode()  # type: ignore[union-attr]
             except Exception:
                 pass
         if "not modified" in str(e) or "not modified" in err_body:
@@ -5448,15 +5448,15 @@ class OutboundAdapter:
     def send_text(self, text):
         raise NotImplementedError("send_text() is required")
 
-    def send_image(self, data, caption="", **kwargs):
+    def send_image(self, image_bytes, caption="", **kwargs):
         fallback = f"{caption}\n[image]" if caption else "[image]"
         return self.send_text(fallback.strip())
 
-    def send_voice(self, data, caption="", **kwargs):
+    def send_voice(self, audio_bytes, caption="", **kwargs):
         fallback = caption or "[voice message]"
         return self.send_text(fallback)
 
-    def send_file(self, data, filename="", **kwargs):
+    def send_file(self, file_bytes, filename="", **kwargs):
         fallback = f"[File: {filename}]" if filename else "[file]"
         return self.send_text(fallback)
 
@@ -5499,15 +5499,18 @@ class TelegramOutboundAdapter(OutboundAdapter):
         ok, err = send_telegram_message(self.bot_token, self.chat_id, text)
         return {"sent": ok, "error": err or ""}
 
-    def send_image(self, image_bytes, caption="", mime_type="image/png"):
+    def send_image(self, image_bytes, caption="", **kwargs):
+        mime_type = kwargs.get("mime_type", "image/png")
         return self._send_media("sendPhoto", "photo", image_bytes,
                                 f"image{_ext_from_mime(mime_type)}", mime_type, caption)
 
-    def send_voice(self, audio_bytes, caption="", mime_type="audio/ogg"):
+    def send_voice(self, audio_bytes, caption="", **kwargs):
+        mime_type = kwargs.get("mime_type", "audio/ogg")
         return self._send_media("sendVoice", "voice", audio_bytes,
                                 f"voice{_ext_from_mime(mime_type)}", mime_type, caption)
 
-    def send_file(self, file_bytes, filename="file", mime_type="application/octet-stream"):
+    def send_file(self, file_bytes, filename="file", **kwargs):
+        mime_type = kwargs.get("mime_type", "application/octet-stream")
         return self._send_media("sendDocument", "document", file_bytes,
                                 filename, mime_type, "")
 
@@ -5702,15 +5705,15 @@ class ChannelRelay:
                     if _replay_fn:
                         threading.Thread(target=_replay_fn, daemon=True).start()
 
+        typing_stop = threading.Event()
         try:
             # Typing indicator loop (CHAN-06)
-            typing_stop = threading.Event()
             # Resolve typing callback: explicit cb > adapter.send_typing > none
             _typing_fn = self._typing_cb
             if not _typing_fn and self._adapter:
                 _caps = self._adapter.capabilities()
                 if getattr(_caps, "typing", False):
-                    _typing_fn = lambda uid: self._adapter.send_typing(uid)
+                    _typing_fn = lambda uid, _a=self._adapter: _a.send_typing(uid)
             if _typing_fn:
                 def _typing_loop():
                     while not typing_stop.is_set():
@@ -5730,7 +5733,7 @@ class ChannelRelay:
             # inject background activity context
             _bg_ctx = _pop_background_context(user_key)
             if _bg_ctx:
-                text = _bg_ctx + text
+                text = _bg_ctx + (text or "")
 
             # inject reply context so goose knows what user is replying to
             if _reply_to_text:
@@ -5753,7 +5756,7 @@ class ChannelRelay:
                     _cb = _build_content_blocks(text, user_id_or_msg)
 
                 # Wrap send_fn to release lock on first chunk in streaming mode
-                _wrapped_send_fn = send_fn
+                _wrapped_send_fn = send_fn  # type: ignore[assignment]
                 if use_streaming and send_fn:
                     _first_chunk_sent = [False]
                     _orig_send_fn = send_fn
@@ -7103,6 +7106,21 @@ def _update_goose_session_provider(session_id, model_config):
         _gateway_log.error(f"failed to update session provider: {e}")
 
 
+def _is_fatal_provider_error(err):
+    """Check if an error indicates the goosed provider is fatally broken.
+
+    These errors mean goosed's internal subprocess (e.g. claude-code) has died
+    and creating new sessions on the same goosed instance won't help. The only
+    fix is restarting goosed entirely.
+    """
+    if not err:
+        return False
+    low = err.lower()
+    return ("broken pipe" in low
+            or "write to stdin" in low
+            or ("failed" in low and "stdin" in low))
+
+
 def _relay_to_goosed(user_text, session_id, chat_id=None, channel=None,
                         flush_cb=None, verbosity=None, sock_ref=None, flush_interval=4.0,
                         content_blocks=None):
@@ -7129,7 +7147,7 @@ def _relay_to_goosed(user_text, session_id, chat_id=None, channel=None,
     # choose relay function based on streaming params
     use_streaming = flush_cb and verbosity and verbosity != "quiet"
     if use_streaming:
-        relay_fn = lambda txt, sid: _do_rest_relay_streaming(txt, sid, flush_cb, verbosity, content_blocks=content_blocks, sock_ref=sock_ref, flush_interval=flush_interval)
+        relay_fn = lambda txt, sid: _do_rest_relay_streaming(txt, sid, flush_cb, verbosity or "balanced", content_blocks=content_blocks, sock_ref=sock_ref, flush_interval=flush_interval)
     else:
         relay_fn = lambda txt, sid: _do_rest_relay(txt, sid, content_blocks=content_blocks, sock_ref=sock_ref)
 
@@ -7142,6 +7160,28 @@ def _relay_to_goosed(user_text, session_id, chat_id=None, channel=None,
     if err and chat_id and not cancelled:
         reason = err if err else "empty response"
         ch = channel or "telegram"
+
+        # if the error is a fatal provider error (broken pipe, stdin dead),
+        # creating a new session on the same goosed won't help. restart goosed
+        # and retry with the SAME session_id to preserve conversation history.
+        if _is_fatal_provider_error(err):
+            _gateway_log.error(f"[{ch}] fatal provider error ({reason}), restarting goosed")
+            stop_goosed()
+            ok = start_goosed()
+            if ok:
+                # retry with original session_id (goosed reloads from sqlite)
+                _gateway_log.info(f"[{ch}] goosed restarted, retrying with original session {session_id}")
+                text, err, media = relay_fn(user_text, session_id)
+                if not err:
+                    return text, err, media
+                # original session didn't survive restart, try new session
+                _gateway_log.warning(f"[{ch}] original session failed after restart, creating new session")
+
+            else:
+                _gateway_log.error(f"[{ch}] goosed restart failed, returning error to user")
+                return text, err, media
+
+        # non-fatal error or original session failed after restart: try new session
         _gateway_log.error(f"[{ch}] relay failed ({reason}), creating new session")
         new_sid = _create_goose_session()
         if new_sid:
@@ -7986,10 +8026,11 @@ def _telegram_poll_loop(bot_token):
                                     if _rq_fn:
                                         threading.Thread(target=_rq_fn, daemon=True).start()
 
+                        _cancelled = threading.Event()
                         try:
                             # download media in relay thread
+                            downloaded = []
                             if _media_refs:
-                                downloaded = []
                                 for ref in _media_refs:
                                     file_bytes, file_path = _download_telegram_file(_bt, ref["file_id"])
                                     if file_bytes is not None:
@@ -8006,7 +8047,6 @@ def _telegram_poll_loop(bot_token):
                             _relay_adapter = TelegramOutboundAdapter(_bt, _chat_id)
                             _relay_adapter.send_typing(_chat_id)
                             session_id = _get_session_id(_chat_id)
-                            _cancelled = threading.Event()
                             _sock_ref = [None, _cancelled]
 
                             _telegram_state.set_active_relay(_chat_id, _sock_ref)
@@ -8043,6 +8083,7 @@ def _telegram_poll_loop(bot_token):
 
                             _relay_t0 = time.time()
                             try:
+                                _edit_state = {"msg_id": None, "accumulated": "", "overflow": []}
                                 if _tg_verbosity == "quiet":
                                     response_text, error, _leg_media = _relay_to_goosed(
                                         _text, session_id, chat_id=_chat_id, channel="telegram",
@@ -8059,7 +8100,6 @@ def _telegram_poll_loop(bot_token):
                                         send_telegram_message(_bt, _chat_id, response_text)
                                 else:
                                     # streaming: edit-in-place
-                                    _edit_state = {"msg_id": None, "accumulated": "", "overflow": []}
 
                                     def _tg_flush_edit(chunk, _st=_edit_state):
                                         if _cancelled.is_set():
@@ -9031,7 +9071,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             # hash the password before storage -- plaintext never hits disk
             if plaintext_password:
                 config["web_auth_token_hash"] = hash_token(plaintext_password)
-            elif has_existing_hash:
+            elif has_existing_hash and existing_setup:
                 # keep existing hash during reconfigure
                 config["web_auth_token_hash"] = existing_setup["web_auth_token_hash"]
             # remove plaintext from config dict before saving
@@ -9739,8 +9779,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         for spec in items:
             name = spec.get("name", spec.get("id", ""))
             watcher, err = create_watcher(spec, _save=False)
-            if err:
-                results.append({"name": name, "status": "error", "error": err})
+            if err or watcher is None:
+                results.append({"name": name, "status": "error", "error": err or "unknown error"})
                 errors += 1
             else:
                 results.append({
@@ -9933,8 +9973,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
 
             data["type"] = job_type
             job, err = create_job(data)
-            if err:
-                self.send_json(409, {"error": err})
+            if err or job is None:
+                self.send_json(409, {"error": err or "unknown error"})
             else:
                 response = {"created": True, "job": job}
                 if job.get("fire_at"):

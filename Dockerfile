@@ -1,5 +1,6 @@
 FROM ubuntu:22.04
 
+# cache-bust: v5.0-mem0-neo4j
 LABEL maintainer="gooseclaw" \
       description="GooseClaw personal AI agent" \
       org.opencontainers.image.source="https://github.com/gooseclaw/gooseclaw" \

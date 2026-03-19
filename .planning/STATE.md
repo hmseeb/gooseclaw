@@ -49,6 +49,17 @@ Recent decisions affecting current work:
 - Generate requirements.lock via generate-lockfile.sh --docker
 - Validate e2e tests in CI pipeline
 
+### Next Milestone: v5.1 Document Knowledge Base
+
+Multi-collection document ingestion. Users upload SOPs, meeting transcripts, product docs into named collections with scoped search. Built on existing ChromaDB system collection infrastructure.
+
+Target features:
+- Named collections (create, list, delete)
+- Document ingestion (PDF, DOCX, TXT, MD → chunked + vectorized)
+- Scoped search (search within a collection or across all)
+- MCP tools: knowledge_create_collection, knowledge_ingest, knowledge_search (with collection filter)
+- Cron-compatible: jobs can ingest docs on schedule (e.g. daily Fireflies transcripts)
+
 ### Blockers/Concerns
 
 None - all v5.0 blockers resolved.

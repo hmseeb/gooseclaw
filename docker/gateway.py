@@ -471,6 +471,7 @@ class BotInstance:
                         threading.Thread(target=_replay_fn, daemon=True).start()
 
         _cancelled = threading.Event()
+        _dispatched = threading.Event()  # set by /cook to background this relay
         try:
             # download media in relay thread (not poll loop) to keep poll responsive
             if inbound_msg and inbound_msg.media:
@@ -543,8 +544,18 @@ class BotInstance:
                     # streaming: edit-in-place
                     _edit_state = {"msg_id": None, "accumulated": "", "overflow": []}
 
+                    # register for /cook dispatch
+                    with _cook_registry_lock:
+                        _cook_registry[str(chat_id)] = {
+                            "edit_state": _edit_state,
+                            "bot_token": bot_token,
+                            "chat_id": chat_id,
+                            "dispatched": _dispatched,
+                            "channel": self.channel_key,
+                        }
+
                     def _tg_flush_edit(chunk, _st=_edit_state):
-                        if _cancelled.is_set():
+                        if _cancelled.is_set() or _dispatched.is_set():
                             return
                         _st["accumulated"] += chunk
                         txt = _st["accumulated"]
@@ -574,7 +585,17 @@ class BotInstance:
                     )
                     # if lock wasn't released during streaming (e.g. no chunks arrived), release now
                     _early_release_lock()
-                    if _cancelled.is_set():
+                    if _dispatched.is_set():
+                        # /cook was used: send completion as a new message
+                        if error:
+                            send_telegram_message(bot_token, chat_id, f"🍳 background task failed: {error}")
+                        elif response_text:
+                            # truncate if very long, user can scroll up for streaming edits
+                            _result = response_text if len(response_text) < 3800 else response_text[:3700] + "\n\n[truncated]"
+                            send_telegram_message(bot_token, chat_id, f"🍳 done:\n\n{_result}")
+                        else:
+                            send_telegram_message(bot_token, chat_id, "🍳 done (no output)")
+                    elif _cancelled.is_set():
                         pass
                     elif _edit_state["msg_id"] and response_text and not error:
                         final_text = _edit_state["accumulated"] or response_text
@@ -603,6 +624,9 @@ class BotInstance:
                     pass
         finally:
             self.state.pop_active_relay(chat_id)
+            # clean up /cook registry
+            with _cook_registry_lock:
+                _cook_registry.pop(str(chat_id), None)
             # release lock if not already released early
             if not _lock_released[0]:
                 _lock_released[0] = True
@@ -1003,6 +1027,13 @@ _bot_manager = BotManager()
 # redundant update_provider calls.
 _session_model_cache = {}   # session_id (str) -> model_config_id (str)
 _session_model_lock = threading.Lock()
+
+# ── /cook dispatch registry (background relay promotion) ──────────────────
+# When user sends /cook, the active streaming relay is "backgrounded":
+# streaming edits stop, lock is released, relay finishes silently,
+# and a completion message is sent when done.
+_cook_registry = {}          # str(chat_id) -> {"edit_state", "bot_token", "dispatched", ...}
+_cook_registry_lock = threading.Lock()
 
 # ── background activity buffer (notify context for LLM) ───────────────────
 # When jobs/reminders/watchers send messages via notify_all(), the user sees
@@ -6390,6 +6421,42 @@ def _handle_cmd_stop(ctx):
         ctx["send_fn"]("Nothing running.")
 
 
+def _handle_cmd_cook(ctx):
+    """Handle /cook command: background the active relay.
+
+    Stops streaming edits, releases the user lock, and lets the relay
+    finish silently in its thread. Sends a completion message when done.
+    """
+    chat_id = ctx["user_id"]
+    channel = ctx.get("channel", "telegram")
+
+    with _cook_registry_lock:
+        info = _cook_registry.get(str(chat_id))
+
+    if not info:
+        ctx["send_fn"]("nothing cooking right now.")
+        return
+
+    edit_state = info["edit_state"]
+    bot_token = info["bot_token"]
+
+    # final edit on the streaming message: append dispatch indicator
+    if edit_state.get("msg_id"):
+        partial = edit_state.get("accumulated", "")
+        _edit_telegram_message(
+            bot_token, chat_id, edit_state["msg_id"],
+            partial + "\n\n🍳 let it cook..."
+        )
+
+    # signal dispatched (stops flush callback from editing further)
+    info["dispatched"].set()
+
+    # lock is already released by _early_release_lock() after first streaming chunk.
+    # the relay thread owns the lock and releases it, we don't touch it here.
+
+    _gateway_log.info(f"[{channel}] /cook backgrounded relay for chat {chat_id}")
+
+
 def _handle_cmd_clear(ctx):
     """Handle /clear command."""
     chat_id = ctx["user_id"]
@@ -6583,6 +6650,7 @@ def _handle_cmd_status(ctx):
 # register commands on the module-level router
 _command_router.register("help", _handle_cmd_help, "this message")
 _command_router.register("stop", _handle_cmd_stop, "cancel the current response")
+_command_router.register("cook", _handle_cmd_cook, "let it cook (move task to background)")
 _command_router.register("clear", _handle_cmd_clear, "wipe conversation and start fresh")
 _command_router.register("restart", _handle_cmd_restart, "restart the engine without clearing history")
 _command_router.register("compact", _handle_cmd_compact, "summarize history to save tokens")
@@ -6707,6 +6775,92 @@ _memory_last_activity = {}        # chat_id (str) -> timestamp (float)
 _memory_last_activity_lock = threading.Lock()
 _memory_processed_sessions = set()  # session_ids already processed
 _memory_writer_running = False
+
+# ── mem0 integration (Phase 23) ──────────────────────────────────────────────
+
+MEM0_USER_ID = os.environ.get("MEM0_USER_ID", "default")
+
+_mem0_instance = None
+_mem0_init_lock = threading.Lock()
+
+
+def _get_mem0():
+    """Lazy-load mem0 Memory instance. Thread-safe via double-checked locking."""
+    global _mem0_instance
+    if _mem0_instance is not None:
+        return _mem0_instance
+    with _mem0_init_lock:
+        if _mem0_instance is not None:
+            return _mem0_instance
+        try:
+            os.environ["MEM0_TELEMETRY"] = "false"
+            from mem0 import Memory
+            from mem0_config import build_mem0_config
+            config = build_mem0_config()
+            _mem0_instance = Memory.from_config(config)
+            _memory_log.info("mem0 initialized")
+        except Exception as e:
+            _memory_log.error(f"mem0 init failed: {e}")
+        return _mem0_instance
+
+
+def _convert_to_mem0_messages(gateway_messages):
+    """Convert gateway message format to mem0 format.
+    Gateway: [{"role": "user", "text": "hello"}]
+    mem0:    [{"role": "user", "content": "hello"}]
+    """
+    mem0_messages = []
+    for msg in gateway_messages:
+        role = msg.get("role", "user")
+        text = msg.get("text", "")
+        if text.strip():
+            if role not in ("user", "assistant", "system"):
+                role = "user"
+            mem0_messages.append({"role": role, "content": text[:2000]})
+    return mem0_messages
+
+
+def _mem0_add_knowledge(messages, user_id="default"):
+    """Send conversation to mem0 for knowledge extraction. Blocking call."""
+    m = _get_mem0()
+    if m is None:
+        _memory_log.error("mem0 not available, skipping knowledge extraction")
+        return
+    mem0_messages = _convert_to_mem0_messages(messages)
+    if not mem0_messages:
+        return
+    result = m.add(messages=mem0_messages, user_id=user_id)
+    _memory_log.info(f"mem0.add result: {result}")
+    return result
+
+
+_mem0_executor = None
+
+
+def _get_mem0_executor():
+    global _mem0_executor
+    if _mem0_executor is None:
+        from concurrent.futures import ThreadPoolExecutor
+        _mem0_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mem0-add")
+    return _mem0_executor
+
+
+def _mem0_add_with_timeout(messages, user_id="default", timeout=60):
+    """Run mem0.add() in a thread pool with timeout."""
+    from concurrent.futures import TimeoutError as FuturesTimeoutError
+    executor = _get_mem0_executor()
+    future = executor.submit(_mem0_add_knowledge, messages, user_id)
+    try:
+        return future.result(timeout=timeout)
+    except FuturesTimeoutError:
+        _memory_log.error(f"mem0.add timed out after {timeout}s")
+        return None
+    except Exception as e:
+        _memory_log.error(f"mem0.add failed: {e}")
+        return None
+
+
+# ── memory extraction prompts ────────────────────────────────────────────────
 
 MEMORY_EXTRACT_PROMPT = """You are analyzing a conversation to extract learnings about the user.
 

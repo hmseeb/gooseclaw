@@ -110,17 +110,11 @@ echo "[init] runtime installs persist to /data (pip, npm, bin, lib)"
 if [ -f /data/boot-setup.sh ]; then
     echo "[init] running /data/boot-setup.sh..."
     chmod +x /data/boot-setup.sh
-    while IFS= read -r line || [ -n "$line" ]; do
-        # skip comments and blank lines
-        case "$line" in ''|\#*) continue ;; esac
-        echo "[boot-setup] > $line"
-        if eval "$line" 2>&1 | while read -r out; do echo "[boot-setup]   $out"; done; then
-            echo "[boot-setup]   ok"
-        else
-            echo "[boot-setup]   FAILED (exit $?)"
-        fi
-    done < /data/boot-setup.sh
-    echo "[init] boot-setup complete"
+    if bash /data/boot-setup.sh 2>&1 | while IFS= read -r out; do echo "[boot-setup] $out"; done; then
+        echo "[init] boot-setup complete"
+    else
+        echo "[init] boot-setup FAILED (exit $?) — continuing anyway"
+    fi
 fi
 
 # ─── goose config ───────────────────────────────────────────────────────────

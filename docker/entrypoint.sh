@@ -598,6 +598,8 @@ if command -v neo4j &>/dev/null; then
     chown -R neo4j:neo4j /data/neo4j 2>/dev/null || true
 
     export NEO4J_AUTH=none
+    export NEO4J_USERNAME=neo4j
+    export NEO4J_PASSWORD=""
     export NEO4J_server_memory_heap_initial__size=256m
     export NEO4J_server_memory_heap_max__size=512m
     export NEO4J_server_memory_pagecache__size=128m
@@ -610,7 +612,7 @@ if command -v neo4j &>/dev/null; then
     echo "[neo4j] waiting for bolt://localhost:7687..."
     NEO4J_READY=false
     for i in $(seq 1 60); do
-        if neo4j status 2>/dev/null | grep -q "running"; then
+        if python3 -c "import socket; socket.create_connection(('localhost',7687),1)" 2>/dev/null; then
             NEO4J_READY=true
             echo "[neo4j] ready (${i}s)"
             break

@@ -1,211 +1,362 @@
-# Feature Research
+# Feature Landscape: mem0 Memory Layer Integration
 
-**Domain:** Production hardening for self-hosted Docker AI agent platform
-**Researched:** 2026-03-16
-**Confidence:** HIGH
+**Domain:** AI agent memory system (vector + knowledge graph) for personal AI agent platform
+**Researched:** 2026-03-19
+**Confidence:** HIGH (mem0 open-source is well-documented, existing GooseClaw memory system thoroughly analyzed)
 
-## Feature Landscape
+## Table Stakes
 
-### Table Stakes (Users Expect These)
+Features users expect from a memory-enabled AI agent. Missing any of these and the agent feels lobotomized between sessions.
 
-Features that any production-ready self-hosted Docker app must have. Missing these = security incident waiting to happen or ops nightmare.
+### Memory Core
 
-#### Security
+| Feature | Why Expected | Complexity | Dependencies | Notes |
+|---------|--------------|------------|--------------|-------|
+| Semantic memory search | Users expect "what do you know about X?" to work. mem0's `search()` replaces ChromaDB `knowledge_search`. Without this, the agent has amnesia. | LOW | mem0 initialized with pgvector | Direct replacement for existing `knowledge_search` MCP tool. mem0 handles embedding + similarity scoring internally. |
+| Automatic memory extraction from conversations | The gateway already does this via `_memory_writer_loop()` after idle timeout. mem0 replaces the ChromaDB write target. Users expect the agent to remember without being told to. | MEDIUM | mem0 `add()` API, existing idle-detection loop | Current flow: idle 10min -> fetch session -> LLM extracts JSON -> route to user.md + ChromaDB. New flow: same trigger, but feed raw conversation to `mem0.add()` which handles extraction internally. Huge simplification. |
+| Memory persistence across sessions | Memories survive container restarts. pgvector data on Railway volume. Current ChromaDB already persists to /data/knowledge/chroma. | LOW | pgvector on persistent volume | PostgreSQL data dir must be on /data (Railway volume). Already proven pattern with ChromaDB. |
+| Contradiction resolution (new facts update old ones) | If user says "I moved to NYC" but memory says "lives in SF", the old fact must update. Current system naively appends. mem0's ADD/UPDATE/DELETE/NOOP pipeline handles this automatically. | LOW (mem0 handles it) | mem0 `add()` with LLM-powered update decisions | This is mem0's killer feature. The LLM compares incoming facts against existing memories and decides: ADD new, UPDATE existing, DELETE contradicted, or NOOP. No custom code needed. |
+| Memory deduplication | Users hate seeing repeated facts. Current ChromaDB has no dedup. mem0's update pipeline prevents duplicate storage by comparing semantic similarity before adding. | LOW (mem0 handles it) | mem0 internal consolidation | mem0 consolidation merges embeddings above 0.85 similarity threshold and deduplicates clusters within 0.9 threshold. This is automatic. |
+| Manual memory CRUD tools | Agent needs explicit tools to store/search/delete memories on demand (not just auto-extraction). The existing knowledge MCP exposes 5 tools. mem0 MCP must expose equivalent. | MEDIUM | mem0 MCP server (stdio, Python) | Existing tools: knowledge_search, knowledge_upsert, knowledge_get, knowledge_delete, knowledge_recent. New tools must cover equivalent functionality via mem0 API. |
+| LLM extraction using existing provider | mem0 needs an LLM for fact extraction. Must use whatever provider the user already configured in vault (OpenAI, Anthropic, etc.), not require a separate API key. | MEDIUM | Vault credential access, mem0 LLM provider config | mem0 supports 20+ LLM providers. Config must read from vault at runtime and pass to mem0's `llm.provider` config. Same for embedder. |
 
-| Feature | Why Expected | Complexity | Notes |
-|---------|--------------|------------|-------|
-| No shell injection in entrypoint/scripts | Any user-controlled string hitting `shell=True` or unquoted bash vars is RCE. OWASP top 10. | MEDIUM | secret.sh interpolates `$DOTPATH` and `$VALUE` directly into Python strings inside bash. gateway.py `_run_script` uses `shell=True`. entrypoint.sh interpolates `$GOOSECLAW_RESET_PASSWORD` into inline Python. All three are injection vectors. |
-| Password hashing upgrade (SHA-256 to argon2id) | SHA-256 is not a password hash. It has no salt, no work factor, and is GPU-trivially-crackable. Any security-aware user will flag this immediately. | LOW | `argon2-cffi` is pip-installable (Dockerfile already uses pip for other deps). Add to requirements.txt. hashlib.sha256 calls in gateway.py line 1090 and entrypoint.sh line 66 need replacement. |
-| Stop leaking recovery secret in logs | entrypoint.sh line 39 prints `GOOSECLAW_RECOVERY_SECRET=<value>` to stdout on first boot. Anyone with log access (Railway dashboard, log drain) sees the secret. | LOW | Print only a hint ("recovery secret saved to /data/.recovery_secret") without the actual value. |
-| Request body size limits | Without limits, a single POST with a 10GB body exhausts memory and crashes the process. | LOW | gateway.py reads `Content-Length` at line 9601 but has no max check. Add a MAX_BODY_SIZE constant (e.g., 1MB) and reject oversized requests with 413. |
-| Dependency lock file (pinned hashes) | Without pinned hashes, `pip install` can pull compromised packages via supply chain attacks. | LOW | requirements.txt has version ranges for chromadb and mcp. Pin exact versions and add `--require-hashes` support. |
-| Non-root container execution | Already partially done (gooseclaw user exists). entrypoint.sh still runs as root for setup, then drops privileges. This is correct pattern. | DONE | Verify no processes remain running as root after init. |
+### Identity Integration (GooseClaw-Specific)
 
-#### Hardening
+| Feature | Why Expected | Complexity | Dependencies | Notes |
+|---------|--------------|------------|--------------|-------|
+| Identity trait routing to user.md | Current memory writer routes "identity" facts (stable 6+ months) to user.md sections. This MUST continue working. user.md is the agent's live understanding of the user, loaded every session via .goosehints. | MEDIUM | Existing `_classify_identity_section()`, user.md file system | mem0 can't do this natively. The extraction prompt must still produce identity vs knowledge classification. Option A: keep the custom extraction prompt + routing, use mem0 only for knowledge. Option B: use mem0 for everything, add a post-extraction hook that also writes to user.md. Option A is safer. |
+| soul.md / user.md remain source of truth for identity | These files are loaded via .goosehints at session start. They're the agent's "who am I" and "who are you" context. mem0 is for episodic/factual memory, not identity. | LOW | No change needed | Clear boundary: identity files = who. mem0 = what happened, what's known. This is already the split in turn-rules.md. |
+| ChromaDB retained for system docs | System collection (platform docs, procedures, schemas) stays in ChromaDB. Only runtime/user memories move to mem0. Two separate concerns. | LOW | Existing knowledge MCP stays for system namespace | Per PROJECT.md: "Keep chromadb for system docs (platform reference, separate concern)". The knowledge MCP server's `system_col` continues unchanged. |
 
-| Feature | Why Expected | Complexity | Notes |
-|---------|--------------|------------|-------|
-| Docker resource limits documentation | A runaway goose session or OOM from chromadb can take down the container. Railway allows setting these but the Dockerfile should document recommended values. | LOW | Railway sets these via service config, not Dockerfile. Document recommended values (e.g., 1GB RAM, 1 CPU minimum). |
-| Structured JSON logging | Text logs are unparseable by log aggregators (Datadog, Loki, Railway log drains). Every production service needs machine-readable logs. | MEDIUM | Replace print() calls with a thin `log()` wrapper that outputs JSON with timestamp, level, component. gateway.py has hundreds of print statements. |
-| Graceful shutdown with timeout | Already has SIGTERM handler but no timeout. If goosed hangs on shutdown, the container never stops. Railway sends SIGKILL after 10s. | LOW | Add `timeout` to the `wait` in shutdown handler. Use `kill -9` after 5s grace period. |
-| CVE scanning in CI | Users deploying self-hosted security-sensitive software expect the maintainer to scan for known vulnerabilities. | LOW | Add `trivy image` or `grype` scan to CI pipeline. ubuntu:22.04 base accumulates CVEs fast. |
-| Complete HTTP security headers | Referrer-Policy and Permissions-Policy already exist. Missing: X-DNS-Prefetch-Control, Cross-Origin-Opener-Policy, Cross-Origin-Resource-Policy. | LOW | Already have most headers. Add the missing ones to the SECURITY_HEADERS dict at line 861. |
-| CSRF protection | Setup wizard POSTs config changes. Without CSRF tokens, any page the user visits could silently reconfigure their agent. | MEDIUM | Session-based CSRF tokens for all state-changing POST endpoints. The cookie auth system already exists, bolt CSRF onto it. |
+### Operational
 
-#### Testing
+| Feature | Why Expected | Complexity | Dependencies | Notes |
+|---------|--------------|------------|--------------|-------|
+| Migration from ChromaDB runtime to mem0 | Existing runtime knowledge chunks must migrate to mem0 on first boot. Users shouldn't lose memories on upgrade. | MEDIUM | ChromaDB read access, mem0 `add()` or direct pgvector insert | One-time migration script. Read all runtime_col chunks from ChromaDB, insert into mem0. Similar pattern to existing `migrate_memory.py`. |
+| Graceful fallback if mem0/pgvector unavailable | If PostgreSQL is down, the agent should still work. Memory tools return errors but don't crash the session. | LOW | Error handling in MCP tools | Same pattern as current knowledge MCP: try/except, return human-readable error strings. |
+| Memory writer toggle (enable/disable) | Current `setup.json` has `memory_writer_enabled` flag. Must persist. Some users don't want auto-extraction. | LOW | setup.json config | Already implemented. Just needs to gate the new mem0 extraction path. |
 
-| Feature | Why Expected | Complexity | Notes |
-|---------|--------------|------------|-------|
-| Gateway HTTP endpoint tests | Only 1 test file exists (test_gateway.py) covering specific features. Core HTTP routing, auth flow, rate limiting, and security headers are untested. | HIGH | gateway.py is ~9800 lines. Needs systematic coverage of: auth endpoints, setup endpoints, job CRUD, health checks, proxy behavior, error handling. |
-| Shell script tests | job.sh, remind.sh, notify.sh, secret.sh are untested bash scripts that handle user input. | MEDIUM | Use bats-core (Bash Automated Testing System) or simple bash test scripts. Mock the curl calls to gateway API. |
-| Entrypoint bootstrap tests | entrypoint.sh handles first boot, config generation, env var rehydration, upgrade paths. All untested. | MEDIUM | Test in a Docker build context. Verify config.yaml generation, symlink creation, version upgrade logic. |
-| Integration/e2e tests | No end-to-end test that boots the container and validates the full flow (setup wizard -> configure provider -> goose starts -> telegram connects). | HIGH | Docker-based e2e test. Start container, hit health endpoint, complete setup flow, verify goosed starts. |
+## Differentiators
 
-### Differentiators (Competitive Advantage)
+Features that go beyond table stakes. These make GooseClaw's memory system feel genuinely intelligent rather than just "has memory."
 
-Features that go beyond table stakes and make GooseClaw stand out among self-hosted AI agent platforms. Not expected, but valued.
+### Knowledge Graph (Neo4j)
 
-| Feature | Value Proposition | Complexity | Notes |
-|---------|-------------------|------------|-------|
-| Automated security audit endpoint | Self-hosted users want confidence their deployment is secure. An `/api/security/audit` endpoint that checks password strength, header config, exposed ports, and log settings gives instant peace of mind. | MEDIUM | Check: password hash algorithm, recovery secret not in env, security headers present, body size limits set, rate limiting active. Return pass/fail per check. |
-| Secrets rotation support | Vault stores API keys in plaintext YAML. Adding rotation reminders or one-click rotation (re-validate key, update vault) reduces credential staleness risk. | HIGH | Complex because each provider has different key rotation flows. Defer to later milestone. |
-| Container health dashboard | `/admin` already exists. Enhance with: memory usage, uptime, goosed restart count, last error, active sessions, rate limit stats. | MEDIUM | Most data is already tracked in gateway.py globals. Surface it in the admin dashboard. |
-| Audit logging | Log who did what and when: config changes, password resets, vault access, job creation. Critical for multi-user or compliance scenarios. | MEDIUM | Append-only log file at /data/audit.log. JSON format. Covers: auth events, config changes, vault operations, job lifecycle. |
-| Rate limiting per-endpoint tuning | Current rate limiting is per-IP globally. Different endpoints have different sensitivity (auth=strict, health=relaxed, API=moderate). | LOW | Already partially done (auth_limiter, notify_limiter exist as separate instances). Formalize and document. |
-| Dependency auto-update bot | Automated PRs for dependency updates with CVE annotations. Users forking the template get notified of security updates. | LOW | Enable Dependabot or Renovate on the GitHub repo. Configuration file only. |
+| Feature | Value Proposition | Complexity | Dependencies | Notes |
+|---------|-------------------|------------|--------------|-------|
+| Entity relationship extraction | mem0 extracts entities (people, places, projects) and their relationships into a graph. Enables "who is connected to what?" queries. Current ChromaDB is flat, no relationships. | HIGH | Neo4j container, mem0 `graph_store` config, APOC plugin | Neo4j is the slowest container to start (90s+ health check). Adds Docker complexity. Worth it for relationship-rich domains (user's professional network, project dependencies). Phase this: vector-first, graph later. |
+| Relationship-enhanced search | When searching memories, graph relationships augment vector results. "What do I know about Sarah?" returns not just direct mentions but also her connections, projects, and context. | MEDIUM | Neo4j running, mem0 graph_store enabled | mem0 runs graph queries in parallel with vector search, appends `relations` array to results. Big UX upgrade for users with rich relationship context. |
+| Multi-hop entity traversal | "What connects project X to person Y?" traverses the graph to find indirect relationships across multiple entities. Flat vector search can't do this. | MEDIUM | Neo4j, graph queries | This is where knowledge graphs shine. Not possible with vector-only search. |
 
-### Anti-Features (Commonly Requested, Often Problematic)
+### Intelligent Memory Management
 
-Features that seem good but create problems for this specific project.
+| Feature | Value Proposition | Complexity | Dependencies | Notes |
+|---------|-------------------|------------|--------------|-------|
+| Memory categories/tagging | mem0 supports metadata categories (e.g., "work", "personal", "health"). Enables filtered recall: "what do you remember about my work?" | LOW | mem0 metadata on `add()` | Use `metadata={"category": "work"}` on add. Filter on search with `filters`. Current ChromaDB uses `type` field (fact, procedure, etc). mem0 can do both type and category. |
+| Memory history/audit trail | mem0 tracks all ADD/UPDATE/DELETE operations with timestamps via SQLite history. Users can ask "what changed about memory X?" and get an audit log. | LOW (mem0 built-in) | mem0 `history()` API | Expose as MCP tool: `memory_history`. Current system has no audit trail for memory changes. This is free with mem0. |
+| Memory consolidation | Periodic merging of similar memories, relevance score updates based on usage. Cuts storage by ~60%, raises retrieval precision ~22%. | LOW (mem0 built-in) | mem0 internal consolidation | Happens automatically. No custom code needed. Current ChromaDB has no consolidation (memories accumulate forever). |
+| Configurable extraction prompts | mem0 supports `custom_fact_extraction_prompt` and `custom_update_memory_prompt`. GooseClaw can customize extraction to match the identity/knowledge split in turn-rules.md. | LOW | mem0 config `custom_prompts` | This is how we customize mem0's extraction to match GooseClaw's philosophy: "save like you'll lose the session any second." |
+| Scoped memories (user_id, agent_id, run_id) | mem0 supports hierarchical memory scoping. user_id for permanent, run_id for session-scoped. Enables per-bot memory isolation if multi-bot is added later. | LOW | mem0 scoping params on all API calls | Single user for now (user_id = "default" or from vault). But the architecture supports multi-user without rework. Forward-compatible. |
 
-| Feature | Why Requested | Why Problematic | Alternative |
-|---------|---------------|-----------------|-------------|
-| TLS termination in container | "My app should serve HTTPS directly" | Railway (and most PaaS) terminates TLS at the load balancer. Adding TLS inside the container means managing certs, renewal (certbot cron), and double encryption. Adds complexity for zero security benefit on Railway. | Trust Railway's TLS termination. Set HSTS headers (already done). Document that direct Docker deployments need a reverse proxy (nginx/caddy). |
-| WAF inside container | "Block SQL injection and XSS at the edge" | A stdlib Python HTTP server is not the right place for a WAF. WAFs need dedicated infrastructure, regular rule updates, and introduce latency. The attack surface is small (single-user, auth-gated). | Input sanitization (already exists), rate limiting (already exists), and content-type validation are sufficient for this threat model. |
-| Encrypted vault at rest | "API keys should be encrypted on disk" | Encryption at rest for a single-user self-hosted app means managing encryption keys, which are stored on the same disk. If an attacker has disk access, they have the key too. Railway volumes are already isolated per deployment. | File permissions (chmod 600/700 already done). Document that Railway volumes are not shared. For paranoid users, point to external secret managers (Railway env vars, Doppler). |
-| Multi-factor authentication | "MFA for the web dashboard" | Single-user self-hosted app deployed on a PaaS with its own auth. Adding TOTP/WebAuthn is significant complexity for a use case where the user already authenticated to Railway. | Strong password (enforce minimum length), session expiry (already 24hr), rate-limited auth (already 5/min). Document that Railway's own auth is the primary gate. |
-| Comprehensive RBAC | "Role-based access control for different users" | GooseClaw is a single-user personal agent. RBAC adds schema complexity, migration burden, and UX friction for a use case that doesn't exist yet. | Single admin password. If multi-user is needed later, build it then. |
-| Automatic certificate management | "Zero-config HTTPS with Let's Encrypt" | Only relevant for bare-metal Docker deployments. Railway/Render/Fly all handle TLS. Adding certbot adds a cron job, port 80 requirement, and failure mode. | Document reverse proxy setup for bare-metal. Provide example nginx/caddy configs. |
+### User-Facing Features
+
+| Feature | Value Proposition | Complexity | Dependencies | Notes |
+|---------|-------------------|------------|--------------|-------|
+| "What do you remember about me?" command | User can ask the agent to enumerate memories. `memory_list` tool with pagination. Current system requires manual knowledge_search queries. | LOW | mem0 `get_all()` API | Expose as MCP tool. mem0 returns all memories for a user_id with metadata. Much better than current approach of searching ChromaDB with vague queries. |
+| Memory deletion by user request | "Forget that I told you about X" should actually delete the memory. Current system has knowledge_delete but it's by exact key, hard to discover. | LOW | mem0 `delete()` API, search-then-delete flow | Agent searches for the memory, confirms with user, deletes by ID. mem0 handles cascade (removes from vector store, graph store, and history). |
+| Entity listing | "Who do you know about?" lists all entities in the knowledge graph. Not possible with flat vector search. | LOW | mem0 `list_entities()` API | Only meaningful once graph memory is enabled. Shows people, places, projects as distinct entities. |
+
+## Anti-Features
+
+Features to explicitly NOT build. These seem useful but create problems for GooseClaw's architecture.
+
+| Anti-Feature | Why Requested | Why Problematic | Alternative |
+|--------------|---------------|-----------------|-------------|
+| mem0 cloud/managed service | "Just use the API, no infrastructure" | GooseClaw is self-hosted for privacy. Sending all memories to mem0's cloud defeats the purpose. Users chose self-hosting specifically to own their data. | Self-hosted mem0 with pgvector + optional Neo4j. All data stays on Railway volume. |
+| Separate embedding model API key | "Configure a dedicated embedding provider" | Users already struggle configuring one provider. Adding a second API key for embeddings adds confusion. Most providers (OpenAI, Anthropic, etc) offer both LLM and embedding models. | Reuse the same provider configured in vault. If the provider doesn't support embeddings, fall back to a lightweight local model (sentence-transformers) or document the requirement. |
+| Real-time memory streaming | "Show memories being extracted in real-time" | Memory extraction is a background process. Surfacing it real-time adds WebSocket complexity, clutters the chat, and makes the "show results, hide plumbing" philosophy impossible. | Silent extraction. Log to structured logging for debugging. Users can ask "what did you learn?" after the fact. |
+| Exposing mem0's REST API directly | "Run mem0 as a separate HTTP server with its own endpoints" | Adds another port, another auth layer, another attack surface. GooseClaw's constraint is Python stdlib only for gateway.py. The mem0 MCP is the right interface. | MCP server (stdio) is the only interface. Gateway talks to mem0 via Python API directly for auto-extraction. No HTTP server for mem0. |
+| Replacing user.md/soul.md with mem0 | "Store identity in mem0 too, one system for everything" | Identity files are loaded via .goosehints at session start. They're always in context. mem0 memories are retrieved on-demand via search. These are fundamentally different access patterns. Identity needs to be guaranteed-present, not search-dependent. | Keep the split: identity files for "who", mem0 for "what happened/what's known". This matches the existing turn-rules.md routing. |
+| Agent-managed memory (Letta-style) | "Let the agent decide when and how to manage its own memory store" | Adds unpredictable LLM-dependent behavior to a critical system. mem0's structured pipeline (extract -> compare -> ADD/UPDATE/DELETE) is deterministic given the same inputs. Agent-managed memory can drift, forget to consolidate, or over-remember. | mem0's pipeline handles memory management. The agent uses tools (search, add) for explicit operations. Background extraction handles implicit learning. |
+| Complex memory UI in setup wizard | "Add a memory management dashboard to setup.html" | setup.html is a single HTML file (no build tooling). Adding a memory browser, search interface, and edit capability pushes it past maintainability. The agent itself IS the memory interface. | Users interact with memory through conversation: "what do you remember?", "forget X", "remember that Y". The agent uses mem0 tools. No separate UI. |
 
 ## Feature Dependencies
 
 ```
-Password hashing upgrade
-    (no dependencies, standalone fix)
+pgvector (PostgreSQL) setup
+    (foundation, no dependencies)
 
-Shell injection fixes
-    (no dependencies, standalone fix)
+mem0 Python library installation
+    (foundation, no dependencies)
 
-Recovery secret leak fix
-    (no dependencies, standalone fix)
+mem0 MCP server (stdio, Python)
+    └──requires──> pgvector setup
+    └──requires──> mem0 library
+    └──requires──> LLM provider from vault
 
-Request body size limits
-    (no dependencies, standalone fix)
+Memory search tool (memory_search)
+    └──requires──> mem0 MCP server
 
-Structured JSON logging
-    └──enhances──> Audit logging (audit log uses same format)
+Memory add tool (memory_add)
+    └──requires──> mem0 MCP server
 
-Gateway HTTP tests
-    └──requires──> Shell injection fixes (test the fixed code, not the broken code)
+Memory list/get/delete/history tools
+    └──requires──> mem0 MCP server
 
-Shell script tests
-    └──requires──> Shell injection fixes (secret.sh injection must be fixed first)
+Gateway auto-extraction rewrite
+    └──requires──> mem0 Python API (direct, not MCP)
+    └──requires──> pgvector setup
+    └──replaces──> current ChromaDB-based _process_memory_extraction()
 
-Entrypoint tests
-    └──requires──> Recovery secret leak fix (test correct behavior)
+Identity routing preservation
+    └──requires──> Gateway auto-extraction rewrite
+    └──depends-on──> existing _classify_identity_section()
 
-Integration/e2e tests
-    └──requires──> Gateway HTTP tests (unit tests first, then integration)
-    └──requires──> All security fixes (test the secure system)
+ChromaDB runtime -> mem0 migration
+    └──requires──> mem0 Python API
+    └──requires──> pgvector setup
+    └──reads-from──> existing ChromaDB runtime collection
 
-Audit logging
-    └──requires──> Structured JSON logging (consistent log format)
+Neo4j knowledge graph (optional, phased)
+    └──requires──> pgvector setup (vector-first)
+    └──requires──> Neo4j container
+    └──enhances──> memory search (adds relations)
+    └──enables──> entity listing, relationship queries
 
-Security audit endpoint
-    └──requires──> Password hashing upgrade (needs to check hash algorithm)
-    └──requires──> All security fixes (needs to verify they're in place)
+Memory categories/tagging
+    └──requires──> mem0 MCP server
+    └──optional──> custom extraction prompt for auto-categorization
 
-CSRF protection
-    └──requires──> Gateway HTTP tests (need tests before adding auth complexity)
+Memory history/audit
+    └──requires──> mem0 MCP server
+    └──uses──> mem0 built-in SQLite history
+
+ChromaDB system collection (unchanged)
+    └──independent──> continues serving system docs
+    └──coexists-with──> mem0 for user memories
 ```
 
-### Dependency Notes
+### Key Dependency Insight
 
-- **Security fixes are independent**: Shell injection, password hashing, secret leak, body size limits can all be done in parallel with zero dependencies on each other.
-- **Tests depend on fixes**: Write tests for the fixed code. Fixing and testing can happen in the same phase, but fix first, test second within each task.
-- **Structured logging before audit logging**: Audit logging should use the same JSON format as structured logging. Do structured logging first, then audit logging reuses the pattern.
-- **E2e tests come last**: They validate the whole system works together, so all component-level fixes and tests must exist first.
+The critical path is: pgvector -> mem0 init -> MCP server -> gateway extraction rewrite -> migration. Neo4j is a separate branch that can be added after the vector-only path is stable. This means the milestone naturally splits into two phases: vector memory (essential) and graph memory (enhancement).
 
-## MVP Definition
+## MVP Recommendation
 
-### Launch With (v4.0 - This Milestone)
+### Phase 1: Vector Memory (Must Have)
 
-Critical security and testing work. Ship these or the product is not production-ready.
+Replace ChromaDB runtime collection with mem0 + pgvector. This delivers all table stakes features.
 
-- [x] Fix shell injection in secret.sh, entrypoint.sh, gateway.py `_run_script` -- RCE vectors
-- [x] Upgrade password hashing from SHA-256 to argon2id -- crackable passwords
-- [x] Stop leaking recovery secret in entrypoint.sh logs -- credential leak
-- [x] Add request body size limits -- DoS vector
-- [x] Pin dependency versions with hashes -- supply chain risk
-- [x] Add graceful shutdown timeout -- container hangs
-- [x] Gateway HTTP endpoint tests (auth, setup, jobs, health) -- no test coverage on core paths
-- [x] Shell script tests (secret.sh, job.sh, remind.sh, notify.sh) -- untested user-facing scripts
-- [x] Entrypoint bootstrap tests -- untested init logic
-- [x] CVE scanning in CI -- no vulnerability monitoring
-- [x] Complete HTTP security headers -- minor gaps
+1. **pgvector setup** - PostgreSQL with vector extension on Railway volume
+2. **mem0 MCP server** - stdio server exposing memory tools to goose
+3. **Gateway extraction rewrite** - Replace `_process_memory_extraction()` to use mem0
+4. **Identity routing preservation** - Keep user.md routing for identity traits
+5. **ChromaDB migration** - One-time migrate runtime chunks to mem0
+6. **ChromaDB system collection retained** - System docs stay in ChromaDB
 
-### Add After Validation (v4.x)
+MCP tools for Phase 1:
+- `memory_search(query, limit?, category?)` - Semantic search, replaces knowledge_search for runtime memories
+- `memory_add(content, category?)` - Explicit memory storage, replaces knowledge_upsert
+- `memory_get(memory_id)` - Get specific memory by ID
+- `memory_delete(memory_id)` - Delete specific memory
+- `memory_list(limit?, category?)` - List all memories with optional filter
+- `memory_history(limit?)` - Audit trail of memory changes
 
-Features to add once core security and tests are solid.
+### Phase 2: Knowledge Graph (Enhancement, Deferred)
 
-- [ ] Structured JSON logging -- enables log aggregation, needed before audit logging
-- [ ] CSRF protection on state-changing endpoints -- defense in depth
-- [ ] Audit logging (config changes, auth events, vault ops) -- accountability
-- [ ] Security audit endpoint (`/api/security/audit`) -- user confidence
-- [ ] Container health dashboard enhancements -- operational visibility
-- [ ] E2e integration tests -- validate full system
+Add Neo4j for entity relationship extraction. Only after Phase 1 is stable.
 
-### Future Consideration (v5+)
+1. **Neo4j container** - Add to Docker setup
+2. **Graph store config** - Enable mem0 graph_store with Neo4j
+3. **Entity tools** - `memory_entities()`, `memory_relations(entity)`
+4. **Relationship-enhanced search** - Graph results augment vector search
 
-Features to defer until production usage patterns are established.
+Defer: Neo4j graph because it adds Docker complexity (90s startup, APOC plugin, Bolt protocol), Railway resource requirements, and a separate failure mode. The vector-only path already delivers 80% of the value.
 
-- [ ] Secrets rotation support -- complex, provider-specific
-- [ ] Dependency auto-update bot (Dependabot/Renovate) -- maintenance automation
+## MCP Tool Design
+
+### Recommended Tool Signatures
+
+These replace the existing knowledge MCP tools for user/runtime memories:
+
+```python
+# ── replaces knowledge_search for runtime memories ──
+@mcp.tool()
+def memory_search(query: str, limit: int = 5, category: str = "") -> str:
+    """Search your memories semantically. Returns relevant memories with scores.
+
+    Args:
+        query: Natural language search (e.g., "what projects is the user working on?")
+        limit: Max results (default 5, max 20)
+        category: Optional filter (e.g., "work", "personal", "health")
+    """
+
+# ── replaces knowledge_upsert for runtime memories ──
+@mcp.tool()
+def memory_add(content: str, category: str = "") -> str:
+    """Store a memory explicitly. Use for facts, preferences, integrations.
+
+    Args:
+        content: The memory to store (natural language, mem0 extracts facts automatically)
+        category: Optional category tag (e.g., "work", "personal", "integration")
+    """
+
+# ── new: not possible with ChromaDB ──
+@mcp.tool()
+def memory_list(limit: int = 10, category: str = "") -> str:
+    """List all stored memories, newest first. Use for "what do you remember?"
+
+    Args:
+        limit: Max results (default 10, max 50)
+        category: Optional filter
+    """
+
+# ── replaces knowledge_get ──
+@mcp.tool()
+def memory_get(memory_id: str) -> str:
+    """Get a specific memory by its ID.
+
+    Args:
+        memory_id: The memory identifier
+    """
+
+# ── replaces knowledge_delete ──
+@mcp.tool()
+def memory_delete(memory_id: str) -> str:
+    """Delete a specific memory permanently.
+
+    Args:
+        memory_id: The memory identifier to delete
+    """
+
+# ── new: audit trail, not possible with ChromaDB ──
+@mcp.tool()
+def memory_history(limit: int = 10) -> str:
+    """Show recent memory changes (adds, updates, deletes). Audit trail.
+
+    Args:
+        limit: Max entries (default 10, max 50)
+    """
+```
+
+### Tool Design Rationale
+
+- **memory_add replaces knowledge_upsert**: mem0's `add()` handles key generation, dedup, and contradiction resolution automatically. No need for user-specified keys (the biggest friction point of knowledge_upsert).
+- **memory_search replaces knowledge_search for runtime**: System docs stay in ChromaDB's knowledge_search. Runtime memories move to memory_search. The .goosehints instructions must be updated to reflect this split.
+- **memory_list is new**: ChromaDB's `get()` with no filter was expensive (fetched everything). mem0's `get_all()` is designed for this. Enables "what do you remember about me?" naturally.
+- **memory_history is new**: ChromaDB had no history. mem0 tracks all operations. Enables "what changed?" and debugging.
+- **No knowledge_recent equivalent needed**: memory_list with sort-by-date covers this. Fewer tools = less agent confusion.
+
+### Tools NOT Exposed (Intentional)
+
+- **delete_all_memories**: Too destructive for an MCP tool. Require user to do this via gateway API or direct request.
+- **list_entities / delete_entity**: Only relevant for graph memory (Phase 2). Add later.
+- **update_memory**: mem0's `add()` handles updates via its contradiction resolution pipeline. Explicit update by ID is rarely needed and adds cognitive load.
+
+## Automatic Extraction: How It Changes
+
+### Current Flow (ChromaDB)
+
+```
+User goes idle (10 min)
+  -> _memory_writer_loop() detects idle
+  -> Fetches session messages
+  -> Sends to LLM with MEMORY_EXTRACT_PROMPT
+  -> LLM returns JSON: { identity: [...], knowledge: [...] }
+  -> Identity traits -> user.md (section-routed)
+  -> Knowledge items -> ChromaDB runtime_col.upsert()
+```
+
+### New Flow (mem0)
+
+```
+User goes idle (10 min)
+  -> _memory_writer_loop() detects idle (unchanged)
+  -> Fetches session messages (unchanged)
+  -> Two parallel paths:
+
+  Path A: mem0 automatic extraction
+    -> mem0.add(messages, user_id="default")
+    -> mem0 internally: LLM extracts facts, compares with existing,
+       ADD/UPDATE/DELETE as needed. Stored in pgvector.
+    -> No custom prompt needed. mem0 handles dedup + contradiction.
+
+  Path B: Identity extraction (preserved)
+    -> Send to LLM with IDENTITY_EXTRACT_PROMPT (narrower prompt)
+    -> LLM returns JSON: { identity: [...] }
+    -> Identity traits -> user.md (section-routed, unchanged)
+    -> No knowledge routing (mem0 handles that in Path A)
+```
+
+### Key Simplification
+
+The current `MEMORY_EXTRACT_PROMPT` does two things: extracts identity AND knowledge. With mem0, knowledge extraction is handled automatically by `mem0.add()`. The gateway only needs a simpler identity-focused prompt for the user.md routing. This cuts the extraction code roughly in half.
+
+### What Stays the Same
+
+- Idle detection (10 min configurable)
+- Session message fetching
+- user.md section-routed identity writes
+- `_classify_identity_section()` logic
+- `_fact_already_exists()` dedup for user.md
+- `memory_writer_enabled` toggle in setup.json
+
+### What Changes
+
+- ChromaDB `runtime_col.upsert()` -> `mem0.add(messages)`
+- Complex JSON knowledge routing -> mem0 handles internally
+- `MEMORY_EXTRACT_PROMPT` splits into simpler identity-only prompt
+- `_get_knowledge_collection()` ChromaDB lazy-load -> mem0 client init
+- `_process_memory_extraction()` simplified (identity only, knowledge removed)
 
 ## Feature Prioritization Matrix
 
 | Feature | User Value | Implementation Cost | Priority |
 |---------|------------|---------------------|----------|
-| Fix shell injection (3 locations) | HIGH | MEDIUM | P1 |
-| Password hashing upgrade (SHA-256 to argon2id) | HIGH | LOW | P1 |
-| Stop leaking recovery secret | HIGH | LOW | P1 |
-| Request body size limits | HIGH | LOW | P1 |
-| Pin dependencies with hashes | MEDIUM | LOW | P1 |
-| Graceful shutdown timeout | MEDIUM | LOW | P1 |
-| Complete HTTP security headers | MEDIUM | LOW | P1 |
-| Gateway HTTP endpoint tests | HIGH | HIGH | P1 |
-| Shell script tests | MEDIUM | MEDIUM | P1 |
-| Entrypoint bootstrap tests | MEDIUM | MEDIUM | P1 |
-| CVE scanning in CI | MEDIUM | LOW | P1 |
-| Structured JSON logging | MEDIUM | MEDIUM | P2 |
-| CSRF protection | MEDIUM | MEDIUM | P2 |
-| Audit logging | MEDIUM | MEDIUM | P2 |
-| Security audit endpoint | LOW | MEDIUM | P2 |
-| E2e integration tests | HIGH | HIGH | P2 |
-| Health dashboard enhancements | LOW | MEDIUM | P3 |
-| Secrets rotation | LOW | HIGH | P3 |
+| mem0 MCP server with core tools | HIGH | MEDIUM | P0 |
+| pgvector setup (PostgreSQL on Railway) | HIGH | MEDIUM | P0 |
+| Gateway auto-extraction via mem0 | HIGH | MEDIUM | P0 |
+| Contradiction resolution (automatic) | HIGH | FREE (mem0) | P0 |
+| Memory deduplication (automatic) | HIGH | FREE (mem0) | P0 |
+| Identity routing to user.md preserved | HIGH | LOW | P0 |
+| ChromaDB runtime -> mem0 migration | HIGH | MEDIUM | P0 |
+| LLM extraction via existing provider | HIGH | MEDIUM | P0 |
+| ChromaDB system docs retained | MEDIUM | LOW | P0 |
+| Memory list/enumerate | MEDIUM | LOW | P1 |
+| Memory history/audit | LOW | LOW | P1 |
+| Memory categories/tagging | LOW | LOW | P1 |
+| Scoped memories (user_id) | LOW (single user) | LOW | P1 |
+| Custom extraction prompts | MEDIUM | LOW | P1 |
+| Neo4j knowledge graph | MEDIUM | HIGH | P2 |
+| Entity relationship extraction | MEDIUM | HIGH (Neo4j) | P2 |
+| Relationship-enhanced search | MEDIUM | MEDIUM | P2 |
+| Entity listing tool | LOW | LOW | P2 |
 
 **Priority key:**
-- P1: Must have for v4.0 launch (security fixes + core test coverage)
-- P2: Should have, add in v4.x (defense in depth + observability)
-- P3: Nice to have, future consideration
-
-## Competitor Feature Analysis
-
-| Feature | Dify (self-hosted) | LocalAI | Open WebUI | GooseClaw Approach |
-|---------|-------------------|---------|------------|-------------------|
-| Password hashing | bcrypt | N/A (no auth) | bcrypt | Upgrade to argon2id (stronger than bcrypt, OWASP recommended) |
-| Rate limiting | nginx-level | None | None | Built-in per-IP sliding window (already exists, per-endpoint tuning needed) |
-| Security headers | nginx config | None | minimal | Comprehensive set in gateway.py (mostly done) |
-| Structured logging | Yes (JSON) | Partial | Minimal | Needs implementation (currently print statements) |
-| CVE scanning | GitHub Actions | Trivy | None documented | Add to CI (trivy or grype) |
-| CSRF protection | Yes (framework) | N/A | Yes (SvelteKit) | Needs implementation (no framework provides it) |
-| Test coverage | Moderate | Good | Good | Needs significant improvement (current: minimal) |
-| Shell injection prevention | Framework handles | N/A | N/A | Manual fix needed (unique to bash+Python architecture) |
-| Secrets management | Environment vars | Environment vars | Environment vars | Vault file + env vars (unique, needs injection fix) |
-| Graceful shutdown | Docker Compose | Docker | Docker | Custom handler (needs timeout) |
+- P0: Must have for v5.0 launch (core memory replacement)
+- P1: Should have, include in v5.0 if time permits (enhanced memory features)
+- P2: Defer to v5.x or v6.0 (knowledge graph, requires Neo4j)
 
 ## Sources
 
-- [OWASP Docker Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Docker_Security_Cheat_Sheet.html) -- HIGH confidence, authoritative
-- [Docker Official Security Docs](https://docs.docker.com/engine/security/) -- HIGH confidence, authoritative
-- [Docker Resource Constraints](https://docs.docker.com/engine/containers/resource_constraints/) -- HIGH confidence, authoritative
-- [Password Hashing Guide: Argon2 vs Bcrypt vs Scrypt vs PBKDF2](https://guptadeepak.com/the-complete-guide-to-password-hashing-argon2-vs-bcrypt-vs-scrypt-vs-pbkdf2-2026/) -- MEDIUM confidence, comprehensive comparison
-- [argon2-cffi documentation](https://argon2-cffi.readthedocs.io/) -- HIGH confidence, official library docs
-- [Python Security Best Practices](https://arjancodes.com/blog/best-practices-for-securing-python-applications/) -- MEDIUM confidence, best practices guide
-- [Web Application Security Best Practices 2026](https://www.radware.com/cyberpedia/application-security/web-application-security-best-practices/) -- MEDIUM confidence, industry overview
-- Codebase analysis of gateway.py, entrypoint.sh, secret.sh, Dockerfile -- HIGH confidence, primary source
+### HIGH confidence
+- GooseClaw codebase analysis: gateway.py memory writer (lines 6700-7080), knowledge/server.py, .goosehints, turn-rules.md, identity files
+- [mem0 GitHub](https://github.com/mem0ai/mem0) - open-source repository, architecture
+- [mem0 Official MCP Server](https://github.com/mem0ai/mem0-mcp) - 9 tools, tool signatures
+- [mem0 pgvector Configuration](https://docs.mem0.ai/components/vectordbs/dbs/pgvector) - full config dict
+
+### MEDIUM confidence
+- [DeepWiki mem0 Overview](https://deepwiki.com/mem0ai/mem0/1-overview) - architecture, dual-store model
+- [DeepWiki Basic Usage](https://deepwiki.com/mem0ai/mem0/10.1-basic-usage) - API patterns, Memory class methods
+- [mem0 Graph Memory Overview](https://docs.mem0.ai/open-source/graph_memory/overview) - Neo4j config, entity extraction
+- [OpenClaw Memory-Mem0 Plugin](https://github.com/serenichron/openclaw-memory-mem0) - similar integration architecture
+- [mem0 Self-Host Docker Guide](https://mem0.ai/blog/self-host-mem0-docker) - docker-compose patterns
+- [mem0 Custom Update Prompt](https://docs.mem0.ai/open-source/features/custom-update-memory-prompt) - ADD/UPDATE/DELETE/NONE decisions
+- [Mem0 Alternatives Comparison](https://vectorize.io/articles/mem0-alternatives) - Hindsight, Zep, Letta comparison
+- [AI Agent Memory Best Practices 2026](https://47billion.com/blog/ai-agent-memory-types-implementation-best-practices/) - industry expectations
+
+### LOW confidence
+- mem0 consolidation stats (60% storage reduction, 22% precision boost) - from mem0's own research page, not independently verified
 
 ---
-*Feature research for: production hardening of self-hosted Docker AI agent platform*
-*Researched: 2026-03-16*
+*Feature research for: mem0 memory layer integration into GooseClaw AI agent platform*
+*Researched: 2026-03-19*

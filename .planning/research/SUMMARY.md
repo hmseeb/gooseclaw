@@ -1,180 +1,190 @@
 # Project Research Summary
 
-**Project:** GooseClaw v4.0 Production Hardening
-**Domain:** Security hardening and test coverage for self-hosted Docker AI agent platform
-**Researched:** 2026-03-16
-**Confidence:** HIGH
+**Project:** GooseClaw v5.0 mem0 Memory Layer Integration
+**Domain:** AI agent memory system (vector + knowledge graph) for self-hosted personal agent
+**Researched:** 2026-03-19
+**Confidence:** HIGH (core vector path), MEDIUM (graph memory, Neo4j maturity)
 
 ## Executive Summary
 
-GooseClaw is a single-user self-hosted AI agent platform running a Python stdlib HTTP gateway (~9800 lines) inside Docker on Railway. The v4.0 milestone is a hardening sprint, not a feature sprint. Research confirms the system has several active security vulnerabilities (not theoretical ones) that must be fixed before this can be called production-ready: SHA-256 password storage with no salt, shell injection in 3 separate locations, recovery secret leaking to container stdout on first boot, and no request body size limits. None of these require architectural changes, just surgical fixes to existing files.
+GooseClaw's current memory system stores user knowledge in ChromaDB with a hand-rolled extraction pipeline: idle detection, LLM-based JSON extraction, manual dedup, manual upsert. This works but lacks contradiction resolution (old facts accumulate instead of updating), has no relationship modeling, and the extraction code is ~400 lines of brittle JSON parsing. mem0 is an open-source Python library that replaces all of this with a single `add()` call that handles fact extraction, embedding, contradiction resolution (ADD/UPDATE/DELETE/NOOP), and optional knowledge graph storage. The recommended approach is to integrate mem0 in open-source mode (no Mem0 cloud API), backed by pgvector on a separate Railway PostgreSQL service, with Neo4j deferred to a later phase.
 
-The stack decision is resolved: stay stdlib-only for gateway.py. This means PBKDF2 via `hashlib.pbkdf2_hmac()` (600K iterations, 16-byte random salt) for password hashing, `os.environ`-based data passing for injection fixes across shell scripts, and a custom `JSONFormatter` on top of stdlib `logging` for structured logs. No new pip dependencies for the runtime path. The only new pip packages are dev-only: pytest, requests, pytest-cov for the test infrastructure.
+The architecture is a hybrid: mem0 runs as both an embedded Python library inside gateway.py (for the background memory writer) and as a new MCP server (for goose tool access during conversations). Both point at the same pgvector backend. ChromaDB stays for system docs only. The MCP server follows the exact same FastMCP stdio pattern as the existing knowledge extension. A shared config module (`mem0_config.py`) builds the mem0 configuration from environment variables, mapping the user's existing LLM provider (from vault) to mem0's provider format. No new API keys required for the core path, only OpenAI for embeddings (most users already have one).
 
-The main risk is the migration path, not the fixes themselves. The password hash format must be versioned (`$pbkdf2$salt$hash` prefix) and `verify_token()` must support lazy migration from bare SHA-256. If this is skipped or tested only against freshly-generated hashes rather than pre-existing ones on disk, deployed users get locked out on upgrade. The second risk is testing the monolith: gateway.py is 400KB and not designed for unit testing. The correct approach is HTTP-level integration tests against a real server, not function-level tests patching module globals.
+The primary risks are: (1) mem0's `add()` blocks for 2-20 seconds due to its multi-LLM pipeline, which will stall the memory writer if not handled async with timeouts, (2) pip dependency conflicts between mem0ai and existing chromadb (protobuf version clash via qdrant-client), requiring careful dependency isolation, and (3) the ChromaDB-to-mem0 migration must bypass mem0's extraction pipeline to avoid re-processing already-extracted facts (direct pgvector insert with re-embedding, not `mem0.add()`). Neo4j is explicitly deferred because it triples Railway costs and adds 800MB-1.2GB RAM overhead for marginal value. Vector-only mem0 delivers 80% of the benefit.
 
 ## Key Findings
 
 ### Recommended Stack
 
-The existing stack stays intact. All security fixes use Python stdlib, maintaining the gateway.py stdlib-only constraint. New additions are exclusively dev-only. See [STACK.md](STACK.md) for full details.
+mem0 in open-source mode is the only library that combines vector search, LLM-powered contradiction resolution, entity extraction, and optional graph memory in a single package. It replaces ~400 lines of custom extraction code with one function call. The infrastructure adds a Railway PostgreSQL+pgvector service ($5-15/mo) and optionally a Neo4j service ($5-10/mo, deferred). See [STACK.md](STACK.md) for full details.
 
 **Core technologies:**
-- `hashlib.pbkdf2_hmac()` (stdlib): password hashing — OWASP-approved, 600K iterations, no pip dependency, replaces SHA-256
-- `hashlib.scrypt()` (stdlib): alternative KDF if PBKDF2 proves too slow on Railway CPU — memory-hard, slightly stronger
-- `logging` + `json` (stdlib): structured logging — custom JSONFormatter replaces 252+ print() calls incrementally
-- `shlex.quote()` + `os.environ` (stdlib): shell injection prevention — mechanical fix across secret.sh, entrypoint.sh, gateway.py
-- `pytest` 8.3.x (dev-only): test runner — runs existing unittest tests unchanged, better output and fixtures
-- `requests` 2.32.5 (dev-only): HTTP client for integration tests against a running gateway instance
-- `pytest-cov` 6.x (dev-only): coverage reporting
+- **mem0ai 1.0.5** (`pip install mem0ai[graph]`): memory layer with vector + graph support. Handles extraction, contradiction resolution, dedup, and consolidation. Active development, v1.0.x stable line.
+- **PostgreSQL + pgvector** (Railway service): vector similarity search for memory embeddings. One-click Railway template, $5-15/mo. Replaces ChromaDB for user memories.
+- **OpenAI text-embedding-3-small** (1536 dims): embedding model. Best quality/cost ratio for cloud deployment. $0.02/1M tokens. Most users already have an OpenAI key.
+- **FastMCP** (from existing mcp[cli] 1.26.0): MCP server framework. Same pattern as knowledge extension, no new dependency.
+- **Neo4j 5.x** (Railway service, Phase 2 only): knowledge graph for entity relationships. Optional, deferred, $5-10/mo additional.
+
+**Critical version requirements:**
+- mem0ai 1.0.5 requires Python >=3.9 (our 3.10 is fine)
+- `embedding_model_dims` MUST match embedder output (1536 for text-embedding-3-small). Mismatch causes DataException on every insert.
+- psycopg2-binary 2.9.11 avoids needing libpq-dev in the container
 
 ### Expected Features
 
-See [FEATURES.md](FEATURES.md) for full prioritization matrix and dependency graph.
+See [FEATURES.md](FEATURES.md) for full prioritization matrix, dependency graph, and MCP tool designs.
 
-**Must have (table stakes, v4.0):**
-- Fix shell injection in secret.sh, entrypoint.sh, gateway.py `_run_script` — active RCE vectors
-- Upgrade password hashing from SHA-256 to PBKDF2 with lazy migration — crackable in milliseconds on GPU
-- Remove recovery secret from container stdout logs — credential leak on every first boot
-- Add request body size limits (1MB max, 413 response) — DoS via memory exhaustion
-- Pin dependency versions with exact hashes in requirements.lock — supply chain risk
-- Add graceful shutdown timeout (30s hard deadline, SIGKILL after 10s for goosed) — container hangs on Railway restart
-- Complete HTTP security headers (add HSTS, verify headers applied to ALL response types)
-- Gateway HTTP endpoint tests covering auth, setup, jobs, health — zero coverage on core paths
-- Shell script tests for secret.sh, job.sh, remind.sh, notify.sh — untested user-facing scripts
-- Entrypoint bootstrap tests — untested first-boot and upgrade logic
-- CVE scanning in CI via trivy or pip-audit — no vulnerability monitoring
+**Must have (table stakes, P0):**
+- Semantic memory search replacing ChromaDB knowledge_search for user memories
+- Automatic memory extraction via mem0.add() replacing the manual LLM+JSON pipeline
+- Contradiction resolution (new facts update old ones, automatic via mem0)
+- Memory deduplication (automatic via mem0 consolidation)
+- Manual memory CRUD tools via MCP (search, add, get, delete, list, history)
+- Identity routing to user.md preserved (soul.md/user.md remain identity source of truth)
+- ChromaDB retained for system docs (separate concern, unchanged)
+- Migration from ChromaDB runtime collection to mem0
+- LLM extraction reuses user's existing provider from vault
 
-**Should have (v4.x after validation):**
-- Structured JSON logging (migrate 252+ print() calls component by component with LOG_FORMAT toggle)
-- CSRF protection on state-changing POST endpoints
-- Audit logging (config changes, auth events, vault operations) — reuses JSON log format
-- Security audit endpoint (`/api/security/audit`) returning pass/fail per check
-- End-to-end integration tests (boot container, complete setup, verify goose starts)
-- Container health dashboard enhancements
+**Should have (P1, include if time permits):**
+- Memory categories/tagging via metadata
+- Memory history/audit trail (mem0 built-in)
+- Custom extraction prompts matching GooseClaw's turn-rules philosophy
+- Scoped memories (user_id) for future multi-user support
 
-**Defer (v5+):**
-- Secrets rotation support — complex, provider-specific flows
-- Dependency auto-update bot (Dependabot/Renovate)
+**Defer (P2, requires Neo4j):**
+- Entity relationship extraction and knowledge graph
+- Relationship-enhanced search (graph augments vector results)
+- Multi-hop entity traversal
+- Entity listing tool
 
 **Anti-features (do not build):**
-- TLS termination in container — Railway handles it at load balancer
-- WAF inside container — wrong layer for a single-user stdlib server
-- Encrypted vault at rest — key management problem negates benefit, file permissions are sufficient
-- MFA — overkill for single-user PaaS deployment
-- Comprehensive RBAC — no multi-user use case exists yet
+- mem0 cloud/managed service (violates self-hosted principle)
+- Replacing user.md/soul.md with mem0 (different access patterns: identity is always-present, memory is on-demand)
+- Real-time memory streaming (clutters chat, violates "show results, hide plumbing")
+- Agent-managed memory Letta-style (unpredictable, mem0's pipeline is deterministic)
+- Complex memory UI in setup wizard (the agent IS the memory interface)
 
 ### Architecture Approach
 
-All hardening integrates in-place within the existing monolith. No new modules, no restructuring. gateway.py gets surgical changes to `hash_token()`, `verify_token()`, body reading, `SECURITY_HEADERS`, and signal handlers. secret.sh and entrypoint.sh get mechanical variable-passing fixes. See [ARCHITECTURE.md](ARCHITECTURE.md) for exact line references and drafted implementation code for every fix.
+Hybrid integration: mem0 embedded in gateway.py for the background memory writer, plus a separate MCP server for goose tool access. Both share config pointing at the same pgvector backend. ChromaDB narrows to system docs only. Railway multi-service topology with private networking. See [ARCHITECTURE.md](ARCHITECTURE.md) for full component diagram, data flows, code scaffolds, and Railway deployment details.
 
-**Major components and hardening touchpoints:**
-1. `gateway.py` (~9800 lines) — password hashing (lines 1086-1095), body limits (new `_read_body()` helper), security headers (lines 858-866), shutdown (lines 9805-9828), structured logging (all 252+ print() calls)
-2. `entrypoint.sh` (~700 lines) — recovery secret leak (line 39), password reset injection (lines 59-73), SHA-256 reset path (line 66)
-3. `secret.sh` (~124 lines) — inline Python injection (lines 37-116, all 4 CRUD commands via `'$VARIABLE'` pattern)
-4. `Dockerfile` + CI — requirements.lock generation, CVE scanning integration, test runner setup
-5. Test infrastructure (new) — `docker/tests/` directory with conftest.py, HTTP-level test fixtures, focused test files per concern
+**Major components:**
+1. **mem0 MCP server** (docker/mem0_mcp/server.py) -- exposes memory_search, memory_add, memory_get_all, memory_delete to goose via stdio
+2. **gateway.py memory writer** (modified) -- replaces `_process_memory_extraction()` with `mem0.add(messages)`, splitting the prompt into identity-only extraction for user.md
+3. **mem0_config.py** (new shared module) -- builds mem0 config dict from env vars, maps GOOSE_PROVIDER to mem0 provider names, shared by both gateway and MCP server
+4. **pgvector Railway service** -- PostgreSQL with vector extension, stores embeddings and mem0 history tables
+5. **ChromaDB** (scope narrowed) -- system namespace only, runtime collection deprecated after migration
+6. **Migration script** (docker/mem0_mcp/migrate_from_chromadb.py) -- one-time direct pgvector insert, sentinel file prevents re-run
 
 ### Critical Pitfalls
 
-See [PITFALLS.md](PITFALLS.md) for full details, recovery strategies, and "looks done but isn't" checklist.
+See [PITFALLS.md](PITFALLS.md) for all 12 pitfalls with recovery strategies and "looks done but isn't" checklist.
 
-1. **Password migration locks out existing users** — version new hashes with `$pbkdf2$` prefix, implement lazy migration in `verify_token()`, test with actual SHA-256 hashes from a live setup.json not freshly generated ones
-2. **stdlib constraint rules out argon2/bcrypt** — use `hashlib.pbkdf2_hmac()` only, never add argon2-cffi or bcrypt even though Dockerfile has other pip packages; the runtime stdlib constraint on gateway.py is firm
-3. **Shell injection via `shell=True` in job execution** — switch to explicit `["/bin/sh", "-c", command]` for job runner, add command validation on job creation; naively setting `shell=False` breaks legitimate pipe commands
-4. **Inline Python injection in bash scripts** — convert every `'$VARIABLE'` pattern in python3 -c calls to `os.environ` reads; this is a mechanical grep-and-fix, job.sh cmd_create already shows the correct pattern
-5. **Fragile test mocks on 400KB monolith** — test at HTTP level (real server on random port, real HTTP requests) not function level (patching module globals); one focused test file per concern, not one giant test_gateway.py
+1. **mem0.add() blocks 2-20s per call** -- use AsyncMemory or threaded with hard 30s timeout, route extraction to a cheap model (gpt-4.1-nano), start without graph memory (2x faster)
+2. **Dependency conflicts between mem0ai and chromadb** -- mem0 pulls qdrant-client which conflicts with chromadb on protobuf versions. Use pgvector backend (not Qdrant), consider separate requirements files, never import mem0 in gateway.py directly
+3. **Railway cost explosion with Neo4j** -- Neo4j needs 800MB-1.2GB RAM minimum (JVM). Defer to optional Phase 3+. Vector-only pgvector is one service, not two. Document cost increase clearly.
+4. **ChromaDB migration loses data** -- do NOT migrate through mem0.add() (triggers re-extraction). Direct pgvector insert with re-embedding. Keep ChromaDB read-only as fallback for 1+ week.
+5. **LLM token burn without attribution** -- mem0 makes 3-6 internal LLM calls per add(). Route to a cheap extraction model, log all calls with token counts, disclose cost in setup wizard.
 
 ## Implications for Roadmap
 
-Based on the dependency graph in FEATURES.md and build order in ARCHITECTURE.md, a 4-phase structure is right. Security fixes have no upstream dependencies and must come first. Everything else flows from there.
+Based on the dependency graph in FEATURES.md, the build order in ARCHITECTURE.md, and the phase warnings in PITFALLS.md, a 4-phase structure is right. The critical path is: pgvector setup -> mem0 MCP server -> gateway extraction rewrite -> migration. Neo4j branches off independently after vector memory is stable.
 
-### Phase 1: Security Foundations
+### Phase 1: Infrastructure and MCP Server
 
-**Rationale:** All security fixes are independent of each other and have no upstream dependencies. They represent the highest risk (active RCE and credential leak vectors) at the lowest implementation cost. Auth must work correctly before anything else can be tested or built. These are the fixes most likely to be discovered and exploited.
-**Delivers:** Production-safe auth with lazy migration, no injection vectors across 3 files, no credential leaks on startup, DoS protection via body limits, supply chain integrity via pinned hashes, complete security headers
-**Addresses:** Shell injection (3 locations), PBKDF2 password hashing with lazy SHA-256 migration, recovery secret leak removal, request body limits (1MB), dependency pinning (requirements.lock), HSTS header
-**Avoids:** Pitfall 1 (migration lockout), Pitfall 2 (stdlib constraint), Pitfall 3 (job injection), Pitfall 4 (bash injection), Pitfall 5 (secret in logs)
+**Rationale:** pgvector must exist before anything else works. The MCP server is the simplest integration (no gateway changes) and proves mem0 works end-to-end. This phase validates the entire stack before touching the complex memory writer code.
+**Delivers:** Working mem0 MCP server with memory_search, memory_add, memory_get_all, memory_delete tools. Goose can store and search memories during conversations.
+**Addresses:** pgvector setup, mem0 library installation, MCP server creation, extension registration, LLM provider mapping from vault, embedding model configuration
+**Avoids:** Pitfall 2 (dependency conflicts -- resolve during requirements.txt changes), Pitfall 6 (startup race -- add retry logic), Pitfall 8 (telemetry -- set MEM0_TELEMETRY=false)
+**Stack:** mem0ai[graph] 1.0.5, psycopg2-binary 2.9.11, pgvector 0.4.2, PostgreSQL+pgvector Railway service, FastMCP (existing)
 
-### Phase 2: Test Infrastructure
+### Phase 2: Gateway Memory Writer Migration
 
-**Rationale:** Tests must be written against the fixed code, not the broken code. Establishing the correct testing pattern (HTTP-level, not function-level) before writing hundreds of tests prevents the fragile-mock technical debt trap. The test suite is the safety net for Phases 3 and 4.
-**Delivers:** pytest setup with pyproject.toml/pytest.ini, conftest.py with HTTP-level fixtures (real server on random port), test_auth.py, test_security.py, test_gateway_http.py, test_jobs.py, shell script test framework, entrypoint bootstrap tests
-**Uses:** pytest 8.3.x, requests 2.32.5, pytest-cov (all dev-only, requirements-dev.txt)
-**Avoids:** Pitfall 6 (fragile test mocks), monolith testing anti-patterns (HTTP-level over function-level)
-**Research flag:** Standard patterns, no research phase needed
+**Rationale:** With the MCP server proven, rewrite the gateway's background extraction to use mem0.add(). This is where the biggest code simplification happens (~150 lines removed). Must handle the identity routing split carefully: mem0 for knowledge, narrowed prompt for identity traits to user.md.
+**Delivers:** Automatic end-of-session memory extraction via mem0, simplified identity-only extraction for user.md, ~150 lines of extraction code removed from gateway.py
+**Addresses:** Gateway auto-extraction rewrite, identity routing preservation, memory_writer_enabled toggle integration
+**Avoids:** Pitfall 1 (blocking add() -- use timeout and cheap model), Pitfall 5 (token burn -- configure cheap extraction model), Pitfall 11 (sync/async mismatch -- use synchronous Memory with timeout in thread)
 
-### Phase 3: Observability and Defense-in-Depth
+### Phase 3: ChromaDB Migration and Cleanup
 
-**Rationale:** Structured logging is additive (doesn't change behavior) but is a large diff touching all 252+ print() calls. Having Phase 2 tests in place means regressions are caught. CSRF protection and audit logging add defense-in-depth beyond the Phase 1 critical fixes. Structured logging must precede audit logging (same JSON format).
-**Delivers:** JSONFormatter class with `GOOSECLAW_LOG_FORMAT` env var toggle, incremental print() migration component-by-component, CSRF tokens on state-changing endpoints, audit logging to /data/audit.log, graceful shutdown with 30s hard deadline
-**Implements:** `logging.Formatter` subclass in gateway.py, `_shutdown_event` + timeout thread in signal handlers, append-only audit log
-**Avoids:** Big bang logging migration anti-pattern (one component at a time), security headers blocking setup.html (test CSP against setup.html before deploying)
+**Rationale:** Migration comes AFTER both the MCP server and gateway writer are proven working with new memories. Migrating simultaneously with building is a recipe for data loss. This phase also handles the dual-store transition period.
+**Delivers:** All existing ChromaDB runtime memories migrated to mem0/pgvector, ChromaDB runtime collection deprecated (kept read-only as backup), unified memory access through mem0 only
+**Addresses:** ChromaDB runtime -> mem0 migration, dual-store transition, knowledge MCP scope narrowing
+**Avoids:** Pitfall 4 (migration data loss -- direct pgvector insert, dry-run first, keep ChromaDB backup), Pitfall 7 (inconsistent recall -- migrate all before removing old tools), Pitfall 9 (embedding mismatch -- re-embed everything with text-embedding-3-small)
 
-### Phase 4: Docker Hardening and CI
+### Phase 4: Knowledge Graph and Polish (Optional)
 
-**Rationale:** Infrastructure changes are lowest risk and don't affect runtime behavior. CVE scanning has no correctness dependencies on code changes. Docker resource documentation is pure docs. E2e tests validate the whole system and require all prior phases to exist.
-**Delivers:** requirements.lock with pip hash verification, trivy/pip-audit CVE scanning in CI with result caching, Railway resource limit documentation, docker-compose.yml with recommended limits for self-hosting, e2e integration tests, security audit endpoint
-**Uses:** GitHub Actions or Railway CI config, Docker build pipeline
-**Avoids:** CVE scan blocking deployment (cache results, only re-scan on Dockerfile/requirements changes)
-**Research flag:** Railway-specific CI configuration syntax needs validation during planning
+**Rationale:** Neo4j adds entity relationships but triples Railway costs and adds significant infrastructure complexity. Only pursue after vector memory is stable and the user wants relationship-aware search. This phase also includes Telegram commands and setup wizard integration.
+**Delivers:** Neo4j Railway service, entity/relationship extraction, relationship-enhanced search, memory-related Telegram commands (/remember, /memories, /forget), setup wizard memory settings
+**Addresses:** Neo4j graph store config, entity tools (memory_entities, memory_relations), Telegram integration, builtin memory extension disable
+**Avoids:** Pitfall 3 (cost explosion -- make Neo4j optional, document cost, set explicit memory limits), Pitfall 10 (Bolt protocol -- use Railway private networking)
 
 ### Phase Ordering Rationale
 
-- Security fixes first: no dependencies, highest risk, auth must work before anything else is testable
-- Tests before observability: logging migration is a large diff, tests catch regressions; also establishes patterns before volume lands
-- Structured logging before audit logging: audit log reuses JSON format, must exist first
-- Docker hardening last: infrastructure changes don't affect application correctness, CVE scan on a broken app is still a broken app
+- **Infrastructure first:** pgvector must exist before any mem0 code can run. Proving the MCP server works validates the entire dependency chain (mem0 -> pgvector -> embedder -> LLM provider) before touching gateway.py
+- **Gateway second:** the memory writer rewrite is the highest-complexity change (threading, async, identity routing split). It needs the MCP server as a reference implementation.
+- **Migration third:** never migrate and build simultaneously. Existing memories are safe in ChromaDB until mem0 is proven. Migration is a one-way operation that must be done carefully.
+- **Neo4j last and optional:** 80% of the value comes from vector memory. Graph memory is a pure enhancement with disproportionate infrastructure cost.
 
 ### Research Flags
 
-Phases with standard patterns (skip research-phase):
-- **Phase 1 (Security):** All fixes have specific line references and implementation code already drafted in ARCHITECTURE.md
-- **Phase 2 (Testing):** pytest and HTTP-level testing patterns are well-documented, fixtures already sketched
-- **Phase 3 (Observability):** Python stdlib logging with custom Formatter is standard practice, migration strategy is clear
-
 Phases likely needing deeper research during planning:
-- **Phase 4 (CI):** Railway's CI/CD configuration and CVE scan caching patterns need validation. Research recommends trivy or pip-audit but Railway-specific integration steps are unconfirmed.
+- **Phase 2 (Gateway Writer):** The identity routing split (mem0 for knowledge, narrowed prompt for user.md identity) needs careful prompt engineering. The threading/async model for mem0.add() in gateway.py's daemon thread needs prototyping. Existing `_memory_writer_loop()` code is ~400 lines and tightly coupled.
+- **Phase 3 (Migration):** Direct pgvector insert bypassing mem0's API requires understanding mem0's internal table schema. May need to read mem0 source code to match the expected row format. Embedding re-computation cost for N existing memories needs estimation.
+- **Phase 4 (Neo4j):** mem0 issue #3711 (structuredLlm hardcoded to OpenAI) may still affect non-OpenAI users. Needs validation against mem0 v1.0.5 before shipping graph memory for Anthropic users.
+
+Phases with standard patterns (skip research-phase):
+- **Phase 1 (Infrastructure + MCP):** FastMCP server pattern is identical to existing knowledge/server.py. Railway pgvector template is one-click. mem0 config is well-documented. Dependency resolution is the only risk and can be validated with a test build.
 
 ## Confidence Assessment
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | HIGH | All decisions confirmed against Python 3.10 stdlib docs and OWASP guidelines. PBKDF2 vs scrypt debate resolved in favor of PBKDF2 (simpler, equally valid per OWASP 2023). Primary source: actual codebase. |
-| Features | HIGH | Derived from direct codebase analysis with specific file and line number references. Not speculation. Competitor comparison (Dify, Open WebUI, LocalAI) confirms what security-conscious users expect. |
-| Architecture | HIGH | All implementation code drafted with exact line references. Every fix maps to a specific location. Migration paths designed. Primary source: gateway.py, entrypoint.sh, secret.sh analysis. |
-| Pitfalls | HIGH | Based on codebase analysis plus verified security research (OWASP, Bandit, OpenStack). Migration lockout pitfall is specific to this codebase's bare-hex hash format with no algorithm prefix. |
+| Stack | HIGH | mem0ai 1.0.5 verified on PyPI. pgvector Railway template verified (Mar 2026). All version compatibility confirmed. OpenAI embedding default is practical for cloud deployment. |
+| Features | HIGH | Derived from direct codebase analysis (gateway.py memory writer, knowledge MCP, .goosehints) plus mem0 official docs and API signatures. Feature priorities grounded in actual user flows. |
+| Architecture | HIGH | Hybrid pattern (embedded + MCP) validated against existing knowledge MCP architecture. Railway multi-service topology verified. Code scaffolds drafted for all new components. |
+| Pitfalls | HIGH | Blocking latency validated via arxiv benchmarks (p95: 1.44s vector, 2.59s graph) and GitHub issue reports. Dependency conflicts documented in Apache NIFI issue tracker. Cost projections based on Railway pricing docs. |
 
 **Overall confidence:** HIGH
 
 ### Gaps to Address
 
-- **PBKDF2 iteration count on Railway CPU:** 600K iterations takes ~250ms on fast hardware but could reach 1-2s on throttled Railway containers. Benchmark on actual Railway deployment in Phase 1 and reduce to 300K if needed. Still vastly better than bare SHA-256.
-- **Railway CI configuration:** Research confirms what to do (CVE scan, hash-pinned deps) but not the exact Railway CI syntax. Validate during Phase 4 planning.
-- **Security headers vs setup.html:** CSP headers could block setup.html's inline JavaScript, locking users out of setup. Needs manual testing against actual setup.html before Phase 3 ships. May require per-path CSP rules.
-- **bats-core vs Python subprocess for shell script tests:** STACK.md says Python subprocess tests are sufficient; ARCHITECTURE.md recommends bats-core. Resolve during Phase 2 planning. Either works, just pick one and commit.
-- **Rate limiter ordering relative to PBKDF2:** Rate limit check must happen BEFORE hash computation in the auth handler code path. Verify the existing code path order before Phase 1 ships. A brute-force attack consuming 250ms CPU per attempt even when rate-limited is a DoS vector.
+- **Embedder API key for Anthropic-only users:** If the user has only an Anthropic key (no OpenAI), they need to add one for embeddings. Anthropic has no embedding API. The setup wizard should prompt for this, but the UX flow needs design during Phase 1 planning.
+- **mem0 internal table schema for migration:** Direct pgvector insert (bypassing mem0.add()) requires matching mem0's internal vector store schema. This is undocumented and may change between versions. Validate by reading mem0 source code during Phase 3 planning.
+- **LLM extraction model selection:** Should mem0 use the user's main model (potentially expensive, e.g. opus/gpt-4.1) or force a cheaper extraction model? The config supports separation, but the UX decision (auto-select cheap model vs. let user choose) needs resolution.
+- **mem0 consolidation behavior:** mem0's automatic memory consolidation (merging similar embeddings) could merge contextually different memories. Whether to disable it by default or tune the similarity threshold needs testing with real data.
+- **Gateway stdlib constraint vs. mem0 import:** ARCHITECTURE.md recommends embedding mem0 directly in gateway.py for the memory writer, but PITFALLS.md warns against importing mem0 in gateway.py (dependency isolation). This tension needs resolution: either accept the import (gateway already imports chromadb) or route memory writer through a subprocess/MCP call. The pragmatic answer is to accept the import since the precedent exists with chromadb.
+- **mem0 issue #3711 status:** The structuredLlm bug (hardcoded to OpenAI for graph memory) may or may not be fixed in v1.0.5. Must verify before enabling graph memory for non-OpenAI users in Phase 4.
 
 ## Sources
 
 ### Primary (HIGH confidence)
-- Codebase analysis: gateway.py (406KB, 9700+ lines), entrypoint.sh (700+ lines), secret.sh, job.sh, Dockerfile — all line references verified against source
-- [Python hashlib documentation](https://docs.python.org/3/library/hashlib.html) — pbkdf2_hmac and scrypt stdlib availability confirmed
-- [OWASP Docker Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Docker_Security_Cheat_Sheet.html) — container hardening requirements
-- [Docker Official Security Docs](https://docs.docker.com/engine/security/) — resource constraints, HEALTHCHECK patterns
-- [argon2-cffi documentation](https://argon2-cffi.readthedocs.io/) — confirmed as non-stdlib, rules it out for gateway.py
+- [mem0ai on PyPI](https://pypi.org/project/mem0ai/) -- v1.0.5 verified, dependency tree
+- [mem0 Open Source Overview](https://docs.mem0.ai/open-source/overview) -- config defaults, architecture
+- [mem0 pgvector Configuration](https://docs.mem0.ai/components/vectordbs/dbs/pgvector) -- connection parameters
+- [mem0 Anthropic LLM Config](https://docs.mem0.ai/components/llms/models/anthropic) -- provider config
+- [mem0 LiteLLM Config](https://docs.mem0.ai/components/llms/models/litellm) -- universal adapter
+- [mem0 Graph Memory Docs](https://docs.mem0.ai/open-source/graph_memory/overview) -- Neo4j integration
+- [mem0 arxiv paper](https://arxiv.org/abs/2504.19413) -- benchmarks, latency (p95: 1.44s vector, 2.59s graph)
+- [Railway pgvector Template](https://railway.com/deploy/pgvector-latest) -- one-click deploy, updated Mar 2026
+- [Railway Neo4j Template](https://railway.com/deploy/asEF1B) -- APOC pre-installed
+- [Railway Private Networking](https://docs.railway.com/guides/private-networking) -- service-to-service DNS
+- GooseClaw codebase: gateway.py (memory writer lines 6700-7080), knowledge/server.py, .goosehints, turn-rules.md
 
 ### Secondary (MEDIUM confidence)
-- [Password Hashing Guide: Argon2 vs Bcrypt vs Scrypt vs PBKDF2 (2026)](https://guptadeepak.com/the-complete-guide-to-password-hashing-argon2-vs-bcrypt-vs-scrypt-vs-pbkdf2-2026/) — algorithm comparison, iteration count recommendations
-- [OpenStack: Avoid shell=True](https://security.openstack.org/guidelines/dg_avoid-shell-true.html) — shell injection avoidance patterns for subprocess
-- [Snyk: Command Injection in Python](https://snyk.io/blog/command-injection-python-prevention-examples/) — injection prevention patterns and os.environ approach
-- [New Relic: Structured Logging in Python](https://newrelic.com/blog/log/python-structured-logging) — JSON logging migration patterns
-- [Why Retrofitting Tests Is Hard](https://modelephant.medium.com/software-engineering-why-retrofitting-tests-is-hard-9ea4e7af3e48) — monolith testing strategy justification
+- [mem0 GitHub Repository](https://github.com/mem0ai/mem0) -- architecture, issues
+- [mem0 Official MCP Server](https://github.com/mem0ai/mem0-mcp) -- tool signatures (cloud-only, not usable directly)
+- [DeepWiki mem0 Overview](https://deepwiki.com/mem0ai/mem0/1-overview) -- architecture, dual-store model
+- [mem0 Self-Host Docker Guide](https://mem0.ai/blog/self-host-mem0-docker) -- docker-compose patterns
+- [mem0 Custom Update Prompt](https://docs.mem0.ai/open-source/features/custom-update-memory-prompt) -- ADD/UPDATE/DELETE/NONE
+- [GitHub Issue #2813: 20s add latency](https://github.com/mem0ai/mem0/issues/2813) -- self-hosted performance
+- [GitHub Issue #3711: structuredLlm hardcoded to OpenAI](https://github.com/mem0ai/mem0/issues/3711) -- graph memory bug
 
 ### Tertiary (LOW confidence)
-- [Python Security Best Practices](https://arjancodes.com/blog/best-practices-for-securing-python-applications/) — general guidance, not GooseClaw-specific
-- [Web Application Security Best Practices 2026](https://www.radware.com/cyberpedia/application-security/web-application-security-best-practices/) — industry overview
+- mem0 consolidation stats (60% storage reduction, 22% precision boost) -- from mem0's own marketing, not independently verified
+- [Embedding Model Comparison](https://elephas.app/blog/best-embedding-models) -- nomic vs OpenAI benchmarks
 
 ---
-*Research completed: 2026-03-16*
+*Research completed: 2026-03-19*
 *Ready for roadmap: yes*

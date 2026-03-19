@@ -106,10 +106,11 @@ Plans:
   2. Migration runs once and a sentinel file prevents accidental re-runs on container restart
   3. The old chromadb runtime collection is no longer written to or read from (system docs collection untouched)
   4. Migration inserts directly into mem0's store without re-extracting through LLM (no token burn on existing data)
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 24-01: TBD
+- [ ] 24-01-PLAN.md — Migration script (runtime -> mem0), sentinel guard, entrypoint integration (MIG-01, MIG-02, MIG-04)
+- [ ] 24-02-PLAN.md — System-only knowledge server cleanup, indexer cleanup, test updates (MIG-03)
 
 ### Phase 25: Neo4j Knowledge Graph
 **Goal**: Bot understands entity relationships (not just flat facts) through graph-augmented memory search

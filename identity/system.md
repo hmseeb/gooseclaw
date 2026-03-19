@@ -165,6 +165,18 @@ v2 contract: plugins can pass `InboundMessage(user_id, text, channel, media, rep
 4. Record via knowledge_upsert (type: "integration")
 5. Prove it's connected
 
+### MCP Extension Credentials
+
+Vaulting secrets is NOT enough. Many MCP extensions have their own credential stores (files, databases, config dirs) separate from the gateway vault and env vars.
+
+Rule: **vaulted != configured.** Always research how the extension actually reads credentials, write them in that format, and verify the extension works before telling the user it's ready.
+
+1. Research the extension's auth mechanism (env vars? config file? credential dir? OAuth flow?)
+2. Vault raw secrets for persistence across restarts
+3. Write credentials in the format the extension expects
+4. Test the extension actually works (call a tool, not just check status)
+5. Record the setup steps via `knowledge_upsert` so you can redo it after a redeploy
+
 ### Password Recovery
 
 Recovery secret is at `/data/.recovery_secret`. User can also find it in first-boot deploy logs or Railway env vars as `GOOSECLAW_RECOVERY_SECRET`.

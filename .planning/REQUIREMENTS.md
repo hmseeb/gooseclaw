@@ -7,19 +7,19 @@
 
 ### Memory MCP Extension
 
-- [ ] **MEM-01**: Bot can store memories from conversations via `memory_add` MCP tool
-- [ ] **MEM-02**: Bot can search memories semantically via `memory_search` MCP tool
-- [ ] **MEM-03**: Bot can delete specific memories via `memory_delete` MCP tool
-- [ ] **MEM-04**: Bot can list all memories for a user via `memory_list` MCP tool
-- [ ] **MEM-05**: Bot can view memory evolution via `memory_history` MCP tool
-- [ ] **MEM-06**: mem0 MCP server runs as stdio extension registered in config.yaml
+- [x] **MEM-01**: Bot can store memories from conversations via `memory_add` MCP tool
+- [x] **MEM-02**: Bot can search memories semantically via `memory_search` MCP tool
+- [x] **MEM-03**: Bot can delete specific memories via `memory_delete` MCP tool
+- [x] **MEM-04**: Bot can list all memories for a user via `memory_list` MCP tool
+- [x] **MEM-05**: Bot can view memory evolution via `memory_history` MCP tool
+- [x] **MEM-06**: mem0 MCP server runs as stdio extension registered in config.yaml
 
 ### Memory Configuration
 
-- [ ] **CFG-01**: mem0 uses ChromaDB as vector store (existing, zero new infra)
-- [ ] **CFG-02**: mem0 LLM extraction reuses user's existing provider from vault/setup.json
-- [ ] **CFG-03**: mem0 extraction routes to a cheap model automatically (not user's main model)
-- [ ] **CFG-04**: Shared config module builds mem0 config from environment variables
+- [x] **CFG-01**: mem0 uses ChromaDB as vector store (existing, zero new infra)
+- [x] **CFG-02**: mem0 LLM extraction reuses user's existing provider from vault/setup.json
+- [x] **CFG-03**: mem0 extraction routes to a cheap model automatically (not user's main model)
+- [x] **CFG-04**: Shared config module builds mem0 config from environment variables
 
 ### Gateway Integration
 
@@ -37,10 +37,10 @@
 
 ### Knowledge Graph
 
-- [ ] **GRAPH-01**: Neo4j runs inside the same container, started by entrypoint, data on /data volume
-- [ ] **GRAPH-02**: mem0 graph memory enabled for entity relationship extraction
-- [ ] **GRAPH-03**: Relationship-enhanced search (graph augments vector results)
-- [ ] **GRAPH-04**: Entity and relationship tools exposed via MCP (memory_entities, memory_relations)
+- [x] **GRAPH-01**: Neo4j runs inside the same container, started by entrypoint, data on /data volume
+- [x] **GRAPH-02**: mem0 graph memory enabled for entity relationship extraction
+- [x] **GRAPH-03**: Relationship-enhanced search (graph augments vector results)
+- [x] **GRAPH-04**: Entity and relationship tools exposed via MCP (memory_entities, memory_relations)
 
 ## v5.x Requirements (Future)
 
@@ -66,16 +66,16 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| MEM-01 | Phase 22 | Pending |
-| MEM-02 | Phase 22 | Pending |
-| MEM-03 | Phase 22 | Pending |
-| MEM-04 | Phase 22 | Pending |
-| MEM-05 | Phase 22 | Pending |
-| MEM-06 | Phase 22 | Pending |
-| CFG-01 | Phase 22 | Pending |
-| CFG-02 | Phase 22 | Pending |
-| CFG-03 | Phase 22 | Pending |
-| CFG-04 | Phase 22 | Pending |
+| MEM-01 | Phase 22 | Complete |
+| MEM-02 | Phase 22 | Complete |
+| MEM-03 | Phase 22 | Complete |
+| MEM-04 | Phase 22 | Complete |
+| MEM-05 | Phase 22 | Complete |
+| MEM-06 | Phase 22 | Complete |
+| CFG-01 | Phase 22 | Complete |
+| CFG-02 | Phase 22 | Complete |
+| CFG-03 | Phase 22 | Complete |
+| CFG-04 | Phase 22 | Complete |
 | GW-01 | Phase 23 | Complete |
 | GW-02 | Phase 23 | Complete |
 | GW-03 | Phase 23 | Complete |
@@ -84,10 +84,10 @@
 | MIG-02 | Phase 24 | Complete |
 | MIG-03 | Phase 24 | Complete |
 | MIG-04 | Phase 24 | Complete |
-| GRAPH-01 | Phase 25 | Pending |
-| GRAPH-02 | Phase 25 | Pending |
-| GRAPH-03 | Phase 25 | Pending |
-| GRAPH-04 | Phase 25 | Pending |
+| GRAPH-01 | Phase 25 | Complete |
+| GRAPH-02 | Phase 25 | Complete |
+| GRAPH-03 | Phase 25 | Complete |
+| GRAPH-04 | Phase 25 | Complete |
 
 **Coverage:**
 - v5.0 requirements: 22 total

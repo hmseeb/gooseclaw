@@ -496,6 +496,21 @@ extensions:
     timeout: 300
     bundled: null
     available_tools: []
+  mem0-memory:
+    enabled: true
+    type: stdio
+    name: mem0-memory
+    description: Long-term memory with semantic search and contradiction resolution
+    cmd: python3
+    args:
+      - /app/docker/memory/server.py
+    envs:
+      MEM0_USER_ID: default
+      MEM0_TELEMETRY: "false"
+    env_keys: []
+    timeout: 300
+    bundled: null
+    available_tools: []
 EXTENSIONS
 fi
 rm -f "$EXTENSIONS_STATE_FILE"

@@ -254,3 +254,15 @@ else:
             updated = json.load(f)
         assert updated["web_auth_token_hash"].startswith("$pbkdf2$")
         assert updated["web_auth_token_hash"] != "$pbkdf2$old$hash"
+
+
+class TestEntrypointMem0Extension:
+    """MEM-06: mem0-memory extension registered in default config."""
+
+    def test_entrypoint_has_mem0_extension(self):
+        """MEM-06: mem0-memory extension registered in default config."""
+        with open(ENTRYPOINT) as f:
+            source = f.read()
+        assert "mem0-memory:" in source
+        assert "/app/docker/memory/server.py" in source
+        assert 'MEM0_TELEMETRY: "false"' in source

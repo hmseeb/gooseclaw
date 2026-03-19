@@ -55,6 +55,8 @@ from memory.server import (
     memory_list,
     memory_history,
     memory_get,
+    memory_entities,
+    memory_relations,
 )
 import memory.server as srv
 
@@ -130,6 +132,52 @@ class TestMemorySearch(_MemoryTestBase):
         ]
         result = memory_search("test")
         self.assertIn("test fact", result)
+
+    def test_search_includes_graph_relations(self):
+        """GRAPH-03: search includes graph relations when present."""
+        self.mock_memory.search.return_value = {
+            "results": [
+                {"id": "x1", "memory": "Haseeb works on GooseClaw", "score": 0.92}
+            ],
+            "relations": [
+                {"source": "Haseeb", "relationship": "WORKS_ON", "destination": "GooseClaw"}
+            ],
+        }
+        result = memory_search("GooseClaw")
+        self.assertIn("Related entities", result)
+        self.assertIn("Haseeb", result)
+        self.assertIn("WORKS_ON", result)
+        self.assertIn("GooseClaw", result)
+
+    def test_search_no_relations_when_graph_disabled(self):
+        """GRAPH-03: no relations section when graph data absent."""
+        self.mock_memory.search.return_value = {
+            "results": [{"id": "x1", "memory": "test", "score": 0.9}]
+        }
+        result = memory_search("test")
+        self.assertNotIn("Related entities", result)
+
+    def test_search_empty_relations_ignored(self):
+        """GRAPH-03: empty relations list produces no section."""
+        self.mock_memory.search.return_value = {
+            "results": [{"id": "x1", "memory": "test", "score": 0.9}],
+            "relations": [],
+        }
+        result = memory_search("test")
+        self.assertNotIn("Related entities", result)
+
+    def test_search_relations_only_no_vector(self):
+        """GRAPH-03: relations-only results still produce output."""
+        self.mock_memory.search.return_value = {
+            "results": [],
+            "relations": [
+                {"source": "A", "relationship": "KNOWS", "destination": "B"}
+            ],
+        }
+        result = memory_search("test")
+        self.assertIn("Related entities", result)
+        self.assertIn("A --[KNOWS]--> B", result)
+        self.assertNotIn("No matching memories found.", result)
 
 
 class TestMemoryDelete(_MemoryTestBase):
@@ -234,6 +282,102 @@ class TestMemoryGet(_MemoryTestBase):
         self.mock_memory.get.return_value = None
         result = memory_get("nonexistent")
         self.assertEqual(result, "Memory not found.")
+
+
+class TestMemoryEntities(_MemoryTestBase):
+    """GRAPH-04: memory_entities lists unique entities from knowledge graph."""
+
+    def test_entities_returns_unique_list(self):
+        self.mock_memory.search.return_value = {
+            "results": [],
+            "relations": [
+                {"source": "Alice", "relationship": "MANAGES", "destination": "Bob"},
+                {"source": "Bob", "relationship": "WORKS_ON", "destination": "Project X"},
+            ],
+        }
+        result = memory_entities("people")
+        self.assertIn("- Alice", result)
+        self.assertIn("- Bob", result)
+        self.assertIn("- Project X", result)
+        # Check sorted order
+        lines = result.strip().split("\n")
+        names = [l.replace("- ", "") for l in lines]
+        self.assertEqual(names, sorted(names))
+
+    def test_entities_empty_when_no_graph(self):
+        self.mock_memory.search.return_value = {
+            "results": [{"id": "x1", "memory": "test", "score": 0.9}]
+        }
+        result = memory_entities()
+        self.assertEqual(result, "No entities found in knowledge graph.")
+
+    def test_entities_handles_list_format(self):
+        self.mock_memory.search.return_value = [
+            {"id": "x1", "memory": "test", "score": 0.9}
+        ]
+        result = memory_entities("test")
+        self.assertEqual(result, "No entities found in knowledge graph.")
+
+    def test_entities_error_handling(self):
+        self.mock_memory.search.side_effect = Exception("graph error")
+        result = memory_entities("test")
+        self.assertIn("Entity lookup failed:", result)
+
+    def test_entities_limit_clamped(self):
+        # Create relations with many unique entities
+        relations = []
+        for i in range(50):
+            relations.append({
+                "source": f"Entity_{i:03d}",
+                "relationship": "RELATED",
+                "destination": f"Target_{i:03d}",
+            })
+        self.mock_memory.search.return_value = {
+            "results": [],
+            "relations": relations,
+        }
+        result = memory_entities(limit=5)
+        lines = [l for l in result.split("\n") if l.startswith("- ")]
+        self.assertLessEqual(len(lines), 5)
+
+
+class TestMemoryRelations(_MemoryTestBase):
+    """GRAPH-04: memory_relations shows relationships for a specific entity."""
+
+    def test_relations_returns_formatted(self):
+        self.mock_memory.search.return_value = {
+            "results": [],
+            "relations": [
+                {"source": "Haseeb", "relationship": "WORKS_ON", "destination": "GooseClaw"},
+                {"source": "GooseClaw", "relationship": "DEPLOYED_ON", "destination": "Railway"},
+            ],
+        }
+        result = memory_relations("Haseeb")
+        self.assertIn("Haseeb --[WORKS_ON]--> GooseClaw", result)
+        self.assertIn("GooseClaw --[DEPLOYED_ON]--> Railway", result)
+
+    def test_relations_empty(self):
+        self.mock_memory.search.return_value = {"results": [], "relations": []}
+        result = memory_relations("Unknown")
+        self.assertEqual(result, "No relationships found for 'Unknown'.")
+
+    def test_relations_error_handling(self):
+        self.mock_memory.search.side_effect = Exception("db error")
+        result = memory_relations("test")
+        self.assertIn("Relationship lookup failed:", result)
+
+    def test_relations_limit_respected(self):
+        relations = [
+            {"source": f"A{i}", "relationship": "REL", "destination": f"B{i}"}
+            for i in range(20)
+        ]
+        self.mock_memory.search.return_value = {
+            "results": [],
+            "relations": relations,
+        }
+        result = memory_relations("test", limit=3)
+        lines = [l for l in result.split("\n") if l.startswith("- ")]
+        self.assertEqual(len(lines), 3)
 
 
 if __name__ == "__main__":

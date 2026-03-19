@@ -34,7 +34,20 @@ A user with zero DevOps knowledge can deploy GooseClaw and configure it correctl
 
 ### Active
 
-(None — define in next milestone)
+## Current Milestone: v5.0 mem0 Memory Layer
+
+**Goal:** Replace flat chromadb vector search with mem0's vector + knowledge graph memory system as a self-hosted MCP extension.
+
+**Target features:**
+- Self-hosted mem0 MCP extension (stdio, Python)
+- pgvector for vector embeddings (replaces chromadb for user memories)
+- Neo4j knowledge graph for entity relationships (phased)
+- Automatic entity extraction from conversations via LLM
+- Contradiction resolution (new facts update old ones)
+- Gateway auto-feeds conversations to mem0 after each session
+- LLM extraction using existing provider from vault
+- Migration from chromadb runtime collection to mem0
+- Keep chromadb for system docs (platform reference, separate concern)
 
 ### Out of Scope
 
@@ -93,4 +106,4 @@ Key technical constraints:
 | Shell injection fix via os.environ pattern | Mechanical, grep-verifiable, zero string interpolation into Python | ✓ Good |
 
 ---
-*Last updated: 2026-03-16 after v4.0 milestone*
+*Last updated: 2026-03-19 after v5.0 milestone start*

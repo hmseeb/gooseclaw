@@ -2,22 +2,23 @@
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-03-16)
+See: .planning/PROJECT.md (updated 2026-03-19)
 
 **Core value:** A user with zero DevOps knowledge can deploy and configure GooseClaw correctly on the first try
-**Current focus:** Planning next milestone
+**Current focus:** v5.0 mem0 Memory Layer
 
 ## Current Position
 
-Phase: —
+Phase: Not started (defining requirements)
 Plan: —
-Status: v4.0 Production Hardening shipped. Planning next milestone.
-Last activity: 2026-03-16 — v4.0 milestone completed and archived
+Status: Defining requirements
+Last activity: 2026-03-19 — Milestone v5.0 started
 
 Progress v1.0: [==========] 100% (shipped 2026-03-11)
 Progress v2.0: [==========] 100% (shipped 2026-03-13)
 Progress v3.0: [==========] 100% (shipped 2026-03-13)
 Progress v4.0: [==========] 100% (shipped 2026-03-16)
+Progress v5.0: [░░░░░░░░░░] 0%
 
 ## Performance Metrics
 
@@ -48,6 +49,6 @@ None active.
 
 ## Session Continuity
 
-Last session: 2026-03-16
-Stopped at: v4.0 milestone completed
+Last session: 2026-03-19
+Stopped at: v5.0 milestone requirements definition
 Resume file: None

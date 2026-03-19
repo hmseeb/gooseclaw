@@ -580,6 +580,15 @@ if [ -f "$IDENTITY_DIR/memory.md" ] && [ ! -f "$DATA_DIR/knowledge/.memory_migra
     fi
 fi
 
+if [ ! -f "$DATA_DIR/knowledge/.mem0_migrated" ]; then
+    echo "[mem0-migrate] migrating runtime memories to mem0..."
+    if runuser -u gooseclaw -- env PYTHONPATH=/app/docker MEM0_USER_ID=default MEM0_TELEMETRY=false python3 /app/docker/knowledge/migrate_to_mem0.py; then
+        echo "[mem0-migrate] migration complete"
+    else
+        echo "[mem0-migrate] WARNING: migration failed (non-fatal)"
+    fi
+fi
+
 export KNOWLEDGE_DB_PATH="/data/knowledge/chroma"
 
 # ─── MOIM (critical rules injected every turn, slim ~100 lines) ────────────

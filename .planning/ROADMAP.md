@@ -76,12 +76,11 @@
   3. User can ask the bot to forget something and it removes the memory via memory_delete
   4. User can ask "what memories do you have about me?" and get a full list via memory_list
   5. mem0 extraction uses a cheap model automatically (not the user's expensive main model) with zero additional API key setup
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 22-01: TBD
-- [ ] 22-02: TBD
-- [ ] 22-03: TBD
+- [ ] 22-01-PLAN.md — Dependencies + shared config module (CFG-01 through CFG-04)
+- [ ] 22-02-PLAN.md — mem0 MCP server with 6 tools + extension registration (MEM-01 through MEM-06)
 
 ### Phase 23: Gateway Memory Writer Migration
 **Goal**: Gateway automatically feeds conversation content to mem0 after each session, replacing the manual extraction pipeline

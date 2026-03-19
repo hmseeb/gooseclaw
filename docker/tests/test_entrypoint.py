@@ -256,6 +256,19 @@ else:
         assert updated["web_auth_token_hash"] != "$pbkdf2$old$hash"
 
 
+class TestEntrypointNeo4j:
+    """GRAPH-01: neo4j startup block in entrypoint."""
+
+    def test_entrypoint_has_neo4j_startup_block(self):
+        """GRAPH-01: entrypoint starts Neo4j with proper config."""
+        with open(ENTRYPOINT) as f:
+            source = f.read()
+        assert "neo4j console" in source
+        assert "NEO4J_ENABLED=true" in source
+        assert "NEO4J_server_directories_data=/data/neo4j" in source
+        assert "NEO4J_AUTH=none" in source
+
+
 class TestEntrypointMem0Extension:
     """MEM-06: mem0-memory extension registered in default config."""
 

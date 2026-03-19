@@ -106,4 +106,15 @@ def build_mem0_config():
         "version": "v1.1",
     }
 
+    # Graph store (Neo4j) - optional, enabled when NEO4J_ENABLED is set by entrypoint
+    if os.environ.get("NEO4J_ENABLED", "").lower() in ("true", "1", "yes"):
+        config["graph_store"] = {
+            "provider": "neo4j",
+            "config": {
+                "url": os.environ.get("NEO4J_URL", "bolt://localhost:7687"),
+                "username": os.environ.get("NEO4J_USERNAME", "neo4j"),
+                "password": os.environ.get("NEO4J_PASSWORD", ""),
+            }
+        }
+
     return config

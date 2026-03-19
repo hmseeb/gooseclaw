@@ -155,5 +155,58 @@ class TestConfigCheapModel(unittest.TestCase):
         self.assertEqual(len(CHEAP_MODELS), 10)
 
 
+class TestConfigGraphStore(unittest.TestCase):
+    """GRAPH-02: conditional graph_store config section."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp()
+        import mem0_config
+        self._orig_setup_file = mem0_config.SETUP_FILE
+        mem0_config.SETUP_FILE = os.path.join(self._tmpdir, "setup.json")
+        # Save original env state
+        self._env_keys = ("NEO4J_ENABLED", "NEO4J_URL", "NEO4J_USERNAME", "NEO4J_PASSWORD")
+        self._orig_env = {k: os.environ.get(k) for k in self._env_keys}
+
+    def tearDown(self):
+        import mem0_config
+        mem0_config.SETUP_FILE = self._orig_setup_file
+        import shutil
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+        # Restore env vars
+        for k, v in self._orig_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def test_graph_store_present_when_neo4j_enabled(self):
+        os.environ["NEO4J_ENABLED"] = "true"
+        from mem0_config import build_mem0_config
+        config = build_mem0_config()
+        self.assertIn("graph_store", config)
+        self.assertEqual(config["graph_store"]["provider"], "neo4j")
+        self.assertEqual(config["graph_store"]["config"]["url"], "bolt://localhost:7687")
+        self.assertEqual(config["graph_store"]["config"]["username"], "neo4j")
+
+    def test_graph_store_absent_when_neo4j_disabled(self):
+        os.environ.pop("NEO4J_ENABLED", None)
+        from mem0_config import build_mem0_config
+        config = build_mem0_config()
+        self.assertNotIn("graph_store", config)
+
+    def test_graph_store_absent_when_neo4j_false(self):
+        os.environ["NEO4J_ENABLED"] = "false"
+        from mem0_config import build_mem0_config
+        config = build_mem0_config()
+        self.assertNotIn("graph_store", config)
+
+    def test_graph_store_custom_url(self):
+        os.environ["NEO4J_ENABLED"] = "true"
+        os.environ["NEO4J_URL"] = "bolt://custom:7687"
+        from mem0_config import build_mem0_config
+        config = build_mem0_config()
+        self.assertEqual(config["graph_store"]["config"]["url"], "bolt://custom:7687")
+
+
 if __name__ == "__main__":
     unittest.main()

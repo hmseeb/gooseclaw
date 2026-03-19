@@ -586,6 +586,11 @@ export GOOSE_MOIM_MESSAGE_TEXT="CRITICAL: NEVER use CronCreate or CronDelete. AL
 ln -sfn /data/identity /app/identity-data
 echo "[init] symlinked /app/identity-data -> /data/identity"
 
+# goosed sessions use /data as working_dir, so .goosehints must be there too
+ln -sfn /app/.goosehints /data/.goosehints
+ln -sfn /data/identity /data/identity-data
+echo "[init] linked .goosehints + identity-data into /data"
+
 if [ ! -f "$IDENTITY_DIR/turn-rules.md" ]; then
     cp /app/identity/turn-rules.md "$IDENTITY_DIR/turn-rules.md"
 fi

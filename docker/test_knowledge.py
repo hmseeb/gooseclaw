@@ -290,7 +290,7 @@ class TestChunkerCrossRefs(unittest.TestCase):
 
 
 class TestIndexer(unittest.TestCase):
-    """KB-05: Indexer wipes system collection, preserves runtime collection."""
+    """KB-05: Indexer wipes system collection and rebuilds from markdown files."""
 
     def test_system_collection_rebuilt(self):
         """Indexer should delete and recreate system collection."""
@@ -324,32 +324,6 @@ class TestIndexer(unittest.TestCase):
         self.assertNotIn("stale-1", ids)
         self.assertGreater(len(ids), 0)
 
-    def test_runtime_collection_preserved(self):
-        """Indexer should NOT wipe runtime collection data."""
-        import chromadb
-        from knowledge.indexer import run_index
-
-        client = chromadb.EphemeralClient()
-        # Pre-populate runtime collection
-        rt_col = client.get_or_create_collection("runtime")
-        rt_col.add(ids=["user-fact-1"], documents=["user learned fact"], metadatas=[{"type": "fact", "source": "user", "section": "general", "namespace": "runtime", "refs": "", "key": "user-fact-1"}])
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with open(os.path.join(tmpdir, "system.md"), "w") as f:
-                f.write(SAMPLE_SYSTEM_MD)
-            with open(os.path.join(tmpdir, "onboarding.md"), "w") as f:
-                f.write(SAMPLE_ONBOARDING_MD)
-            os.makedirs(os.path.join(tmpdir, "schemas"))
-            with open(os.path.join(tmpdir, "schemas", "memory.schema.md"), "w") as f:
-                f.write(SAMPLE_SCHEMA_MD)
-
-            run_index(client=client, identity_dir=tmpdir)
-
-        # Runtime data should still be there
-        rt_col = client.get_collection("runtime")
-        ids = rt_col.get()["ids"]
-        self.assertIn("user-fact-1", ids)
-
     def test_indexes_all_file_types(self):
         """Indexer should chunk system.md, onboarding.md, and *.schema.md files."""
         import chromadb
@@ -374,26 +348,6 @@ class TestIndexer(unittest.TestCase):
         self.assertIn("system.md", sources)
         self.assertIn("onboarding.md", sources)
         self.assertIn("schemas/memory.schema.md", sources)
-
-    def test_runtime_collection_created_if_missing(self):
-        """Indexer should ensure runtime collection exists even on fresh DB."""
-        import chromadb
-        from knowledge.indexer import run_index
-
-        client = chromadb.EphemeralClient()
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with open(os.path.join(tmpdir, "system.md"), "w") as f:
-                f.write(SAMPLE_SYSTEM_MD)
-            with open(os.path.join(tmpdir, "onboarding.md"), "w") as f:
-                f.write(SAMPLE_ONBOARDING_MD)
-            os.makedirs(os.path.join(tmpdir, "schemas"))
-
-            run_index(client=client, identity_dir=tmpdir)
-
-        # runtime collection should exist
-        rt_col = client.get_collection("runtime")
-        self.assertIsNotNone(rt_col)
 
 
 SAMPLE_MEMORY_MD = """\

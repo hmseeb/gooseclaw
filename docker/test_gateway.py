@@ -8,7 +8,7 @@ Covers:
   - _memory_writer_loop: idle detection, session dedup
   - create_job: model+provider fields, validation
   - migrate_config_models: defaults, ID generation
-  - _process_memory_extraction: JSON parsing, identity->user.md, knowledge->ChromaDB
+  - _process_identity_extraction: JSON parsing, identity->user.md routing
 """
 
 import json
@@ -564,10 +564,10 @@ class TestClassifyIdentitySection(unittest.TestCase):
         assert gateway._classify_identity_section("random trait") == "## Important Context"
 
 
-# ── _process_memory_extraction ──────────────────────────────────────────────
+# ── _process_identity_extraction (formerly _process_memory_extraction) ────────
 
 class TestProcessMemoryExtraction(unittest.TestCase):
-    """Tests for _process_memory_extraction() JSON parsing and routing."""
+    """Tests for _process_identity_extraction() JSON parsing and identity routing."""
 
     def _make_user_md(self, tmpdir, content=None):
         """Helper: create a user.md with standard sections."""
@@ -591,13 +591,13 @@ class TestProcessMemoryExtraction(unittest.TestCase):
         return user_file
 
     def test_no_json_in_response(self):
-        gateway._process_memory_extraction("no json here at all")
+        gateway._process_identity_extraction("no json here at all")
 
     def test_empty_extraction(self):
-        gateway._process_memory_extraction('{"empty": true}')
+        gateway._process_identity_extraction('{"empty": true}')
 
     def test_invalid_json(self):
-        gateway._process_memory_extraction("{broken json")
+        gateway._process_identity_extraction("{broken json")
 
     def test_identity_routes_to_correct_sections(self):
         """Identity traits should route to their matching user.md sections."""
@@ -611,7 +611,7 @@ class TestProcessMemoryExtraction(unittest.TestCase):
                         "prefers dark mode",         # -> Preferences (Observed)
                     ]
                 })
-                gateway._process_memory_extraction(response)
+                gateway._process_identity_extraction(response)
 
             with open(user_file) as f:
                 content = f.read()
@@ -644,7 +644,7 @@ class TestProcessMemoryExtraction(unittest.TestCase):
             ))
             with patch.object(gateway, "DATA_DIR", tmpdir):
                 response = json.dumps({"identity": ["prefers dark mode"]})
-                gateway._process_memory_extraction(response)
+                gateway._process_identity_extraction(response)
 
             with open(user_file) as f:
                 content = f.read()
@@ -659,7 +659,7 @@ class TestProcessMemoryExtraction(unittest.TestCase):
                 response = json.dumps({
                     "identity": [42, None, "", "valid trait", {"not": "a string"}]
                 })
-                gateway._process_memory_extraction(response)
+                gateway._process_identity_extraction(response)
 
             with open(user_file) as f:
                 content = f.read()
@@ -673,7 +673,7 @@ class TestProcessMemoryExtraction(unittest.TestCase):
             # no user.md created
             with patch.object(gateway, "DATA_DIR", tmpdir):
                 response = json.dumps({"identity": ["some trait"]})
-                gateway._process_memory_extraction(response)  # should not raise
+                gateway._process_identity_extraction(response)  # should not raise
 
     @unittest.skip("ChromaDB knowledge path removed in Phase 23 - replaced by mem0.add()")
     def test_knowledge_items_upserted_to_chromadb(self):
@@ -687,7 +687,7 @@ class TestProcessMemoryExtraction(unittest.TestCase):
                         {"key": "lesson.bun-over-npm", "content": "always use bun", "type": "preference"},
                     ]
                 })
-                gateway._process_memory_extraction(response)
+                gateway._process_identity_extraction(response)
 
         assert mock_col.upsert.call_count == 2
         first_call = mock_col.upsert.call_args_list[0]
@@ -707,7 +707,7 @@ class TestProcessMemoryExtraction(unittest.TestCase):
                         {"key": "test.item", "content": "something", "type": "bogus"},
                     ]
                 })
-                gateway._process_memory_extraction(response)
+                gateway._process_identity_extraction(response)
 
         assert mock_col.upsert.call_count == 1
         assert mock_col.upsert.call_args_list[0][1]["metadatas"][0]["type"] == "fact"
@@ -726,7 +726,7 @@ class TestProcessMemoryExtraction(unittest.TestCase):
                         {"key": "valid.item", "content": "good", "type": "fact"},
                     ]
                 })
-                gateway._process_memory_extraction(response)
+                gateway._process_identity_extraction(response)
 
         assert mock_col.upsert.call_count == 1
         assert mock_col.upsert.call_args_list[0][1]["ids"] == ["memory.valid.item"]
@@ -743,7 +743,7 @@ class TestProcessMemoryExtraction(unittest.TestCase):
                         {"key": "memory.already.prefixed", "content": "b", "type": "fact"},
                     ]
                 })
-                gateway._process_memory_extraction(response)
+                gateway._process_identity_extraction(response)
 
         ids = [call[1]["ids"][0] for call in mock_col.upsert.call_args_list]
         assert ids == ["memory.test.unprefixed", "memory.already.prefixed"]
@@ -758,7 +758,7 @@ class TestProcessMemoryExtraction(unittest.TestCase):
                         {"key": "test.item", "content": "something", "type": "fact"},
                     ]
                 })
-                gateway._process_memory_extraction(response)
+                gateway._process_identity_extraction(response)
 
     @unittest.skip("ChromaDB knowledge path removed in Phase 23 - replaced by mem0.add()")
     def test_chromadb_upsert_error_continues(self):
@@ -773,7 +773,7 @@ class TestProcessMemoryExtraction(unittest.TestCase):
                         {"key": "ok.item", "content": "will succeed", "type": "fact"},
                     ]
                 })
-                gateway._process_memory_extraction(response)
+                gateway._process_identity_extraction(response)
 
         assert mock_col.upsert.call_count == 2
 
@@ -791,7 +791,7 @@ class TestProcessMemoryExtraction(unittest.TestCase):
                         {"key": "project.gooseclaw", "content": "personal AI agent", "type": "fact"},
                     ]
                 })
-                gateway._process_memory_extraction(response)
+                gateway._process_identity_extraction(response)
 
             with open(user_file) as f:
                 content = f.read()
@@ -811,7 +811,7 @@ class TestProcessMemoryExtraction(unittest.TestCase):
                     '{"identity": ["name is Haseeb"], "knowledge": [{"key": "project.x", "content": "a thing", "type": "fact"}]}\n\n'
                     "Hope that helps!"
                 )
-                gateway._process_memory_extraction(response)
+                gateway._process_identity_extraction(response)
 
             with open(user_file) as f:
                 content = f.read()
@@ -824,7 +824,6 @@ class TestProcessMemoryExtraction(unittest.TestCase):
 class TestConvertToMem0Messages(unittest.TestCase):
     """Tests for _convert_to_mem0_messages() format conversion."""
 
-    @unittest.skip("Waiting for Plan 23-02 implementation")
     def test_basic_conversion(self):
         """Gateway format [role/text] converts to mem0 format [role/content]."""
         messages = [
@@ -836,7 +835,6 @@ class TestConvertToMem0Messages(unittest.TestCase):
         assert result[0] == {"role": "user", "content": "hello"}
         assert result[1] == {"role": "assistant", "content": "hi there"}
 
-    @unittest.skip("Waiting for Plan 23-02 implementation")
     def test_empty_messages_filtered(self):
         """Messages with empty or whitespace-only text are filtered out."""
         messages = [
@@ -848,7 +846,6 @@ class TestConvertToMem0Messages(unittest.TestCase):
         assert len(result) == 1
         assert result[0]["content"] == "hello"
 
-    @unittest.skip("Waiting for Plan 23-02 implementation")
     def test_unknown_roles_mapped_to_user(self):
         """Roles not in (user, assistant, system) map to user."""
         messages = [
@@ -858,14 +855,12 @@ class TestConvertToMem0Messages(unittest.TestCase):
         result = gateway._convert_to_mem0_messages(messages)
         assert all(m["role"] == "user" for m in result)
 
-    @unittest.skip("Waiting for Plan 23-02 implementation")
     def test_text_truncated_to_2000_chars(self):
         """Message text is truncated to 2000 characters."""
         messages = [{"role": "user", "text": "x" * 5000}]
         result = gateway._convert_to_mem0_messages(messages)
         assert len(result[0]["content"]) == 2000
 
-    @unittest.skip("Waiting for Plan 23-02 implementation")
     def test_empty_list_returns_empty(self):
         """Empty input returns empty output."""
         result = gateway._convert_to_mem0_messages([])
@@ -875,7 +870,6 @@ class TestConvertToMem0Messages(unittest.TestCase):
 class TestGetMem0(unittest.TestCase):
     """Tests for _get_mem0() lazy initialization."""
 
-    @unittest.skip("Waiting for Plan 23-02 implementation")
     def test_lazy_init_creates_on_first_call(self):
         """First call creates mem0 instance, second returns cached."""
         mock_memory = MagicMock()
@@ -903,7 +897,6 @@ class TestGetMem0(unittest.TestCase):
         # cleanup
         gateway._mem0_instance = None
 
-    @unittest.skip("Waiting for Plan 23-02 implementation")
     def test_thread_safety(self):
         """Concurrent calls don't create multiple instances."""
         call_count = {"n": 0}
@@ -940,7 +933,6 @@ class TestGetMem0(unittest.TestCase):
             assert mock_mem0_module.Memory.from_config.call_count == 1
         gateway._mem0_instance = None
 
-    @unittest.skip("Waiting for Plan 23-02 implementation")
     def test_telemetry_disabled(self):
         """MEM0_TELEMETRY set to 'false' during init."""
         gateway._mem0_instance = None
@@ -957,7 +949,6 @@ class TestGetMem0(unittest.TestCase):
             assert os.environ.get("MEM0_TELEMETRY") == "false"
         gateway._mem0_instance = None
 
-    @unittest.skip("Waiting for Plan 23-02 implementation")
     def test_init_failure_returns_none(self):
         """Exception during init returns None and logs error."""
         gateway._mem0_instance = None
@@ -978,7 +969,6 @@ class TestGetMem0(unittest.TestCase):
 class TestMem0Knowledge(unittest.TestCase):
     """Tests for _mem0_add_knowledge() mem0.add() integration."""
 
-    @unittest.skip("Waiting for Plan 23-02 implementation")
     def test_calls_mem0_add_with_converted_messages(self):
         """_mem0_add_knowledge calls m.add(messages=..., user_id=...)."""
         mock_memory = MagicMock()
@@ -998,7 +988,6 @@ class TestMem0Knowledge(unittest.TestCase):
         assert msgs[0]["content"] == "hello world"
         assert msgs[0]["role"] == "user"
 
-    @unittest.skip("Waiting for Plan 23-02 implementation")
     def test_skips_when_mem0_unavailable(self):
         """When _get_mem0() returns None, skips without error."""
         with patch.object(gateway, "_get_mem0", return_value=None):
@@ -1007,7 +996,6 @@ class TestMem0Knowledge(unittest.TestCase):
             )
             assert result is None
 
-    @unittest.skip("Waiting for Plan 23-02 implementation")
     def test_skips_when_messages_empty(self):
         """Empty messages list skips mem0.add() call."""
         mock_memory = MagicMock()
@@ -1015,7 +1003,6 @@ class TestMem0Knowledge(unittest.TestCase):
             gateway._mem0_add_knowledge([], user_id="test")
         mock_memory.add.assert_not_called()
 
-    @unittest.skip("Waiting for Plan 23-02 implementation")
     def test_skips_when_all_messages_empty_text(self):
         """Messages with only whitespace text result in no mem0.add() call."""
         mock_memory = MagicMock()
@@ -1030,7 +1017,6 @@ class TestMem0Knowledge(unittest.TestCase):
 class TestMem0AddWithTimeout(unittest.TestCase):
     """Tests for _mem0_add_with_timeout() ThreadPoolExecutor wrapper."""
 
-    @unittest.skip("Waiting for Plan 23-02 implementation")
     def test_successful_add_returns_result(self):
         """Successful mem0.add() returns result within timeout."""
         expected = {"results": [{"id": "abc", "event": "ADD"}]}
@@ -1044,7 +1030,6 @@ class TestMem0AddWithTimeout(unittest.TestCase):
             )
         assert result == expected
 
-    @unittest.skip("Waiting for Plan 23-02 implementation")
     def test_timeout_returns_none(self):
         """TimeoutError after N seconds returns None and logs."""
         mock_memory = MagicMock()
@@ -1060,7 +1045,6 @@ class TestMem0AddWithTimeout(unittest.TestCase):
             )
         assert result is None
 
-    @unittest.skip("Waiting for Plan 23-02 implementation")
     def test_exception_returns_none(self):
         """Generic Exception returns None and logs."""
         mock_memory = MagicMock()
@@ -1077,19 +1061,16 @@ class TestMem0AddWithTimeout(unittest.TestCase):
 class TestIdentityExtractPrompt(unittest.TestCase):
     """Tests for IDENTITY_EXTRACT_PROMPT content validation."""
 
-    @unittest.skip("Waiting for Plan 23-02 implementation")
     def test_prompt_mentions_identity(self):
         """Prompt contains 'identity' (not just 'knowledge')."""
         prompt = gateway.IDENTITY_EXTRACT_PROMPT
         assert "identity" in prompt.lower() or "IDENTITY" in prompt
 
-    @unittest.skip("Waiting for Plan 23-02 implementation")
     def test_prompt_mentions_stable_traits(self):
         """Prompt mentions '6+ months' or 'stable' for trait duration."""
         prompt = gateway.IDENTITY_EXTRACT_PROMPT
         assert "6+ months" in prompt or "stable" in prompt.lower()
 
-    @unittest.skip("Waiting for Plan 23-02 implementation")
     def test_prompt_excludes_temporal_items(self):
         """DO NOT section excludes projects, deadlines, integrations."""
         prompt = gateway.IDENTITY_EXTRACT_PROMPT
@@ -1097,7 +1078,6 @@ class TestIdentityExtractPrompt(unittest.TestCase):
         assert "project" in lower  # mentioned in DO NOT section
         assert "deadline" in lower or "current work" in lower
 
-    @unittest.skip("Waiting for Plan 23-02 implementation")
     def test_prompt_requests_json_with_identity_key(self):
         """Prompt requests JSON output with 'identity' key."""
         prompt = gateway.IDENTITY_EXTRACT_PROMPT
@@ -1128,7 +1108,6 @@ class TestProcessIdentityExtraction(unittest.TestCase):
             f.write(content)
         return user_file
 
-    @unittest.skip("Waiting for Plan 23-02 implementation")
     def test_identity_routes_to_correct_sections(self):
         """Identity traits route to matching user.md sections."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1149,7 +1128,6 @@ class TestProcessIdentityExtraction(unittest.TestCase):
             assert "Sarah is his cofounder" in content
             assert "prefers dark mode" in content
 
-    @unittest.skip("Waiting for Plan 23-02 implementation")
     def test_duplicate_identity_skipped(self):
         """Duplicate identity items are skipped via _fact_already_exists."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1168,7 +1146,6 @@ class TestProcessIdentityExtraction(unittest.TestCase):
             count = content.lower().count("prefers dark mode")
             assert count == 1
 
-    @unittest.skip("Waiting for Plan 23-02 implementation")
     def test_empty_extraction_does_nothing(self):
         """Empty extraction ({"empty": true}) does nothing."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1181,7 +1158,6 @@ class TestProcessIdentityExtraction(unittest.TestCase):
             # no auto-extracted comments added
             assert "auto-extracted" not in content
 
-    @unittest.skip("Waiting for Plan 23-02 implementation")
     def test_no_json_does_nothing(self):
         """No valid JSON in response does nothing."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1189,7 +1165,6 @@ class TestProcessIdentityExtraction(unittest.TestCase):
             with patch.object(gateway, "DATA_DIR", tmpdir):
                 gateway._process_identity_extraction("no json here")
 
-    @unittest.skip("Waiting for Plan 23-02 implementation")
     def test_knowledge_key_ignored(self):
         """Identity extraction ignores 'knowledge' key in response."""
         with tempfile.TemporaryDirectory() as tmpdir:

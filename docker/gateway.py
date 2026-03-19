@@ -6862,35 +6862,23 @@ def _mem0_add_with_timeout(messages, user_id="default", timeout=60):
 
 # ── memory extraction prompts ────────────────────────────────────────────────
 
-MEMORY_EXTRACT_PROMPT = """You are analyzing a conversation to extract learnings about the user.
+IDENTITY_EXTRACT_PROMPT = """You are analyzing a conversation to extract IDENTITY traits about the user.
 
-Route what you find based on these rules:
-
-## identity (-> user.md) — who the user IS, still true in 6 months
+ONLY extract traits that are stable for 6+ months:
 - Name, role, relationships, people they mention regularly
 - Communication style, personality traits
 - Core preferences (tools, formats, habits)
 - How they think, what they care about
 
-## knowledge (-> vector knowledge base) — what's happening, temporal facts
-- Projects, deadlines, work context, current priorities
+DO NOT extract:
+- Projects, deadlines, current work (those go to long-term memory separately)
 - Integrations, services, technical facts
-- Corrections (times the user corrected the agent)
-- Lessons learned, things that went wrong
-- Anything that wouldn't fit as a 6-month-stable identity trait
+- Anything temporal or likely to change within months
 
-Output a structured JSON object with these keys (omit empty ones):
+Output a JSON object:
 {
-  "identity": ["trait1", "trait2"],
-  "knowledge": [
-    {"key": "dot.notation.key", "content": "the fact", "type": "fact|preference|integration|procedure"}
-  ]
+  "identity": ["trait1", "trait2"]
 }
-
-For knowledge items:
-- key: hierarchical dot notation, e.g. "project.gooseclaw.deploy-flow", "lesson.docker-networking", "integration.fireflies.usage"
-- type: one of "fact", "preference", "integration", "procedure"
-- content: the actual knowledge to store
 
 If there's nothing meaningful to extract, output: {"empty": true}
 
@@ -6948,61 +6936,34 @@ def _memory_writer_loop():
                 if not messages or len(messages) < 2:
                     continue
 
-                # build conversation text (truncate to keep token count reasonable)
+                _memory_log.info(f"extracting from session {sid} ({len(messages)} msgs)")
+
+                # ── knowledge extraction via mem0.add() (async with timeout) ──
+                _mem0_add_with_timeout(messages[-40:], user_id=MEM0_USER_ID, timeout=60)
+
+                # ── identity extraction via goosed (simplified prompt) ──
                 convo_text = ""
                 for msg in messages[-40:]:  # last 40 messages max
                     role = msg.get("role", "unknown")
                     text = msg.get("text", "")[:500]
                     convo_text += f"[{role}]: {text}\n\n"
 
-                if len(convo_text.strip()) < 50:
-                    continue
+                if len(convo_text.strip()) >= 50:
+                    try:
+                        extract_sid = _create_goose_session()
+                        if extract_sid:
+                            prompt = IDENTITY_EXTRACT_PROMPT + convo_text
+                            response, error, _media = _do_rest_relay(prompt, extract_sid)
+                            if not error:
+                                _process_identity_extraction(response)
+                    except Exception as e:
+                        _memory_log.error(f"identity extraction error: {e}")
 
-                _memory_log.info(f"extracting from session {sid} ({len(messages)} msgs)")
-
-                # send through goosed in a separate session
-                try:
-                    extract_sid = _create_goose_session()
-                    if not extract_sid:
-                        _memory_log.info("could not create extraction session")
-                        continue
-
-                    prompt = MEMORY_EXTRACT_PROMPT + convo_text
-                    response, error, _media = _do_rest_relay(prompt, extract_sid)
-                    if error:
-                        _memory_log.error(f"extraction error: {error}")
-                        continue
-
-                    _process_memory_extraction(response)
-                    _memory_log.info(f"done for session {sid}")
-
-                except Exception as e:
-                    _memory_log.error(f"error processing session {sid}: {e}")
+                _memory_log.info(f"done for session {sid}")
 
         except Exception as e:
             _memory_log.error(f"loop error: {e}")
 
-
-_knowledge_runtime_col = None
-
-def _get_knowledge_collection():
-    """Get the ChromaDB runtime collection for knowledge upserts.
-
-    Lazy-loaded, shares the same DB path as the knowledge MCP server.
-    """
-    global _knowledge_runtime_col
-    if _knowledge_runtime_col is None:
-        try:
-            import chromadb
-            chroma_path = os.environ.get("KNOWLEDGE_DB_PATH", "/data/knowledge/chroma")
-            client = chromadb.PersistentClient(path=chroma_path)
-            _knowledge_runtime_col = client.get_or_create_collection(
-                "runtime", metadata={"hnsw:space": "cosine"}
-            )
-        except Exception as e:
-            _memory_log.error(f"failed to connect to ChromaDB: {e}")
-            return None
-    return _knowledge_runtime_col
 
 
 def _fact_already_exists(fact, file_content):
@@ -7123,120 +7084,58 @@ def _extract_json_from_response(text):
     return None
 
 
-def _process_memory_extraction(response_text):
-    """Parse extraction response, route identity to user.md, knowledge to ChromaDB.
+def _process_identity_extraction(response_text):
+    """Parse identity-only extraction response, route traits to user.md.
 
-    Routing per turn-rules.md:
-      identity (who the user IS, stable 6+ months) -> user.md (section-routed)
-      knowledge (facts, projects, integrations, temporal) -> knowledge_upsert (ChromaDB)
+    Only handles identity items. Knowledge extraction is handled by mem0.add() separately.
     """
     data = _extract_json_from_response(response_text)
     if data is None:
-        _memory_log.info("no valid JSON found in response")
+        _memory_log.info("no valid JSON found in identity response")
         return
 
     if data.get("empty"):
-        _memory_log.info("nothing to extract")
+        _memory_log.info("no identity traits to extract")
         return
 
     identity_dir = os.path.join(DATA_DIR, "identity")
     timestamp = time.strftime("%Y-%m-%d %H:%M")
 
-    # ── identity traits -> user.md (section-routed) ──
     identity_items = data.get("identity", [])
-    if identity_items:
-        user_file = os.path.join(identity_dir, "user.md")
-        if os.path.exists(user_file):
-            with open(user_file, "r") as f:
-                content = f.read()
+    if not identity_items:
+        return
 
-            # group by target section, dedup against full file
-            by_section = {}
-            for item in identity_items:
-                if not isinstance(item, str) or not item.strip():
-                    continue
-                if _fact_already_exists(item, content):
-                    _memory_log.info(f"skipping duplicate identity: {item}")
-                    continue
-                section = _classify_identity_section(item)
-                by_section.setdefault(section, []).append(item)
+    user_file = os.path.join(identity_dir, "user.md")
+    if not os.path.exists(user_file):
+        _memory_log.info("user.md not found, skipping identity writes")
+        return
 
-            added = 0
-            for section_header, items in by_section.items():
-                additions = "\n".join(f"- {item}" for item in items)
-                if section_header in content:
-                    content = _append_to_section(content, section_header, additions, timestamp)
-                else:
-                    # section doesn't exist, append at end
-                    content += f"\n\n{section_header}\n\n<!-- auto-extracted {timestamp} -->\n{additions}\n"
-                added += len(items)
+    with open(user_file, "r") as f:
+        content = f.read()
 
-            if added > 0:
-                with open(user_file, "w") as f:
-                    f.write(content)
-                _memory_log.info(f"added {added} identity traits to user.md")
+    by_section = {}
+    for item in identity_items:
+        if not isinstance(item, str) or not item.strip():
+            continue
+        if _fact_already_exists(item, content):
+            _memory_log.info(f"skipping duplicate identity: {item}")
+            continue
+        section = _classify_identity_section(item)
+        by_section.setdefault(section, []).append(item)
+
+    added = 0
+    for section_header, items in by_section.items():
+        additions = "\n".join(f"- {item}" for item in items)
+        if section_header in content:
+            content = _append_to_section(content, section_header, additions, timestamp)
         else:
-            _memory_log.info("user.md not found, skipping identity writes")
+            content += f"\n\n{section_header}\n\n<!-- auto-extracted {timestamp} -->\n{additions}\n"
+        added += len(items)
 
-    # ── knowledge -> ChromaDB runtime collection ──
-    knowledge_items = data.get("knowledge", [])
-    if knowledge_items:
-        col = _get_knowledge_collection()
-        if col is None:
-            _memory_log.error("ChromaDB unavailable, skipping knowledge upserts")
-            return
-
-        upserted = 0
-        for item in knowledge_items:
-            if not isinstance(item, dict):
-                continue
-            key = item.get("key", "")
-            content_text = item.get("content", "")
-            chunk_type = item.get("type", "fact")
-
-            if not key or not content_text:
-                continue
-
-            valid_types = ("fact", "preference", "integration", "procedure", "schema")
-            if chunk_type not in valid_types:
-                chunk_type = "fact"
-
-            # prefix with "memory." to identify auto-extracted chunks
-            full_key = f"memory.{key}" if not key.startswith("memory.") else key
-
-            now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-
-            # preserve created_at if chunk already exists
-            created_at = now
-            try:
-                existing = col.get(ids=[full_key], include=["metadatas"])
-                if existing["ids"]:
-                    old_meta = existing["metadatas"][0] if existing["metadatas"] else {}
-                    created_at = old_meta.get("created_at", now)
-            except Exception:
-                pass
-
-            try:
-                col.upsert(
-                    ids=[full_key],
-                    documents=[content_text],
-                    metadatas=[{
-                        "type": chunk_type,
-                        "source": "memory-writer",
-                        "section": "",
-                        "namespace": "runtime",
-                        "refs": "",
-                        "key": full_key,
-                        "created_at": created_at,
-                        "updated_at": now,
-                    }],
-                )
-                upserted += 1
-            except Exception as e:
-                _memory_log.error(f"failed to upsert {full_key}: {e}")
-
-        if upserted:
-            _memory_log.info(f"upserted {upserted} knowledge chunks to ChromaDB")
+    if added > 0:
+        with open(user_file, "w") as f:
+            f.write(content)
+        _memory_log.info(f"added {added} identity traits to user.md")
 
 
 def start_memory_writer():

@@ -1,6 +1,7 @@
-"""FastMCP knowledge server with 5 tools wrapping ChromaDB.
+"""FastMCP knowledge server with 3 tools wrapping ChromaDB.
 
-Two-namespace architecture: system (rebuilt on deploy) + runtime (persists).
+System-only architecture: system collection rebuilt on deploy.
+User memories are handled by mem0 (separate MCP server).
 All chunks carry created_at/updated_at timestamps (ISO 8601 UTC).
 All logging to stderr to avoid corrupting MCP stdio protocol.
 """
@@ -8,7 +9,6 @@ All logging to stderr to avoid corrupting MCP stdio protocol.
 import os
 import sys
 import logging
-import time
 import chromadb
 from mcp.server.fastmcp import FastMCP
 
@@ -24,14 +24,13 @@ except Exception:
     client = chromadb.EphemeralClient()
 
 system_col = client.get_or_create_collection("system", metadata={"hnsw:space": "cosine"})
-runtime_col = client.get_or_create_collection("runtime", metadata={"hnsw:space": "cosine"})
 
 mcp = FastMCP("knowledge")
 
 
 @mcp.tool()
 def knowledge_search(query: str, type: str = "", limit: int = 5, since: str = "") -> str:
-    """Search the knowledge base semantically. Returns top matching chunks with similarity scores.
+    """Search the system knowledge base semantically. Returns top matching chunks with similarity scores.
 
     Args:
         query: Natural language search query
@@ -43,38 +42,37 @@ def knowledge_search(query: str, type: str = "", limit: int = 5, since: str = ""
     where_filter = {"type": type} if type else None
 
     results = []
-    for col in [system_col, runtime_col]:
-        try:
-            kwargs = {"query_texts": [query], "n_results": limit}
-            if where_filter:
-                kwargs["where"] = where_filter
-            r = col.query(**kwargs)
-        except Exception as e:
-            logger.warning("query failed on collection: %s", e)
-            continue
+    try:
+        kwargs = {"query_texts": [query], "n_results": limit}
+        if where_filter:
+            kwargs["where"] = where_filter
+        r = system_col.query(**kwargs)
+    except Exception as e:
+        logger.warning("query failed: %s", e)
+        return "No matching knowledge found."
 
-        if r["documents"] and r["documents"][0]:
-            for i, doc in enumerate(r["documents"][0]):
-                dist = r["distances"][0][i] if r["distances"] else None
-                meta = r["metadatas"][0][i] if r["metadatas"] else {}
-                score = round(1 - dist, 3) if dist is not None else None
-                created = meta.get("created_at", "")
-                updated = meta.get("updated_at", "")
+    if r["documents"] and r["documents"][0]:
+        for i, doc in enumerate(r["documents"][0]):
+            dist = r["distances"][0][i] if r["distances"] else None
+            meta = r["metadatas"][0][i] if r["metadatas"] else {}
+            score = round(1 - dist, 3) if dist is not None else None
+            created = meta.get("created_at", "")
+            updated = meta.get("updated_at", "")
 
-                # apply since filter: exclude chunks without timestamps or before cutoff
-                if since:
-                    if not created or str(created) < since:
-                        continue
+            # apply since filter: exclude chunks without timestamps or before cutoff
+            if since:
+                if not created or str(created) < since:
+                    continue
 
-                results.append({
-                    "text": doc,
-                    "score": score,
-                    "key": r["ids"][0][i],
-                    "type": meta.get("type", "?"),
-                    "refs": meta.get("refs", ""),
-                    "created_at": created,
-                    "updated_at": updated,
-                })
+            results.append({
+                "text": doc,
+                "score": score,
+                "key": r["ids"][0][i],
+                "type": meta.get("type", "?"),
+                "refs": meta.get("refs", ""),
+                "created_at": created,
+                "updated_at": updated,
+            })
 
     results.sort(key=lambda x: x.get("score", 0), reverse=True)
     results = results[:limit]
@@ -102,103 +100,35 @@ def knowledge_search(query: str, type: str = "", limit: int = 5, since: str = ""
 
 
 @mcp.tool()
-def knowledge_upsert(key: str, content: str, type: str, refs: str = "") -> str:
-    """Write or update a knowledge chunk. Used for runtime facts, integrations, lessons.
-
-    Args:
-        key: Unique identifier for exact lookup (e.g., "integration.fireflies")
-        content: The knowledge content to store
-        type: Chunk type (fact, procedure, preference, integration, schema)
-        refs: Comma-separated keys of related chunks
-    """
-    valid_types = ("procedure", "schema", "fact", "preference", "integration")
-    if type not in valid_types:
-        return f"Invalid type '{type}'. Must be one of: {', '.join(valid_types)}"
-
-    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-
-    # check if chunk already exists to preserve created_at
-    existing = runtime_col.get(ids=[key], include=["metadatas"])
-    created_at = now
-    if existing["ids"]:
-        old_meta = existing["metadatas"][0] if existing["metadatas"] else {}
-        created_at = old_meta.get("created_at", now)
-
-    try:
-        runtime_col.upsert(
-            ids=[key],
-            documents=[content],
-            metadatas=[{
-                "type": type,
-                "source": "runtime",
-                "section": "",
-                "namespace": "runtime",
-                "refs": refs,
-                "key": key,
-                "created_at": created_at,
-                "updated_at": now,
-            }],
-        )
-    except Exception as e:
-        logger.error("upsert failed for key %s: %s", key, e)
-        return f"Failed to store chunk '{key}': {e}"
-    logger.info("upserted chunk: %s", key)
-    return f"Stored knowledge chunk: {key}"
-
-
-@mcp.tool()
 def knowledge_get(key: str) -> str:
-    """Get a specific chunk by exact key. Faster than semantic search when you know the key.
+    """Get a specific system chunk by exact key. Faster than semantic search when you know the key.
 
     Args:
-        key: Exact chunk key (e.g., "system.tools.jobs", "integration.fireflies")
+        key: Exact chunk key (e.g., "system.tools.jobs", "system.platform")
     """
-    for col in [system_col, runtime_col]:
-        got = col.get(ids=[key], include=["documents", "metadatas"])
-        if got["ids"]:
-            doc = got["documents"][0]
-            meta = got["metadatas"][0] if got["metadatas"] else {}
-            header = f"[{meta.get('type', '?')}] {key}"
-            ts_parts = []
-            if meta.get("created_at"):
-                ts_parts.append(f"created: {meta['created_at']}")
-            if meta.get("updated_at"):
-                ts_parts.append(f"updated: {meta['updated_at']}")
-            if ts_parts:
-                header += f" ({' | '.join(ts_parts)})"
-            lines = [header, doc]
-            if meta.get("refs"):
-                lines.append(f"  refs: {meta['refs']}")
-            return "\n".join(lines)
-
-    return f"No chunk found with key: {key}"
-
-
-@mcp.tool()
-def knowledge_delete(key: str) -> str:
-    """Delete a runtime knowledge chunk by key.
-
-    Args:
-        key: Exact chunk key to delete (only works on runtime chunks)
-    """
-    # Check system collection first - refuse deletion
-    got = system_col.get(ids=[key])
+    got = system_col.get(ids=[key], include=["documents", "metadatas"])
     if got["ids"]:
-        return f"Cannot delete system chunks (rebuilt on deploy). Key: {key}"
-
-    # Check runtime collection
-    got = runtime_col.get(ids=[key])
-    if got["ids"]:
-        runtime_col.delete(ids=[key])
-        logger.info("deleted chunk: %s", key)
-        return f"Deleted knowledge chunk: {key}"
+        doc = got["documents"][0]
+        meta = got["metadatas"][0] if got["metadatas"] else {}
+        header = f"[{meta.get('type', '?')}] {key}"
+        ts_parts = []
+        if meta.get("created_at"):
+            ts_parts.append(f"created: {meta['created_at']}")
+        if meta.get("updated_at"):
+            ts_parts.append(f"updated: {meta['updated_at']}")
+        if ts_parts:
+            header += f" ({' | '.join(ts_parts)})"
+        lines = [header, doc]
+        if meta.get("refs"):
+            lines.append(f"  refs: {meta['refs']}")
+        return "\n".join(lines)
 
     return f"No chunk found with key: {key}"
 
 
 @mcp.tool()
 def knowledge_recent(limit: int = 5) -> str:
-    """Get the most recently created or updated knowledge chunks, sorted by time (newest first).
+    """Get the most recently created or updated system knowledge chunks, sorted by time (newest first).
 
     Use this to answer "what did you store recently?" or "show me latest knowledge entries".
 
@@ -208,12 +138,10 @@ def knowledge_recent(limit: int = 5) -> str:
     limit = max(1, min(limit, 20))
 
     all_entries = []
-    for col in [system_col, runtime_col]:
-        try:
-            # fetch all entries with metadata
-            got = col.get(include=["documents", "metadatas"])
-            if not got["ids"]:
-                continue
+    try:
+        # fetch all entries with metadata
+        got = system_col.get(include=["documents", "metadatas"])
+        if got["ids"]:
             for i, chunk_id in enumerate(got["ids"]):
                 doc = got["documents"][i] if got["documents"] else ""
                 meta = got["metadatas"][i] if got["metadatas"] else {}
@@ -230,8 +158,8 @@ def knowledge_recent(limit: int = 5) -> str:
                     "sort_ts": sort_ts,
                     "namespace": meta.get("namespace", "?"),
                 })
-        except Exception as e:
-            logger.warning("failed to fetch from collection: %s", e)
+    except Exception as e:
+        logger.warning("failed to fetch from collection: %s", e)
 
     # sort by timestamp descending, entries without timestamps go last
     all_entries.sort(key=lambda x: x["sort_ts"] or "0000", reverse=True)

@@ -1,8 +1,7 @@
 """Deploy-time re-indexer for the system namespace.
 
 Reads LOCKED markdown files (system.md, onboarding.md, schemas/*.schema.md),
-chunks them, and indexes into ChromaDB's "system" collection. Leaves the
-"runtime" collection untouched.
+chunks them, and indexes into ChromaDB's "system" collection.
 """
 import os
 import time
@@ -32,9 +31,6 @@ def run_index(client=None, identity_dir=None):
     except Exception:
         pass  # collection doesn't exist yet
     system_col = client.create_collection("system", metadata={"hnsw:space": "cosine"})
-
-    # ensure runtime collection exists (never wiped)
-    client.get_or_create_collection("runtime", metadata={"hnsw:space": "cosine"})
 
     # chunk LOCKED files
     chunks = []

@@ -1,0 +1,6 @@
+.git
+.planning
+.claude
+node_modules
+__pycache__
+*.pyc

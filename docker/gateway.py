@@ -6576,6 +6576,10 @@ def _set_session_default_provider(session_id):
 
     goosed doesn't reliably inherit global config into sessions, so we must
     explicitly set the provider via API after creating each session.
+
+    If the call fails because an extension can't find its secrets (e.g. a
+    newly-added extension whose credentials are in the vault but not yet in
+    goosed's secret store), syncs vault secrets to goosed and retries once.
     """
     setup = load_setup()
     if not setup or not _INTERNAL_GOOSE_TOKEN:
@@ -6588,24 +6592,39 @@ def _set_session_default_provider(session_id):
         model = "default"
     if not model:
         model = default_models.get(provider, "")
-    try:
-        payload = json.dumps({
-            "provider": provider, "model": model, "session_id": session_id,
-        }).encode("utf-8")
-        conn = _goosed_conn(timeout=10)
-        conn.request("POST", "/agent/update_provider", body=payload, headers={
-            "Content-Type": "application/json",
-            "X-Secret-Key": _INTERNAL_GOOSE_TOKEN,
-        })
-        resp = conn.getresponse()
-        resp.read()
-        conn.close()
-        if resp.status in (200, 204):
-            _session_log.info(f"set provider {provider}/{model} on {session_id}")
-        else:
-            _session_log.warning(f"update_provider returned {resp.status} for {session_id}")
-    except Exception as e:
-        _session_log.error(f"WARN: failed to set provider on {session_id}: {e}")
+
+    for attempt in range(2):
+        try:
+            payload = json.dumps({
+                "provider": provider, "model": model, "session_id": session_id,
+            }).encode("utf-8")
+            conn = _goosed_conn(timeout=10)
+            conn.request("POST", "/agent/update_provider", body=payload, headers={
+                "Content-Type": "application/json",
+                "X-Secret-Key": _INTERNAL_GOOSE_TOKEN,
+            })
+            resp = conn.getresponse()
+            body = resp.read().decode("utf-8", errors="replace")
+            conn.close()
+            if resp.status in (200, 204):
+                _session_log.info(f"set provider {provider}/{model} on {session_id}")
+                return
+
+            # check if failure is due to missing extension secrets
+            if resp.status == 400 and "secret" in body.lower() and attempt == 0:
+                _session_log.warning(
+                    f"update_provider failed (missing secret), syncing vault: {body[:200]}"
+                )
+                if _sync_vault_to_goosed_secrets():
+                    _session_log.info("vault synced, retrying update_provider...")
+                    continue
+            _session_log.warning(
+                f"update_provider returned {resp.status} for {session_id}: {body[:200]}"
+            )
+            return
+        except Exception as e:
+            _session_log.error(f"WARN: failed to set provider on {session_id}: {e}")
+            return
 
 
 def _create_goose_session():
@@ -8416,6 +8435,75 @@ def _configure_goosed_provider():
         _gateway_log.error(f"WARN: failed to configure goosed provider: {e}")
 
 
+VAULT_FILE = os.path.join(DATA_DIR, "secrets", "vault.yaml")
+
+
+def _inject_vault_secrets_into_env(env):
+    """Load all secrets from the vault into env dict for goosed.
+
+    goosed checks env vars first when fetching extension secrets (before its
+    own keyring/file store). Injecting vault secrets here ensures extensions
+    with env_keys (like Google Workspace) can find their credentials without
+    needing them written into goosed's internal secret store.
+    """
+    if not os.path.exists(VAULT_FILE):
+        return
+    try:
+        import yaml
+        with open(VAULT_FILE) as f:
+            data = yaml.safe_load(f) or {}
+        injected = []
+        for key, val in data.items():
+            if isinstance(val, str) and key not in env:
+                env[key] = val
+                injected.append(key)
+            elif isinstance(val, dict):
+                # nested: service.subkey -> handled by entrypoint, skip here
+                pass
+        if injected:
+            _gateway_log.info(f"injected {len(injected)} vault secrets into goosed env: {', '.join(injected)}")
+    except Exception as e:
+        _gateway_log.warning(f"failed to load vault secrets: {e}")
+
+
+def _sync_vault_to_goosed_secrets():
+    """Write vault secrets to goosed's secrets.yaml file for mid-session access.
+
+    Called when /agent/update_provider fails due to missing secrets. goosed
+    reads secrets.yaml as a fallback when keyring is disabled, so writing
+    here lets it find secrets added after goosed started.
+    """
+    if not os.path.exists(VAULT_FILE):
+        return False
+    try:
+        import yaml
+        with open(VAULT_FILE) as f:
+            vault = yaml.safe_load(f) or {}
+
+        # goosed secrets.yaml lives in its config dir
+        goose_secrets_path = os.path.join(DATA_DIR, "config", "secrets.yaml")
+        existing = {}
+        if os.path.exists(goose_secrets_path):
+            with open(goose_secrets_path) as f:
+                existing = yaml.safe_load(f) or {}
+
+        changed = False
+        for key, val in vault.items():
+            if isinstance(val, str) and key not in existing:
+                existing[key] = val
+                changed = True
+
+        if changed:
+            with open(goose_secrets_path, "w") as f:
+                yaml.dump(existing, f, default_flow_style=False)
+            os.chmod(goose_secrets_path, 0o600)
+            _gateway_log.info(f"synced vault secrets to goosed secrets.yaml")
+            return True
+    except Exception as e:
+        _gateway_log.warning(f"failed to sync vault to goosed secrets: {e}")
+    return False
+
+
 def start_goosed():
     global goosed_process, _INTERNAL_GOOSE_TOKEN
     _check_stale_pid("goosed")
@@ -8451,6 +8539,11 @@ def start_goosed():
             if md and "GOOSE_MODEL" not in env:
                 env["GOOSE_MODEL"] = md
 
+        # inject vault secrets into goosed env so extensions can find them.
+        # goosed checks env vars first when fetching secrets, so this bridges
+        # the gap between the gateway vault and goosed's secret store.
+        _inject_vault_secrets_into_env(env)
+
         _gateway_log.info(f"starting goosed agent on 127.0.0.1:{GOOSE_WEB_PORT}")
         _gateway_log.info(f"cmd: goosed agent (TLS=false, port={GOOSE_WEB_PORT})")
         _gateway_log.info(f"env: GOOSE_PROVIDER={env.get('GOOSE_PROVIDER', 'NOT SET')} "
@@ -8479,6 +8572,10 @@ def start_goosed():
                 if resp.status == 200:
                     _set_startup_state("ready", "goosed is running")
                     _gateway_log.info("goosed is ready")
+                    # sync vault secrets to goosed's file store (belt-and-suspenders
+                    # with env injection above -- covers edge cases where goosed
+                    # doesn't read env vars for certain secret lookups)
+                    _sync_vault_to_goosed_secrets()
                     # configure provider via API (goosed ignores env vars for provider)
                     _configure_goosed_provider()
                     return True

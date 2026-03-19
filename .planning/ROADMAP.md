@@ -91,11 +91,11 @@ Plans:
   2. Memory extraction runs in the background and never blocks or slows the user's next message (timeout-protected)
   3. Stable identity traits (name, role, preferences, communication style) route to user.md, not mem0. Knowledge (projects, facts, events) routes to mem0 only. No duplication.
   4. Contradictions are resolved automatically. If user says "I switched to Rust" after previously storing "I prefer TypeScript", the old memory updates.
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 23-01: TBD
-- [ ] 23-02: TBD
+- [ ] 23-01-PLAN.md — Test scaffold for mem0 gateway integration (refactor chromadb tests, add mem0/timeout/identity tests)
+- [ ] 23-02-PLAN.md — Replace manual extraction with mem0.add(), split identity/knowledge prompts, remove dead chromadb code
 
 ### Phase 24: ChromaDB Migration + Cleanup
 **Goal**: Existing runtime memories migrate to mem0 and the old extraction pipeline is fully removed

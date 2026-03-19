@@ -60,7 +60,7 @@
 **Milestone Goal:** Replace flat chromadb vector search with mem0's vector + knowledge graph memory system as a self-hosted MCP extension. Zero new Railway services. Neo4j runs in-container.
 
 - [x] **Phase 22: mem0 MCP Server + Config** - Standalone mem0 MCP extension with ChromaDB backend and shared config module (completed 2026-03-19)
-- [ ] **Phase 23: Gateway Memory Writer Migration** - Replace manual extraction pipeline with mem0.add() and identity routing
+- [x] **Phase 23: Gateway Memory Writer Migration** - Replace manual extraction pipeline with mem0.add() and identity routing (completed 2026-03-19)
 - [ ] **Phase 24: ChromaDB Migration + Cleanup** - Migrate existing memories to mem0, deprecate runtime collection
 - [ ] **Phase 25: Neo4j Knowledge Graph** - In-container Neo4j with graph-augmented memory search
 

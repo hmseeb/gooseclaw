@@ -515,6 +515,41 @@ EXTENSIONS
 fi
 rm -f "$EXTENSIONS_STATE_FILE"
 
+# ─── sync new template extensions into existing configs ──────────────────────
+# On upgrades, new extensions (like mem0-memory) need to be added to existing
+# config.yaml files. This merges any missing template extensions without
+# overwriting user customizations.
+
+python3 -c "
+import yaml, sys
+try:
+    # template extensions we require (add new ones here)
+    required = {
+        'mem0-memory': {
+            'enabled': True, 'type': 'stdio', 'name': 'mem0-memory',
+            'description': 'Long-term memory with semantic search and contradiction resolution',
+            'cmd': 'python3', 'args': ['/app/docker/memory/server.py'],
+            'envs': {'MEM0_USER_ID': 'default', 'MEM0_TELEMETRY': 'false'},
+            'env_keys': [], 'timeout': 300, 'bundled': None, 'available_tools': [],
+        },
+    }
+    with open('$CONFIG_DIR/config.yaml') as f:
+        config = yaml.safe_load(f) or {}
+    exts = config.get('extensions', {})
+    added = []
+    for name, defn in required.items():
+        if name not in exts:
+            exts[name] = defn
+            added.append(name)
+    if added:
+        config['extensions'] = exts
+        with open('$CONFIG_DIR/config.yaml', 'w') as f:
+            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+        print(f'[mcp] synced new extensions: {\", \".join(added)}')
+except Exception as e:
+    print(f'[mcp] WARN: extension sync failed: {e}', file=sys.stderr)
+" 2>/dev/null || true
+
 # restore preserved gateway state (pairings, sessions, pending codes)
 if [ -s "$GATEWAY_STATE_FILE" ]; then
     python3 -c "
@@ -609,9 +644,9 @@ if command -v neo4j &>/dev/null; then
     neo4j console &
     NEO4J_PID=$!
 
-    echo "[neo4j] waiting for bolt://localhost:7687..."
+    echo "[neo4j] waiting for bolt://localhost:7687 (up to 120s)..."
     NEO4J_READY=false
-    for i in $(seq 1 60); do
+    for i in $(seq 1 120); do
         if python3 -c "import socket; socket.create_connection(('localhost',7687),1)" 2>/dev/null; then
             NEO4J_READY=true
             echo "[neo4j] ready (${i}s)"

@@ -51,6 +51,9 @@ def memory_add(content: str) -> str:
 def memory_search(query: str, limit: int = 5) -> str:
     """Search memories semantically. Returns relevant memories with scores.
 
+    When graph memory is enabled, also returns entity relationships
+    alongside vector results for richer context.
+
     Args:
         query: Natural language search query
         limit: Max results (default 5, max 20)
@@ -59,13 +62,15 @@ def memory_search(query: str, limit: int = 5) -> str:
     try:
         results = memory.search(query=query, user_id=USER_ID, limit=limit)
         # Handle both dict and list response formats
+        relations = []
         if isinstance(results, dict):
             items = results.get("results", [])
+            relations = results.get("relations", [])
         elif isinstance(results, list):
             items = results
         else:
             items = []
-        if not items:
+        if not items and not relations:
             return "No matching memories found."
         lines = []
         for r in items:
@@ -73,6 +78,13 @@ def memory_search(query: str, limit: int = 5) -> str:
             text = r.get("memory", "")
             mid = r.get("id", "?")
             lines.append(f"[{score}] {text} (id: {mid})")
+        if relations:
+            lines.append("\n--- Related entities ---")
+            for r in relations[:10]:
+                src = r.get("source", "?")
+                rel = r.get("relationship", "?")
+                dst = r.get("destination", "?")
+                lines.append(f"  {src} --[{rel}]--> {dst}")
         return "\n".join(lines)
     except Exception as e:
         logger.error("memory_search failed: %s", e)
@@ -167,6 +179,68 @@ def memory_get(memory_id: str) -> str:
     except Exception as e:
         logger.error("memory_get failed: %s", e)
         return f"Memory lookup failed: {e}"
+
+
+@mcp.tool()
+def memory_entities(query: str = "", limit: int = 10) -> str:
+    """List known entities from the knowledge graph.
+
+    Args:
+        query: Optional filter query (empty = all entities)
+        limit: Max results (default 10, max 50)
+    """
+    limit = max(1, min(limit, 50))
+    try:
+        results = memory.search(query=query or "entities", user_id=USER_ID, limit=limit)
+        if isinstance(results, dict):
+            relations = results.get("relations", [])
+        else:
+            relations = []
+        if not relations:
+            return "No entities found in knowledge graph."
+        entities = set()
+        for r in relations:
+            src = r.get("source", "")
+            dst = r.get("destination", "")
+            if src:
+                entities.add(src)
+            if dst:
+                entities.add(dst)
+        if not entities:
+            return "No entities found."
+        return "\n".join(f"- {e}" for e in sorted(entities)[:limit])
+    except Exception as e:
+        logger.error("memory_entities failed: %s", e)
+        return f"Entity lookup failed: {e}"
+
+
+@mcp.tool()
+def memory_relations(entity: str, limit: int = 10) -> str:
+    """Show relationships for a specific entity from the knowledge graph.
+
+    Args:
+        entity: Entity name to look up relationships for
+        limit: Max results (default 10, max 50)
+    """
+    limit = max(1, min(limit, 50))
+    try:
+        results = memory.search(query=entity, user_id=USER_ID, limit=limit)
+        if isinstance(results, dict):
+            relations = results.get("relations", [])
+        else:
+            relations = []
+        if not relations:
+            return f"No relationships found for '{entity}'."
+        lines = []
+        for r in relations[:limit]:
+            src = r.get("source", "?")
+            rel = r.get("relationship", "?")
+            dst = r.get("destination", "?")
+            lines.append(f"- {src} --[{rel}]--> {dst}")
+        return "\n".join(lines)
+    except Exception as e:
+        logger.error("memory_relations failed: %s", e)
+        return f"Relationship lookup failed: {e}"
 
 
 if __name__ == "__main__":

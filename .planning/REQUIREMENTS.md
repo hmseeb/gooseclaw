@@ -30,10 +30,10 @@
 
 ### Migration
 
-- [ ] **MIG-01**: One-time migration script moves chromadb runtime memories to mem0
-- [ ] **MIG-02**: Migration bypasses mem0.add() (direct insert, no re-extraction)
-- [ ] **MIG-03**: ChromaDB runtime collection deprecated after migration (system collection stays)
-- [ ] **MIG-04**: Sentinel file prevents accidental re-migration
+- [x] **MIG-01**: One-time migration script moves chromadb runtime memories to mem0
+- [x] **MIG-02**: Migration bypasses mem0.add() (direct insert, no re-extraction)
+- [x] **MIG-03**: ChromaDB runtime collection deprecated after migration (system collection stays)
+- [x] **MIG-04**: Sentinel file prevents accidental re-migration
 
 ### Knowledge Graph
 
@@ -80,10 +80,10 @@
 | GW-02 | Phase 23 | Complete |
 | GW-03 | Phase 23 | Complete |
 | GW-04 | Phase 23 | Complete |
-| MIG-01 | Phase 24 | Pending |
-| MIG-02 | Phase 24 | Pending |
-| MIG-03 | Phase 24 | Pending |
-| MIG-04 | Phase 24 | Pending |
+| MIG-01 | Phase 24 | Complete |
+| MIG-02 | Phase 24 | Complete |
+| MIG-03 | Phase 24 | Complete |
+| MIG-04 | Phase 24 | Complete |
 | GRAPH-01 | Phase 25 | Pending |
 | GRAPH-02 | Phase 25 | Pending |
 | GRAPH-03 | Phase 25 | Pending |

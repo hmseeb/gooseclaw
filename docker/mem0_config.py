@@ -23,11 +23,13 @@ PROVIDER_MAP = {
     "together": "together",
     "azure-openai": "azure_openai",
     "litellm": "litellm",
+    "claude-code": "anthropic",
 }
 
 # Cheap extraction models per provider (CFG-03)
 CHEAP_MODELS = {
     "anthropic": "claude-haiku-4-20250414",
+    "claude-code": "claude-haiku-4-20250414",
     "openai": "gpt-4.1-nano",
     "google": "gemini-2.0-flash",
     "groq": "llama-3.3-70b-versatile",
@@ -49,6 +51,7 @@ PROVIDER_ENV_KEYS = {
     "deepseek": "DEEPSEEK_API_KEY",
     "together": "TOGETHER_API_KEY",
     "ollama": None,  # no key needed
+    "claude-code": "CLAUDE_CODE_OAUTH_TOKEN",
 }
 
 
@@ -78,9 +81,12 @@ def build_mem0_config():
         "max_tokens": 2000,
     }
 
-    # For litellm provider (openrouter), need api_key
-    if provider == "openrouter":
-        llm_config["api_key"] = os.environ.get("OPENROUTER_API_KEY", "")
+    # Set API key from environment based on provider
+    env_key = PROVIDER_ENV_KEYS.get(provider)
+    if env_key:
+        api_key = os.environ.get(env_key, "")
+        if api_key:
+            llm_config["api_key"] = api_key
 
     config = {
         "vector_store": {

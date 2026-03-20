@@ -149,10 +149,11 @@ class TestConfigCheapModel(unittest.TestCase):
         expected_providers = [
             "anthropic", "openai", "google", "groq", "ollama",
             "deepseek", "together", "litellm", "openrouter", "azure-openai",
+            "claude-code",
         ]
         for p in expected_providers:
             self.assertIn(p, CHEAP_MODELS, f"Missing cheap model for {p}")
-        self.assertEqual(len(CHEAP_MODELS), 10)
+        self.assertEqual(len(CHEAP_MODELS), 11)
 
 
 class TestConfigGraphStore(unittest.TestCase):

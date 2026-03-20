@@ -8938,6 +8938,12 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                 self.handle_run_job(job_id)
             else:
                 self.proxy_to_goose()
+        elif path.startswith("/api/jobs/") and path.endswith("/diagnose"):
+            job_id = path[len("/api/jobs/"):-len("/diagnose")]
+            if job_id:
+                self.handle_diagnose_job(job_id)
+            else:
+                self.send_json(400, {"error": "missing job id"})
         elif path in ("/api/channels/reload", "/api/plugins/reload"):
             self.handle_reload_channels()
         elif path in ("/api/setup/channels/verbosity", "/api/setup/plugins/verbosity"):
@@ -10416,6 +10422,55 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             _save_jobs()
 
         self.send_json(202, {"started": True, "job_id": job_id})
+
+    def handle_diagnose_job(self, job_id):
+        """POST /api/jobs/<id>/diagnose — spawn goosed session to diagnose job failure."""
+        if not self._check_rate_limit(api_limiter):
+            return
+        if not self._check_local_or_auth():
+            return
+
+        with _jobs_lock:
+            job = next((j for j in _jobs if j["id"] == job_id), None)
+
+        if not job:
+            self.send_json(404, {"error": "job not found"})
+            return
+
+        # build diagnostic prompt
+        name = job.get("name", "unknown")
+        cmd = job.get("command", job.get("text", "unknown"))
+        status = job.get("last_status", "unknown")
+        output = job.get("last_output", "no output recorded")
+        last_run = job.get("last_run", "never")
+
+        prompt = (
+            f"A scheduled job failed. Diagnose the root cause and suggest a fix.\n\n"
+            f"Job: {name}\n"
+            f"Command: {cmd}\n"
+            f"Last status: {status}\n"
+            f"Last run: {last_run}\n"
+            f"Output/error:\n{output}\n\n"
+            f"Steps:\n"
+            f"1. Read the script/command if it's a file path\n"
+            f"2. Check for missing dependencies, bad paths, permission issues\n"
+            f"3. Identify the root cause\n"
+            f"4. Fix the issue if possible (edit the script, install missing package, etc)\n"
+            f"5. Summarize what was wrong and what you fixed in 2-3 sentences"
+        )
+
+        try:
+            sid = _create_goose_session()
+            if not sid:
+                self.send_json(500, {"error": "could not create goosed session"})
+                return
+            text, err, _media = _do_rest_relay(prompt, sid)
+            if err:
+                self.send_json(200, {"diagnosis": err, "job_id": job_id})
+            else:
+                self.send_json(200, {"diagnosis": text or "no diagnosis returned", "job_id": job_id})
+        except Exception as e:
+            self.send_json(500, {"error": f"diagnosis failed: {e}"})
 
     def handle_update_job(self, job_id):
         """PUT /api/jobs/<id> — update job fields."""

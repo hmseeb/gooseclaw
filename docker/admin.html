@@ -389,6 +389,116 @@ tr:hover td { background: rgba(124, 58, 237, 0.02); }
 
 .actions { display: flex; gap: 6px; justify-content: flex-end; }
 
+/* status tooltip */
+.status-badge { position: relative; cursor: default; }
+.status-tip {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  min-width: 280px;
+  max-width: 400px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-mid);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  z-index: 100;
+  white-space: pre-wrap;
+  word-break: break-word;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  pointer-events: none;
+}
+.status-tip::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  right: 16px;
+  border: 5px solid transparent;
+  border-top-color: var(--border-mid);
+}
+.status-badge:hover .status-tip { display: block; }
+.status-tip .tip-label { color: var(--text-tertiary); font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
+.status-tip .tip-output { color: var(--text-primary); font-family: 'JetBrains Mono', monospace; font-size: 11px; max-height: 120px; overflow-y: auto; }
+.status-tip .tip-divider { border-top: 1px solid var(--border-subtle); margin: 6px 0; }
+
+/* confirm dialog */
+.confirm-overlay {
+  display: none;
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.6);
+  z-index: 1000;
+  align-items: center;
+  justify-content: center;
+}
+.confirm-overlay.open { display: flex; }
+.confirm-box {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-mid);
+  border-radius: var(--radius-md);
+  padding: 24px;
+  max-width: 360px;
+  width: 90%;
+  text-align: center;
+}
+.confirm-box h3 { color: var(--text-primary); font-size: 15px; margin-bottom: 8px; font-weight: 600; }
+.confirm-box p { color: var(--text-secondary); font-size: 13px; margin-bottom: 20px; }
+.confirm-actions { display: flex; gap: 10px; justify-content: center; }
+.confirm-actions button {
+  padding: 8px 20px;
+  border-radius: var(--radius-sm);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid var(--border-subtle);
+  transition: all 0.2s;
+}
+.confirm-actions .confirm-cancel { background: transparent; color: var(--text-secondary); }
+.confirm-actions .confirm-cancel:hover { border-color: var(--border-mid); color: var(--text-primary); }
+.confirm-actions .confirm-delete { background: var(--error-bg); color: var(--error); border-color: var(--error-border); }
+.confirm-actions .confirm-delete:hover { background: rgba(248,113,113,0.15); }
+
+/* autofix panel */
+.autofix-row td { padding: 0 !important; }
+.autofix-panel {
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border-subtle);
+  padding: 14px 16px;
+}
+.autofix-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+.autofix-header .autofix-icon { color: var(--warning); }
+.autofix-output {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  background: var(--bg-deep);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  max-height: 200px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.autofix-output.loading { color: var(--text-tertiary); }
+.action-btn.autofix { display: none; }
+.action-btn.autofix:hover {
+  border-color: var(--warning-border);
+  color: var(--warning);
+  background: var(--warning-bg);
+}
+
 .empty-state {
   padding: 36px;
   text-align: center;
@@ -973,6 +1083,17 @@ tr:hover td { background: rgba(124, 58, 237, 0.02); }
 
 <div class="toast" id="toast"></div>
 
+<div class="confirm-overlay" id="confirm-overlay" onclick="if(event.target===this)closeConfirm()">
+  <div class="confirm-box">
+    <h3 id="confirm-title">delete job?</h3>
+    <p id="confirm-msg">this action cannot be undone.</p>
+    <div class="confirm-actions">
+      <button class="confirm-cancel" onclick="closeConfirm()">cancel</button>
+      <button class="confirm-delete" id="confirm-ok">delete</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const API = '';
 
@@ -1110,6 +1231,7 @@ function renderJobsTable(jobs, wrap) {
     const typeCls = j.type === 'reminder' ? 'reminder' : 'script';
     const statusCls = j.last_status === 'ok' ? 'ok' : j.last_status === 'error' || j.last_status === 'timeout' ? 'error' : 'pending';
     const statusText = j.last_status || '\u2014';
+    const isError = statusCls === 'error';
 
     let sched = '';
     if (j.cron_human) sched = j.cron_human;
@@ -1117,16 +1239,39 @@ function renderJobsTable(jobs, wrap) {
     else if (j.fires_at_human) sched = j.fires_at_human;
     if (j.recurring_seconds) sched += ' (every ' + formatDuration(j.recurring_seconds) + ')';
 
+    // status tooltip content
+    let tipHtml = '';
+    if (j.last_status) {
+      if (j.last_run) tipHtml += '<div class="tip-label">last run</div><div>' + escHtml(j.last_run) + '</div>';
+      if (j.last_output) {
+        if (tipHtml) tipHtml += '<div class="tip-divider"></div>';
+        tipHtml += '<div class="tip-label">output</div><div class="tip-output">' + escHtml(j.last_output) + '</div>';
+      }
+      if (!tipHtml) tipHtml = '<div class="tip-label">status</div><div>' + escHtml(j.last_status) + '</div>';
+    }
+
     html += '<tr id="job-row-' + j.id + '">'
       + '<td><span class="type-badge ' + typeCls + '">' + j.type + '</span></td>'
       + '<td class="name-cell" title="' + escAttr(j.name) + '">' + escHtml(j.name) + '</td>'
       + '<td class="schedule-cell">' + escHtml(sched || '\u2014') + '</td>'
-      + '<td><span class="status-badge ' + statusCls + '">' + statusText + '</span></td>'
+      + '<td><span class="status-badge ' + statusCls + '">' + statusText
+      + (tipHtml ? '<div class="status-tip">' + tipHtml + '</div>' : '')
+      + '</span></td>'
       + '<td class="actions">'
+      + (isError ? '<button class="action-btn autofix" style="display:inline-block" onclick="autofixJob(\'' + j.id + '\')" title="diagnose and fix">autofix</button>' : '')
       + '<button class="action-btn" onclick="editJob(\'' + j.id + '\')" title="edit">edit</button>'
       + '<button class="action-btn trigger" onclick="triggerJob(\'' + j.id + '\')" title="run now">run</button>'
-      + '<button class="action-btn danger" onclick="deleteJob(\'' + j.id + '\')" title="delete">del</button>'
+      + '<button class="action-btn danger" onclick="confirmDeleteJob(\'' + j.id + '\', \'' + escAttr(j.name) + '\')" title="delete">del</button>'
       + '</td></tr>';
+
+    // autofix panel (shown when diagnosing)
+    if (_autofixJobId === j.id) {
+      html += '<tr class="autofix-row"><td colspan="5"><div class="autofix-panel">'
+        + '<div class="autofix-header"><span class="autofix-icon">&#9889;</span> diagnosing <strong>' + escHtml(j.name) + '</strong></div>'
+        + '<div class="autofix-output' + (_autofixLoading ? ' loading' : '') + '" id="autofix-output">'
+        + (_autofixLoading ? 'analyzing job failure...' : escHtml(_autofixResult))
+        + '</div></div></td></tr>';
+    }
 
     // inline edit row (hidden by default, toggled by editJob)
     if (editingJobId === j.id) {
@@ -1156,14 +1301,44 @@ function renderJobsTable(jobs, wrap) {
   wrap.innerHTML = html;
 }
 
-async function deleteJob(id) {
-  const data = await api('/api/jobs/' + id, { method: 'DELETE' });
-  if (data.deleted) {
-    toast('job deleted');
-    refreshJobs();
-  } else {
-    toast(data.error || 'failed', 'error');
+// ── confirm dialog ──
+let _confirmCb = null;
+function confirmDeleteJob(id, name) {
+  document.getElementById('confirm-title').textContent = 'delete ' + name + '?';
+  document.getElementById('confirm-msg').textContent = 'this will permanently remove the job and its schedule.';
+  const okBtn = document.getElementById('confirm-ok');
+  okBtn.onclick = async () => {
+    closeConfirm();
+    const data = await api('/api/jobs/' + id, { method: 'DELETE' });
+    if (data.deleted) { toast('job deleted'); refreshJobs(); }
+    else toast(data.error || 'failed', 'error');
+  };
+  document.getElementById('confirm-overlay').classList.add('open');
+}
+function closeConfirm() {
+  document.getElementById('confirm-overlay').classList.remove('open');
+}
+
+// ── autofix ──
+let _autofixJobId = null;
+let _autofixLoading = false;
+let _autofixResult = '';
+
+async function autofixJob(id) {
+  if (_autofixJobId === id) { _autofixJobId = null; refreshJobsUI(); return; }
+  _autofixJobId = id;
+  _autofixLoading = true;
+  _autofixResult = '';
+  refreshJobsUI();
+
+  try {
+    const data = await api('/api/jobs/' + id + '/diagnose', { method: 'POST' });
+    _autofixResult = data.diagnosis || data.error || 'no response';
+  } catch (e) {
+    _autofixResult = 'request failed: ' + e.message;
   }
+  _autofixLoading = false;
+  refreshJobsUI();
 }
 
 async function triggerJob(id) {

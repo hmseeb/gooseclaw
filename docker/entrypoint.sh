@@ -508,6 +508,8 @@ extensions:
       MEM0_USER_ID: default
       MEM0_TELEMETRY: "false"
       OPENBLAS_NUM_THREADS: "4"
+      HF_HUB_OFFLINE: "1"
+      TOKENIZERS_PARALLELISM: "false"
     env_keys: []
     timeout: 300
     bundled: null
@@ -530,7 +532,7 @@ try:
             'enabled': True, 'type': 'stdio', 'name': 'mem0-memory',
             'description': 'Long-term memory with semantic search and contradiction resolution',
             'cmd': 'python3', 'args': ['/app/docker/memory/server.py'],
-            'envs': {'MEM0_USER_ID': 'default', 'MEM0_TELEMETRY': 'false', 'OPENBLAS_NUM_THREADS': '4'},
+            'envs': {'MEM0_USER_ID': 'default', 'MEM0_TELEMETRY': 'false', 'OPENBLAS_NUM_THREADS': '4', 'HF_HUB_OFFLINE': '1', 'TOKENIZERS_PARALLELISM': 'false'},
             'env_keys': [], 'timeout': 300, 'bundled': None, 'available_tools': [],
         },
     }

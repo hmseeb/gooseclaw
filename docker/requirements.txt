@@ -13,3 +13,4 @@ sentence-transformers>=5.0.0
 # provider-specific SDKs installed on demand by apply_config() in gateway.py
 # anthropic — installed when provider is anthropic or claude-code
 mcp[cli]==1.26.0
+# cache-bust: v5.0-final

@@ -553,6 +553,16 @@ tr:hover td { background: rgba(124, 58, 237, 0.02); }
   font-size: 11px;
 }
 
+.llm-cell {
+  color: var(--text-secondary);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ── inline edit row ── */
 .edit-row td { padding: 0 !important; }
 .inline-edit {
@@ -1199,6 +1209,9 @@ async function refreshStatus() {
     usersEl.innerHTML = '<span class="tg-user" style="color:var(--text-tertiary)">no users paired</span>';
   }
 
+  // models (from batch)
+  _modelsCache = data.models || [];
+
   // jobs (from batch)
   const jobs = data.jobs || [];
   _jobsCache = jobs;
@@ -1261,7 +1274,7 @@ function renderJobsTable(jobs, wrap) {
     return;
   }
 
-  let html = '<table><tr><th>Type</th><th>Name</th><th>Schedule</th><th>Status</th><th style="text-align:right">Actions</th></tr>';
+  let html = '<table><tr><th>Type</th><th>Name</th><th>Schedule</th><th>LLM</th><th>Status</th><th style="text-align:right">Actions</th></tr>';
   for (const j of jobs) {
     const typeCls = j.type === 'reminder' ? 'reminder' : 'script';
     const statusCls = j.last_status === 'ok' ? 'ok' : j.last_status === 'error' || j.last_status === 'timeout' ? 'error' : 'pending';
@@ -1273,6 +1286,22 @@ function renderJobsTable(jobs, wrap) {
     else if (j.cron) sched = j.cron;
     else if (j.fires_at_human) sched = j.fires_at_human;
     if (j.recurring_seconds) sched += ' (every ' + formatDuration(j.recurring_seconds) + ')';
+
+    // LLM display
+    const isGooseJob = j.command && j.command.includes('goose');
+    let llmDisplay = '';
+    if (isGooseJob) {
+      if (j.model) {
+        // resolve model name from models cache
+        const m = _modelsCache.find(m => m.id === j.model);
+        llmDisplay = m ? m.model : j.model;
+      } else {
+        const def = _modelsCache.find(m => m.is_default);
+        llmDisplay = def ? def.model : 'default';
+      }
+    } else {
+      llmDisplay = '<span style="color:var(--text-tertiary)">script</span>';
+    }
 
     // status tooltip content
     let tipHtml = '';
@@ -1289,6 +1318,7 @@ function renderJobsTable(jobs, wrap) {
       + '<td><span class="type-badge ' + typeCls + '">' + j.type + '</span></td>'
       + '<td class="name-cell" title="' + escAttr(j.name) + '">' + escHtml(j.name) + '</td>'
       + '<td class="schedule-cell">' + escHtml(sched || '\u2014') + '</td>'
+      + '<td class="llm-cell">' + llmDisplay + '</td>'
       + '<td><span class="status-badge ' + statusCls + '">' + statusText
       + (tipHtml ? '<div class="status-tip">' + tipHtml + '</div>' : '')
       + '</span></td>'
@@ -1301,7 +1331,7 @@ function renderJobsTable(jobs, wrap) {
 
     // autofix panel (shown when diagnosing)
     if (_autofixJobId === j.id) {
-      html += '<tr class="autofix-row"><td colspan="5"><div class="autofix-panel">'
+      html += '<tr class="autofix-row"><td colspan="6"><div class="autofix-panel">'
         + '<div class="autofix-header"><span class="autofix-icon">&#9889;</span> diagnosing <strong>' + escHtml(j.name) + '</strong>'
         + (_autofixLoading ? '<span class="autofix-elapsed" id="autofix-timer"></span>' : '')
         + '</div>'
@@ -1315,7 +1345,7 @@ function renderJobsTable(jobs, wrap) {
       const isScript = j.type !== 'reminder';
       const schedVal = j.cron || (j.recurring_seconds ? formatDuration(j.recurring_seconds) : '') || '';
       const schedLabel = j.cron ? 'Cron' : j.recurring_seconds ? 'Interval' : 'Schedule';
-      html += '<tr class="edit-row"><td colspan="5"><div class="inline-edit">';
+      html += '<tr class="edit-row"><td colspan="6"><div class="inline-edit">';
       if (isScript) {
         html += '<div class="form-group"><label>Name</label>'
           + '<input type="text" id="edit-name" value="' + escAttr(j.name || '') + '"></div>'
@@ -1325,9 +1355,27 @@ function renderJobsTable(jobs, wrap) {
         html += '<div class="form-group" style="grid-column:1/-1"><label>Message</label>'
           + '<input type="text" id="edit-text" value="' + escAttr(j.text || '') + '"></div>';
       }
+      // model picker (only for goose jobs)
+      const editIsGoose = j.command && j.command.includes('goose');
+      if (editIsGoose) {
+        const curModel = j.model || '';
+        let modelOpts = '<option value="">default</option>';
+        for (const m of _modelsCache) {
+          const sel = m.id === curModel ? ' selected' : '';
+          const label = m.model + (m.is_default ? ' (default)' : '');
+          modelOpts += '<option value="' + escAttr(m.id) + '"' + sel + '>' + escHtml(label) + '</option>';
+        }
+        modelOpts += '<option value="__custom"' + (curModel && !_modelsCache.find(m => m.id === curModel) ? ' selected' : '') + '>custom...</option>';
+        html += '<div class="form-group"><label>LLM</label>'
+          + '<select id="edit-model" onchange="toggleCustomModel()">' + modelOpts + '</select></div>';
+        // hidden custom input
+        const showCustom = curModel && !_modelsCache.find(m => m.id === curModel);
+        html += '<div class="form-group" id="custom-model-group" style="display:' + (showCustom ? '' : 'none') + '"><label>Model ID</label>'
+          + '<input type="text" id="edit-custom-model" value="' + escAttr(showCustom ? curModel : '') + '" placeholder="provider/model-name"></div>';
+      }
+
       html += '<div class="form-group"><label>' + schedLabel + '</label>'
         + '<input type="text" id="edit-schedule" value="' + escAttr(schedVal) + '" placeholder="0 */6 * * *"></div>'
-        + '<div class="form-group"></div>'
         + '<div class="inline-edit-actions">'
         + '<button class="save-btn" onclick="saveInlineEdit(\'' + j.id + '\')">Save</button>'
         + '<button class="cancel-btn" onclick="cancelEdit()">Cancel</button>'
@@ -1419,6 +1467,7 @@ async function triggerJob(id) {
 // ── create/edit job ──
 let editingJobId = null;  // null = create mode, string = edit mode
 let _jobsCache = [];  // cached from last refreshJobs
+let _modelsCache = [];  // available models from setup
 
 function toggleCreate() {
   cancelEdit();  // close any inline edit
@@ -1475,12 +1524,20 @@ async function submitJob() {
   return createJob();
 }
 
+function toggleCustomModel() {
+  const sel = document.getElementById('edit-model');
+  const grp = document.getElementById('custom-model-group');
+  if (sel && grp) grp.style.display = sel.value === '__custom' ? '' : 'none';
+}
+
 async function saveInlineEdit(id) {
   const body = {};
   const nameEl = document.getElementById('edit-name');
   const cmdEl = document.getElementById('edit-command');
   const textEl = document.getElementById('edit-text');
   const schedEl = document.getElementById('edit-schedule');
+  const modelEl = document.getElementById('edit-model');
+  const customModelEl = document.getElementById('edit-custom-model');
 
   if (nameEl) body.name = nameEl.value.trim();
   if (cmdEl) {
@@ -1490,6 +1547,17 @@ async function saveInlineEdit(id) {
   if (textEl) {
     body.text = textEl.value.trim();
     if (!body.text) { toast('message required', 'error'); return; }
+  }
+  // model
+  if (modelEl) {
+    const mv = modelEl.value;
+    if (mv === '__custom' && customModelEl) {
+      body.model = 'custom:' + customModelEl.value.trim();
+    } else if (mv) {
+      body.model = mv;
+    } else {
+      body.model = '';  // clear override, use default
+    }
   }
   if (schedEl && schedEl.value.trim()) {
     const val = schedEl.value.trim();

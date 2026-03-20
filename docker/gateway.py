@@ -9166,6 +9166,16 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         except Exception:
             pass
 
+        # available models for job LLM picker
+        models = []
+        try:
+            setup = load_setup()
+            if setup:
+                migrate_config_models(setup)
+                models = setup.get("models", [])
+        except Exception:
+            pass
+
         self.send_json(200, {
             "health": health,
             "version": version,
@@ -9174,6 +9184,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             "notify": notify,
             "jobs": jobs,
             "plugins": plugins,
+            "models": models,
         })
 
     def handle_health_jobs(self):

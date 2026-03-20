@@ -15,7 +15,7 @@ Behavioral instructions are in system-core.md (loaded in session context).
 | User wants | Route to |
 |-----------|----------|
 | MCP extension / tool | Goose config (`/data/config/config.yaml`). Engine restart required. Research via Exa/Context7 first |
-| Messaging platform (Slack, Discord) | Plugin. Write `/data/channels/<name>.py`. Hot-reloadable |
+| Messaging platform (Slack, Discord) | Plugin. Write `/data/plugins/<name>.py`. Hot-reloadable |
 | Schedule / remind / automate | `job` or `remind` CLI exclusively |
 | Change LLM provider / model | Setup wizard or `POST /api/setup/save` |
 | Connect to service API | Integration flow: vault credentials, test, record via knowledge_upsert |
@@ -25,7 +25,7 @@ Behavioral instructions are in system-core.md (loaded in session context).
 | Endpoint | Returns |
 |----------|---------|
 | GET /api/telegram/status | bots, status, paired users, pairing codes |
-| GET /api/channels | loaded plugins and status |
+| GET /api/plugins | loaded plugins and status |
 | GET /api/watchers | watchers, type, status, stats |
 | GET /api/setup | current config including bots and channel settings |
 
@@ -153,7 +153,7 @@ Plugins: platform-native access control, no pairing needed.
 
 ### Plugin Contract
 
-Python files in `/data/channels/` exporting `CHANNEL` dict. Required: `send(text)` → `{"sent": bool, "error": str}`. Optional: `poll()`, `setup()`/`teardown()`, `typing`, custom `commands`. Files starting with `_` skipped.
+Python files in `/data/plugins/` exporting `CHANNEL` dict. Required: `send(text)` → `{"sent": bool, "error": str}`. Optional: `poll()`, `setup()`/`teardown()`, `typing`, custom `commands`. Files starting with `_` skipped.
 
 v2 contract: plugins can pass `InboundMessage(user_id, text, channel, media, reply_to_text)` to the relay. When `reply_to_text` is set, the gateway prepends `[replying to: "..."]` context so the LLM knows which message the user is responding to. Truncated to 500 chars. Telegram bots extract this automatically from `reply_to_message`.
 

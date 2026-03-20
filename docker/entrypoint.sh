@@ -21,7 +21,7 @@ export PATH="$HOME_DIR/.local/bin:$PATH"
 
 if [ ! -f "$DATA_DIR/.initialized" ]; then
     echo "[init] first boot detected. setting up /data..."
-    mkdir -p "$IDENTITY_DIR/journal" "$IDENTITY_DIR/learnings" "$CONFIG_DIR" "$DATA_DIR/sessions" "$DATA_DIR/recipes" "$DATA_DIR/secrets" "$DATA_DIR/channels"
+    mkdir -p "$IDENTITY_DIR/journal" "$IDENTITY_DIR/learnings" "$CONFIG_DIR" "$DATA_DIR/sessions" "$DATA_DIR/recipes" "$DATA_DIR/secrets" "$DATA_DIR/plugins"
     chmod 700 "$DATA_DIR/secrets"
     touch "$DATA_DIR/secrets/vault.yaml"
     chmod 600 "$DATA_DIR/secrets/vault.yaml"
@@ -743,8 +743,22 @@ rm -rf "$GCLAW_HOME/.config/goose"
 ln -sf "$CONFIG_DIR" "$GCLAW_HOME/.config/goose"
 
 # goose data directories — persist everything to the Railway volume
-mkdir -p "$DATA_DIR/goose_data/sessions" "$DATA_DIR/goose_data/scheduled_recipes" "$DATA_DIR/channels" "$IDENTITY_DIR/learnings"
+mkdir -p "$DATA_DIR/goose_data/sessions" "$DATA_DIR/goose_data/scheduled_recipes" "$DATA_DIR/plugins" "$IDENTITY_DIR/learnings"
 mkdir -p "$GCLAW_HOME/.local/state/goose/logs"
+
+# ─── migrate /data/channels → /data/plugins (one-time) ──────────────────────
+if [ -d "$DATA_DIR/channels" ] && [ ! -L "$DATA_DIR/channels" ]; then
+    # existing install: move plugin files to new dir, symlink old path
+    if [ "$(ls -A "$DATA_DIR/channels" 2>/dev/null)" ]; then
+        cp -a "$DATA_DIR/channels/"* "$DATA_DIR/plugins/" 2>/dev/null || true
+    fi
+    rm -rf "$DATA_DIR/channels"
+    ln -sf "$DATA_DIR/plugins" "$DATA_DIR/channels"
+    echo "[init] migrated /data/channels → /data/plugins (symlinked for compat)"
+elif [ ! -e "$DATA_DIR/channels" ]; then
+    # fresh install or already migrated: ensure symlink exists
+    ln -sf "$DATA_DIR/plugins" "$DATA_DIR/channels"
+fi
 
 # symlink the entire goose share directory to the persistent volume
 # this covers sessions.db, schedule.json, and scheduled_recipes/

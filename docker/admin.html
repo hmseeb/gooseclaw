@@ -1308,10 +1308,10 @@ function resetJobForm() {
   document.getElementById('sched-value').value = '';
 }
 
-// ── channels ──
+// ── plugins ──
 async function refreshChannels() {
-  const data = await api('/api/channels');
-  const channels = data.channels || [];
+  const data = await api('/api/plugins');
+  const channels = data.plugins || data.channels || [];
   document.getElementById('channel-count').textContent = channels.length;
 
   const el = document.getElementById('channels-content');

@@ -1257,7 +1257,8 @@ def unregister_notification_handler(name):
 
 # ── channel plugin system state ───────────────────────────────────────────────
 
-CHANNELS_DIR = os.path.join(DATA_DIR, "channels")
+PLUGINS_DIR = os.path.join(DATA_DIR, "plugins")
+CHANNELS_DIR = PLUGINS_DIR  # backward compat alias
 _loaded_channels = {}       # name -> {"module": mod, "channel": CHANNEL dict, "creds": dict}
 _channel_threads = {}       # name -> Thread
 _channel_stop_events = {}   # name -> threading.Event
@@ -8874,7 +8875,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.handle_schedule_context()
         elif path == "/api/watchers":
             self.handle_list_watchers()
-        elif path == "/api/channels":
+        elif path in ("/api/channels", "/api/plugins"):
             self.handle_list_channels()
         elif path.rstrip("/") == "/login":
             self.handle_login_page()
@@ -8934,9 +8935,9 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                 self.handle_run_job(job_id)
             else:
                 self.proxy_to_goose()
-        elif path == "/api/channels/reload":
+        elif path in ("/api/channels/reload", "/api/plugins/reload"):
             self.handle_reload_channels()
-        elif path == "/api/setup/channels/verbosity":
+        elif path in ("/api/setup/channels/verbosity", "/api/setup/plugins/verbosity"):
             self.handle_set_verbosity()
         elif path == "/api/setup/agent-config":
             self.handle_agent_config()
@@ -10364,16 +10365,16 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                     "credentials": ch.get("credentials", []),
                     "capabilities": caps,
                 })
-        self.send_json(200, {"channels": channels, "count": len(channels)})
+        self.send_json(200, {"plugins": channels, "channels": channels, "count": len(channels)})
 
     def handle_reload_channels(self):
-        """POST /api/channels/reload — hot-reload all channel plugins (localhost only)."""
+        """POST /api/plugins/reload — hot-reload all plugins (localhost only)."""
         if not self._check_rate_limit(api_limiter):
             return
         if not self._check_local_or_auth():
             return
         names = _reload_channels()
-        self.send_json(200, {"reloaded": True, "channels": names, "count": len(names)})
+        self.send_json(200, {"reloaded": True, "plugins": names, "channels": names, "count": len(names)})
 
     # ── login page + login endpoint ──
 

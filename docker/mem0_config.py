@@ -28,8 +28,8 @@ PROVIDER_MAP = {
 
 # Cheap extraction models per provider (CFG-03)
 CHEAP_MODELS = {
-    "anthropic": "claude-haiku-4-20250414",
-    "claude-code": "claude-haiku-4-20250414",
+    "anthropic": "claude-haiku-4-5-20251001",
+    "claude-code": "claude-haiku-4-5-20251001",
     "openai": "gpt-4.1-nano",
     "google": "gemini-2.0-flash",
     "groq": "llama-3.3-70b-versatile",
@@ -67,6 +67,33 @@ def _load_setup():
     return None
 
 
+_anthropic_patched = False
+
+
+def _patch_anthropic_top_p():
+    """Patch anthropic SDK to strip top_p when temperature is also present.
+
+    mem0 defaults both to 0.1, but newer Anthropic models reject having both.
+    Patches at the SDK level to strip top_p from every create() call.
+    """
+    global _anthropic_patched
+    if _anthropic_patched:
+        return
+    try:
+        import anthropic.resources.messages
+        _orig_create = anthropic.resources.messages.Messages.create
+
+        def _patched_create(self, **kwargs):
+            if "temperature" in kwargs and "top_p" in kwargs:
+                kwargs.pop("top_p")
+            return _orig_create(self, **kwargs)
+
+        anthropic.resources.messages.Messages.create = _patched_create
+        _anthropic_patched = True
+    except (ImportError, AttributeError):
+        pass
+
+
 def build_mem0_config():
     """Build mem0 config dict from setup.json and environment variables."""
     setup = _load_setup()
@@ -77,9 +104,13 @@ def build_mem0_config():
     # Build LLM config
     llm_config = {
         "model": cheap_model,
-        "temperature": 0.1,
         "max_tokens": 2000,
     }
+
+    # WORKAROUND: mem0's anthropic client sends both temperature AND top_p
+    # which newer anthropic models reject. Patch to strip top_p before API call.
+    if mem0_provider == "anthropic":
+        _patch_anthropic_top_p()
 
     # Set API key from environment based on provider
     env_key = PROVIDER_ENV_KEYS.get(provider)

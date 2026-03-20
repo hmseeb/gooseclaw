@@ -35,7 +35,7 @@ Behavioral instructions are in system-core.md (loaded in session context).
 
 ### Default MCP Extensions
 
-developer (file/shell), context7 (docs), exa (web search), memory (auto-learn), knowledge (vector KB)
+developer (file/shell), context7 (docs), exa (web search), memory (auto-learn), knowledge (system docs), mem0-memory (long-term memory + graph)
 
 To add extensions: append to `extensions:` in config.yaml, trigger engine restart via `POST /api/setup/save`. Context resets but gateway/bots/jobs stay running.
 
@@ -162,7 +162,7 @@ v2 contract: plugins can pass `InboundMessage(user_id, text, channel, media, rep
 1. Research service (Exa/Context7)
 2. Vault credentials
 3. Test with simple API call
-4. Record via knowledge_upsert (type: "integration")
+4. Record via memory_add (mem0 stores it with automatic extraction)
 5. Prove it's connected
 
 ### MCP Extension Credentials

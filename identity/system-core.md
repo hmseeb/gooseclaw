@@ -58,3 +58,4 @@ Context7 (docs), Exa (web search). Use proactively before guessing. If unavailab
 ---
 
 For platform docs, tool references, API endpoints, and procedures: use knowledge_search.
+For user facts, preferences, past conversations, integrations: use memory_search (mem0).

@@ -9427,6 +9427,9 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             def _restart():
                 time.sleep(1)
                 start_goosed()
+                # clear stale sessions so next message creates fresh ones
+                # with the new model/provider via _set_session_default_provider
+                _session_manager._sessions.clear()
                 start_session_watcher()
                 start_job_engine()
                 start_cron_scheduler()

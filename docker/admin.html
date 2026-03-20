@@ -127,6 +127,23 @@ body::after {
   gap: 14px;
 }
 
+.setup-link {
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  background: var(--bg-card);
+  text-decoration: none;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+.setup-link:hover {
+  border-color: var(--border-accent);
+  color: var(--text-accent);
+  background: rgba(124, 58, 237, 0.08);
+}
+
 .version-badge {
   font-family: 'JetBrains Mono', monospace;
   font-size: 11px;
@@ -938,6 +955,7 @@ tr:hover td { background: rgba(124, 58, 237, 0.02); }
       <div class="logo-text">gooseclaw<span>.dashboard</span></div>
     </div>
     <div class="header-meta">
+      <a href="/setup" class="setup-link" title="settings">settings</a>
       <span class="version-badge" id="version">v-.-.-</span>
       <span class="live-indicator"><span class="live-dot"></span> live</span>
     </div>

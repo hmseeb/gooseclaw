@@ -8,14 +8,14 @@ Behavioral instructions are in system-core.md (loaded in session context).
 ## Platform
 
 - **Goose**: LLM sessions, MCP extensions, tools, recipes
-- **Gateway**: Telegram bots, channel plugins, jobs, notifications, setup wizard, identity files, vault
+- **Gateway**: Telegram bots, plugins, jobs, notifications, setup wizard, identity files, vault
 
 ### Request Routing
 
 | User wants | Route to |
 |-----------|----------|
 | MCP extension / tool | Goose config (`/data/config/config.yaml`). Engine restart required. Research via Exa/Context7 first |
-| Messaging platform (Slack, Discord) | Channel plugin. Write `/data/channels/<name>.py`. Hot-reloadable |
+| Messaging platform (Slack, Discord) | Plugin. Write `/data/channels/<name>.py`. Hot-reloadable |
 | Schedule / remind / automate | `job` or `remind` CLI exclusively |
 | Change LLM provider / model | Setup wizard or `POST /api/setup/save` |
 | Connect to service API | Integration flow: vault credentials, test, record via knowledge_upsert |
@@ -25,7 +25,7 @@ Behavioral instructions are in system-core.md (loaded in session context).
 | Endpoint | Returns |
 |----------|---------|
 | GET /api/telegram/status | bots, status, paired users, pairing codes |
-| GET /api/channels | loaded channel plugins and status |
+| GET /api/channels | loaded plugins and status |
 | GET /api/watchers | watchers, type, status, stats |
 | GET /api/setup | current config including bots and channel settings |
 
@@ -146,12 +146,12 @@ When installing anything for the user, ALWAYS use the persistent paths above. Ne
 | POST | /api/bots | add bot (name, token, optional provider/model) |
 | DELETE | /api/bots/`<name>` | remove bot |
 
-One container, one gateway, multiple bots and channels. Never create separate processes.
+One container, one gateway, multiple bots and plugins. Never create separate processes.
 
 Telegram bots: gateway handles polling, sessions, pairing, isolation. Single-use pairing codes, rotate after each pair.
-Channel plugins: platform-native access control, no pairing needed.
+Plugins: platform-native access control, no pairing needed.
 
-### Channel Plugin Contract
+### Plugin Contract
 
 Python files in `/data/channels/` exporting `CHANNEL` dict. Required: `send(text)` → `{"sent": bool, "error": str}`. Optional: `poll()`, `setup()`/`teardown()`, `typing`, custom `commands`. Files starting with `_` skipped.
 

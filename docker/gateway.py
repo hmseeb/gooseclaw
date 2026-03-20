@@ -6096,9 +6096,9 @@ def _load_all_channels():
         except Exception as e:
             _channels_log.error(f"error loading {basename}: {e}")
     if loaded:
-        _channels_log.info(f"{loaded} channel(s) loaded")
+        _channels_log.info(f"{loaded} plugin(s) loaded")
     else:
-        _channels_log.info("no channel plugins found")
+        _channels_log.info("no plugins found")
 
 
 def _reload_channels():

@@ -912,7 +912,7 @@ tr:hover td { background: rgba(124, 58, 237, 0.02); }
   <!-- channels -->
   <div class="section">
     <div class="section-header">
-      <span class="section-title">Channels</span>
+      <span class="section-title">Plugins</span>
       <span class="section-count" id="channel-count">0</span>
     </div>
     <div id="channels-content">
@@ -1033,7 +1033,7 @@ async function refreshStatus() {
   // notify
   const nOk = notify.available === true;
   setDot('dot-notify', nOk ? 'green' : 'dim');
-  document.getElementById('val-notify').textContent = nOk ? 'ready' : 'no channels';
+  document.getElementById('val-notify').textContent = nOk ? 'ready' : 'no plugins';
 
   // telegram detail
   const usersEl = document.getElementById('tg-users');
@@ -1316,7 +1316,7 @@ async function refreshChannels() {
 
   const el = document.getElementById('channels-content');
   if (channels.length === 0) {
-    el.innerHTML = '<div class="table-wrap"><div class="empty-state">no channel plugins loaded</div></div>';
+    el.innerHTML = '<div class="table-wrap"><div class="empty-state">no plugins loaded</div></div>';
     return;
   }
 

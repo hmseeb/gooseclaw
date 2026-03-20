@@ -510,6 +510,7 @@ extensions:
       OPENBLAS_NUM_THREADS: "4"
       HF_HUB_OFFLINE: "1"
       TOKENIZERS_PARALLELISM: "false"
+      MEM0_ENABLE_GRAPH: "true"
     env_keys: []
     timeout: 300
     bundled: null
@@ -532,7 +533,7 @@ try:
             'enabled': True, 'type': 'stdio', 'name': 'mem0-memory',
             'description': 'Long-term memory with semantic search and contradiction resolution',
             'cmd': 'python3', 'args': ['/app/docker/memory/server.py'],
-            'envs': {'MEM0_USER_ID': 'default', 'MEM0_TELEMETRY': 'false', 'OPENBLAS_NUM_THREADS': '4', 'HF_HUB_OFFLINE': '1', 'TOKENIZERS_PARALLELISM': 'false'},
+            'envs': {'MEM0_USER_ID': 'default', 'MEM0_TELEMETRY': 'false', 'OPENBLAS_NUM_THREADS': '4', 'HF_HUB_OFFLINE': '1', 'TOKENIZERS_PARALLELISM': 'false', 'MEM0_ENABLE_GRAPH': 'true'},
             'env_keys': [],
             'env_keys': [], 'timeout': 300, 'bundled': None, 'available_tools': [],
         },
@@ -636,12 +637,13 @@ if command -v neo4j &>/dev/null; then
     mkdir -p /data/neo4j
     chown -R neo4j:neo4j /data/neo4j 2>/dev/null || true
 
-    export NEO4J_AUTH=none
+    export NEO4J_AUTH=neo4j/CZ8HDBvelivNlHpNDdRTLxs
     export NEO4J_USERNAME=neo4j
-    export NEO4J_PASSWORD=""
-    export NEO4J_server_memory_heap_initial__size=256m
-    export NEO4J_server_memory_heap_max__size=512m
-    export NEO4J_server_memory_pagecache__size=128m
+    export NEO4J_PASSWORD="CZ8HDBvelivNlHpNDdRTLxs"
+    export NEO4J_server_memory_heap_initial__size=128m
+    export NEO4J_server_memory_heap_max__size=256m
+    export NEO4J_server_memory_pagecache__size=64m
+    export NEO4J_server_threads_worker__count=4
     export NEO4J_server_directories_data=/data/neo4j
     export NEO4J_server_analytics_enabled=false
 
@@ -665,6 +667,7 @@ if command -v neo4j &>/dev/null; then
 
     if [ "$NEO4J_READY" = "true" ]; then
         export NEO4J_ENABLED=true
+        export MEM0_ENABLE_GRAPH=true
         echo "[neo4j] graph memory enabled"
     else
         echo "[neo4j] graph memory disabled (neo4j not ready)"

@@ -997,19 +997,17 @@ function toast(msg, type = 'success') {
   setTimeout(() => el.classList.remove('show'), 3000);
 }
 
-// ── status ──
+// ── status (single batch endpoint) ──
 async function refreshStatus() {
-  const [health, version, goose, tg, notify] = await Promise.all([
-    api('/api/health'),
-    api('/api/version'),
-    api('/api/setup/status'),
-    api('/api/telegram/status'),
-    api('/api/notify/status'),
-  ]);
+  const data = await api('/api/status');
+  const health = data.health || {};
+  const tg = data.telegram || {};
+  const notify = data.notify || {};
+  const goose = data.startup || {};
 
   // version
-  if (version.version) {
-    document.getElementById('version').textContent = 'v' + version.version;
+  if (data.version) {
+    document.getElementById('version').textContent = 'v' + data.version;
   }
 
   // health
@@ -1043,6 +1041,46 @@ async function refreshStatus() {
     }).join('');
   } else {
     usersEl.innerHTML = '<span class="tg-user" style="color:var(--text-tertiary)">no users paired</span>';
+  }
+
+  // jobs (from batch)
+  const jobs = data.jobs || [];
+  _jobsCache = jobs;
+  document.getElementById('job-count').textContent = jobs.length;
+  renderJobsTable(jobs, document.getElementById('jobs-table'));
+
+  // plugins (from batch)
+  const plugins = data.plugins || [];
+  document.getElementById('channel-count').textContent = plugins.length;
+  const chEl = document.getElementById('channels-content');
+  if (plugins.length === 0) {
+    chEl.innerHTML = '<div class="table-wrap"><div class="empty-state">no plugins loaded</div></div>';
+  } else {
+    chEl.innerHTML = '<div class="channel-grid">' + plugins.map(c => {
+      return '<div class="channel-card">'
+        + '<div class="channel-name">' + escHtml(c.name) + '</div>'
+        + '<div class="channel-meta"><span>v' + (c.version || 0) + '</span>'
+        + (c.has_poll ? '<span>poll</span>' : '') + '</div></div>';
+    }).join('') + '</div>';
+  }
+
+  // bots (from batch telegram data)
+  const bots = tg.bots || [];
+  document.getElementById('bot-count').textContent = bots.length;
+  const botsWrap = document.getElementById('bots-table');
+  if (bots.length === 0) {
+    botsWrap.innerHTML = '<div class="empty-state">no bots configured</div>';
+  } else {
+    let bhtml = '<table><tr><th>Name</th><th>Status</th><th>Paired</th><th>Pairing Code</th></tr>';
+    for (const b of bots) {
+      const statusCls = b.running ? 'ok' : 'error';
+      const statusText = b.running ? 'running' : 'stopped';
+      const code = b.pairing_code || '\u2014';
+      bhtml += '<tr><td>' + escHtml(b.name) + '</td><td><span class="badge ' + statusCls + '">' + statusText + '</span></td>'
+        + '<td>' + (b.paired_users || 0) + '</td><td style="font-family:monospace">' + escHtml(code) + '</td></tr>';
+    }
+    bhtml += '</table>';
+    botsWrap.innerHTML = bhtml;
   }
 }
 
@@ -1437,12 +1475,9 @@ function formatDuration(s) {
 }
 
 // ── init ──
-async function refresh() {
-  await Promise.all([refreshStatus(), refreshJobs(), refreshChannels(), refreshBots()]);
-}
-
-refresh();
-setInterval(refresh, 30000);
+// Single batch call handles status + jobs + plugins + bots
+refreshStatus();
+setInterval(refreshStatus, 30000);
 </script>
 
 </body>

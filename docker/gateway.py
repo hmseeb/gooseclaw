@@ -66,6 +66,7 @@ import urllib.parse
 import urllib.request
 import uuid
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 from http.server import ThreadingHTTPServer
 
 
@@ -8855,6 +8856,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                 })
             except Exception as e:
                 self.send_json(500, {"error": str(e)})
+        elif path == "/api/status":
+            self.handle_dashboard_status()
         elif path == "/api/setup/status":
             self.handle_startup_status()
         elif path == "/api/version":
@@ -9059,6 +9062,107 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         # 200 for ok/setup_required (healthy enough to serve traffic), 503 for degraded
         code = 200 if status["status"] in ("ok", "setup_required") else 503
         self.send_json(code, status)
+
+    def handle_dashboard_status(self):
+        """GET /api/status — single batch endpoint for admin dashboard polling.
+
+        Combines health, version, setup/status, telegram/status, and notify/status
+        into one response. Replaces 5 separate polling requests with 1.
+        """
+        # health
+        health = {"service": "gooseclaw", "configured": is_configured()}
+        if goosed_process and goosed_process.poll() is None:
+            health["goosed"] = self._ping_goosed()
+        else:
+            health["goosed"] = "not running" if is_configured() else "not started (unconfigured)"
+        if not is_configured():
+            health["status"] = "setup_required"
+        elif health.get("goosed") == "healthy":
+            health["status"] = "ok"
+        else:
+            health["status"] = "degraded"
+        if _job_engine_last_tick > 0:
+            je_stale = time.time() - _job_engine_last_tick
+            je_healthy = _job_engine_running and je_stale < _JOB_ENGINE_STALE_THRESHOLD
+            health["job_engine"] = {"healthy": je_healthy, "last_tick_ago": round(je_stale, 1)}
+
+        # version
+        version = "unknown"
+        version_file = os.path.join(APP_DIR, "VERSION")
+        if os.path.exists(version_file):
+            try:
+                with open(version_file) as f:
+                    version = f.read().strip()
+            except Exception:
+                pass
+
+        # setup/status
+        with _startup_state_lock:
+            startup = dict(goosed_startup_state)
+
+        # telegram
+        tg = {}
+        if not _is_first_boot():
+            bots = _bot_manager.get_all()
+            default = _bot_manager.get_bot("default") or (list(bots.values())[0] if bots else None)
+            bot_list = []
+            for name, bot in bots.items():
+                paired = get_paired_chat_ids(platform=bot.channel_key)
+                bot_list.append({
+                    "name": name, "running": bot.running,
+                    "channel_key": bot.channel_key,
+                    "paired_users": len(paired),
+                    "paired_chat_ids": paired,
+                    "pairing_code": bot.pair_code,
+                })
+            token = get_bot_token()
+            default_paired = get_paired_chat_ids() if default else []
+            tg = {
+                "running": _bot_manager.any_running,
+                "bot_configured": bool(token),
+                "paired_users": len(default_paired),
+                "paired_chat_ids": default_paired,
+                "pairing_code": default.pair_code if default else None,
+                "bots": bot_list,
+            }
+
+        # notify
+        notify = {}
+        if not _is_first_boot():
+            token = get_bot_token()
+            chat_ids = get_paired_chat_ids()
+            notify = {
+                "available": bool(token and chat_ids),
+                "bot_configured": bool(token),
+                "paired_users": len(chat_ids),
+            }
+
+        # jobs
+        jobs = []
+        try:
+            jobs = list_active_jobs()
+        except Exception:
+            pass
+
+        # plugins
+        plugins = []
+        try:
+            with _channels_lock:
+                for name, entry in _loaded_channels.items():
+                    ch = entry["channel"]
+                    plugins.append({"name": name, "version": ch.get("version", 0), "has_poll": callable(ch.get("poll"))})
+        except Exception:
+            pass
+
+        self.send_json(200, {
+            "health": health,
+            "version": version,
+            "startup": startup,
+            "telegram": tg,
+            "notify": notify,
+            "jobs": jobs,
+            "plugins": plugins,
+        })
 
     def handle_health_jobs(self):
         """GET /api/health/jobs — job engine heartbeat status."""
@@ -10740,7 +10844,18 @@ def main():
     else:
         _gateway_log.info("no provider configured. serving setup wizard.")
 
-    server = ThreadingHTTPServer(("0.0.0.0", PORT), GatewayHandler)
+    class BoundedThreadServer(ThreadingHTTPServer):
+        """HTTPServer with a bounded thread pool instead of unlimited thread spawning."""
+        _pool = ThreadPoolExecutor(max_workers=32)
+
+        def process_request(self, request, client_address):
+            try:
+                self._pool.submit(self.process_request_thread, request, client_address)
+            except RuntimeError:
+                # pool shut down
+                self.close_request(request)
+
+    server = BoundedThreadServer(("0.0.0.0", PORT), GatewayHandler)
 
     # periodic rate limiter cleanup (every 5 minutes) to free stale IP entries
     def _rate_limiter_cleanup():

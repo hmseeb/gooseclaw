@@ -128,7 +128,7 @@ class TestConfigCheapModel(unittest.TestCase):
         from mem0_config import build_mem0_config
         config = build_mem0_config()
         model = config["llm"]["config"]["model"]
-        self.assertEqual(model, "claude-haiku-4-20250414")
+        self.assertEqual(model, "claude-haiku-4-5-20251001")
         self.assertNotIn("opus", model)
         self.assertNotIn("sonnet", model)
 
@@ -142,7 +142,7 @@ class TestConfigCheapModel(unittest.TestCase):
         self._write_setup("google")
         from mem0_config import build_mem0_config
         config = build_mem0_config()
-        self.assertEqual(config["llm"]["config"]["model"], "gemini-2.0-flash")
+        self.assertEqual(config["llm"]["config"]["model"], "gemini-2.0-flash-lite")
 
     def test_all_providers_have_cheap_model(self):
         from mem0_config import CHEAP_MODELS

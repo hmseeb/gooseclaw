@@ -9,6 +9,7 @@ PyYAML==6.0.2
 websocket-client==1.8.0
 chromadb==1.5.5
 mem0ai[graph]==1.0.6
-anthropic>=0.40.0
 sentence-transformers>=5.0.0
+# provider-specific SDKs installed on demand by apply_config() in gateway.py
+# anthropic — installed when provider is anthropic or claude-code
 mcp[cli]==1.26.0

@@ -27,18 +27,19 @@ PROVIDER_MAP = {
 }
 
 # Cheap extraction models per provider (CFG-03)
+# Verified March 2026 — cheapest model with tool-use support per provider
 CHEAP_MODELS = {
-    "anthropic": "claude-haiku-4-5-20251001",
-    "claude-code": "claude-haiku-4-5-20251001",
-    "openai": "gpt-4.1-nano",
-    "google": "gemini-2.0-flash",
-    "groq": "llama-3.3-70b-versatile",
-    "ollama": "llama3.2",
-    "deepseek": "deepseek-chat",
-    "together": "meta-llama/Llama-3-8b-chat-hf",
-    "litellm": "gpt-4.1-nano",
-    "openrouter": "anthropic/claude-3-haiku-20240307",
-    "azure-openai": "gpt-4o-mini",
+    "anthropic": "claude-haiku-4-5-20251001",       # $0.80/$4.00 per 1M tokens
+    "claude-code": "claude-haiku-4-5-20251001",      # same as anthropic
+    "openai": "gpt-4.1-nano",                        # $0.10/$0.40 per 1M tokens
+    "google": "gemini-2.0-flash-lite",               # $0.075/$0.30 per 1M tokens
+    "groq": "llama-3.3-70b-versatile",               # free tier, $0.59/$0.79
+    "ollama": "llama3.2",                            # local, free
+    "deepseek": "deepseek-chat",                     # $0.014/$0.028 per 1M tokens (V3.2)
+    "together": "meta-llama/Llama-3.3-70B-Instruct-Turbo",  # $0.88 per 1M tokens
+    "litellm": "gpt-4.1-nano",                      # default passthrough
+    "openrouter": "anthropic/claude-haiku-4-5-20251001",  # cheapest anthropic on OR
+    "azure-openai": "gpt-4o-mini",                   # $0.15/$0.60 per 1M tokens
 }
 
 # Maps setup.json provider_type -> env var name for API key

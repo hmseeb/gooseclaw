@@ -3262,6 +3262,35 @@ def _write_timezone_to_user_md(tz):
 
 
 
+# Provider-specific pip packages needed for mem0 extraction.
+# Installed on demand when user selects a provider in setup wizard.
+_PROVIDER_PIP_PACKAGES = {
+    "anthropic": ["anthropic"],
+    "claude-code": ["anthropic"],
+    "google": ["google-generativeai"],
+}
+
+
+def _install_provider_packages(provider_type):
+    """Install provider-specific pip packages if missing."""
+    packages = _PROVIDER_PIP_PACKAGES.get(provider_type, [])
+    if not packages:
+        return
+    for pkg in packages:
+        try:
+            __import__(pkg.replace("-", "_"))
+        except ImportError:
+            _gateway_log.info(f"installing {pkg} for {provider_type} provider...")
+            try:
+                subprocess.run(
+                    ["pip3", "install", "--break-system-packages", "-q", pkg],
+                    check=True, timeout=120, capture_output=True,
+                )
+                _gateway_log.info(f"installed {pkg}")
+            except Exception as e:
+                _gateway_log.warning(f"failed to install {pkg}: {e}")
+
+
 def apply_config(config):
     """Write goose config.yaml and set env vars from setup config."""
     provider_type = config.get("provider_type", "")
@@ -3305,6 +3334,9 @@ def apply_config(config):
         "GOOSE_MAX_TURNS: 50",
         "GOOSE_DISABLE_SESSION_NAMING: true",
     ]
+
+    # install provider-specific packages for mem0 extraction
+    _install_provider_packages(provider_type)
 
     if provider_type == "claude-code":
         os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = config.get("claude_setup_token", "")

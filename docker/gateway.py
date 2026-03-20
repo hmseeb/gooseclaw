@@ -4341,7 +4341,13 @@ def _inject_fix_request(job, status, output, attempt_num):
     command = job.get("command", "")
     working_dir = job.get("working_dir", "/data")
 
-    session_id = f"autofix_{job_id}_{int(time.time())}"
+    session_id = _create_goose_session()
+    if not session_id:
+        _gateway_log.error(f"{job_name}: autofix skipped, could not create goosed session")
+        with _jobs_lock:
+            job["auto_fix_attempts"] = max(0, job.get("auto_fix_attempts", 1) - 1)
+        _save_jobs()
+        return
 
     prompt = (
         f"[AUTOFIX] Job '{job_name}' has failed and needs investigation.\n\n"

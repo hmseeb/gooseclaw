@@ -35,10 +35,10 @@ class TestConfigDefaults(unittest.TestCase):
         self.assertIn("llm", config)
         self.assertIn("version", config)
 
-    def test_vector_store_is_chromadb(self):
+    def test_vector_store_is_chroma(self):
         from mem0_config import build_mem0_config
         config = build_mem0_config()
-        self.assertEqual(config["vector_store"]["provider"], "chromadb")
+        self.assertEqual(config["vector_store"]["provider"], "chroma")
         self.assertEqual(
             config["vector_store"]["config"]["collection_name"],
             "mem0_memories",

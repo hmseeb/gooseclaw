@@ -84,7 +84,7 @@ def build_mem0_config():
 
     config = {
         "vector_store": {
-            "provider": "chromadb",
+            "provider": "chroma",
             "config": {
                 "collection_name": "mem0_memories",
                 "path": os.environ.get(

@@ -510,7 +510,15 @@ extensions:
       OPENBLAS_NUM_THREADS: "4"
       HF_HUB_OFFLINE: "1"
       TOKENIZERS_PARALLELISM: "false"
-    env_keys: []
+    env_keys:
+    - CLAUDE_CODE_OAUTH_TOKEN
+    - ANTHROPIC_API_KEY
+    - OPENAI_API_KEY
+    - OPENROUTER_API_KEY
+    - GOOGLE_API_KEY
+    - GROQ_API_KEY
+    - DEEPSEEK_API_KEY
+    - TOGETHER_API_KEY
     timeout: 300
     bundled: null
     available_tools: []
@@ -533,6 +541,7 @@ try:
             'description': 'Long-term memory with semantic search and contradiction resolution',
             'cmd': 'python3', 'args': ['/app/docker/memory/server.py'],
             'envs': {'MEM0_USER_ID': 'default', 'MEM0_TELEMETRY': 'false', 'OPENBLAS_NUM_THREADS': '4', 'HF_HUB_OFFLINE': '1', 'TOKENIZERS_PARALLELISM': 'false'},
+            'env_keys': ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GOOGLE_API_KEY', 'GROQ_API_KEY', 'DEEPSEEK_API_KEY', 'TOGETHER_API_KEY'],
             'env_keys': [], 'timeout': 300, 'bundled': None, 'available_tools': [],
         },
     }

@@ -71,6 +71,9 @@ RUN if [ -f /app/docker/requirements.lock ]; then \
 # pre-download ChromaDB ONNX embedding model so it doesn't download on every boot
 RUN python3 -c "import chromadb; c=chromadb.Client(); col=c.create_collection('warmup'); col.add(ids=['1'],documents=['warmup']); c.delete_collection('warmup')"
 
+# pre-download sentence-transformers model for mem0 (90MB, avoids 30s delay on first memory operation)
+RUN python3 -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
+
 # copy application files using specific paths (avoids wildcard COPY)
 COPY docker/ /app/docker/
 COPY scripts/ /app/scripts/

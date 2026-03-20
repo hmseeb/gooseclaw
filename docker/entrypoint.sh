@@ -777,6 +777,22 @@ export HOME="$GCLAW_HOME"
 
 echo "[runtime] non-root user prepared (gooseclaw)"
 
+# ─── user-space boot services ────────────────────────────────────────────
+# /data/boot-services.sh runs as gooseclaw (non-root) on every boot.
+# Use this for background processes (bridges, daemons, watchers) that the
+# gateway needs to be able to restart/kill at runtime.
+# boot-setup.sh = root (installs). boot-services.sh = gooseclaw (processes).
+
+if [ -f /data/boot-services.sh ]; then
+    echo "[init] running /data/boot-services.sh as gooseclaw..."
+    chmod +x /data/boot-services.sh
+    if runuser -u gooseclaw -- bash /data/boot-services.sh 2>&1 | while IFS= read -r out; do echo "[boot-services] $out"; done; then
+        echo "[init] boot-services complete"
+    else
+        echo "[init] boot-services FAILED (exit $?) — continuing anyway"
+    fi
+fi
+
 # ─── start gateway (setup wizard + reverse proxy to goosed) ──────────────
 
 echo "[gateway] starting gateway on port ${PORT:-8080}..."

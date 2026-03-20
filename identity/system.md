@@ -122,12 +122,20 @@ The container rebuilds on every deploy. Only `/data` (Railway volume) survives. 
 | npm packages | `/data/npm-global` | `NPM_CONFIG_PREFIX` set automatically |
 | Custom binaries | `/data/bin` | On PATH, download/compile here |
 | Shared libraries | `/data/lib` | On `LD_LIBRARY_PATH` |
-| apt packages, models, anything else | `/data/boot-setup.sh` | Commands re-run on every boot |
+| apt packages, models, anything else | `/data/boot-setup.sh` | Commands re-run on every boot (as root) |
+| Background processes (bridges, daemons) | `/data/boot-services.sh` | Re-run on every boot (as gooseclaw user) |
 
-**For apt packages or anything that can't live on /data directly:** append the install command to `/data/boot-setup.sh`. It runs automatically on every boot. Example:
+**For apt packages or anything that can't live on /data directly:** append the install command to `/data/boot-setup.sh`. It runs automatically on every boot as root. Example:
 ```bash
 echo 'apt-get install -y ffmpeg' >> /data/boot-setup.sh
 ```
+
+**For background processes** (bridges, watchers, daemons) that the gateway needs to restart/kill at runtime: put them in `/data/boot-services.sh`. It runs as the `gooseclaw` user, so the gateway can manage these processes. Example:
+```bash
+echo 'node /data/my-bridge/index.js &' >> /data/boot-services.sh
+```
+
+**IMPORTANT:** Never start background processes in `boot-setup.sh`. It runs as root, so the gateway (non-root) cannot kill/restart them. Always use `boot-services.sh` for processes.
 
 **For binaries:** download to `/data/bin/` (already on PATH).
 

@@ -145,13 +145,16 @@ def build_mem0_config():
     }
 
     # Graph store (Neo4j) - optional, enabled when NEO4J_ENABLED is set by entrypoint
-    if os.environ.get("NEO4J_ENABLED", "").lower() in ("true", "1", "yes"):
+    # NOTE: disabled for MCP server for now — mem0 graph_store validation rejects
+    # empty password even with NEO4J_AUTH=none. Vector memory works without graph.
+    # TODO: fix graph_store config validation with neo4j auth-disabled mode
+    if os.environ.get("NEO4J_ENABLED", "").lower() in ("true", "1", "yes") and os.environ.get("MEM0_ENABLE_GRAPH", "").lower() in ("true", "1", "yes"):
         config["graph_store"] = {
             "provider": "neo4j",
             "config": {
                 "url": os.environ.get("NEO4J_URL", "bolt://localhost:7687"),
                 "username": os.environ.get("NEO4J_USERNAME", "neo4j"),
-                "password": os.environ.get("NEO4J_PASSWORD", ""),
+                "password": os.environ.get("NEO4J_PASSWORD", "neo4j"),
             }
         }
 

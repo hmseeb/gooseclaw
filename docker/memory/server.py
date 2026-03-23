@@ -53,10 +53,17 @@ def memory_add(content: str) -> str:
         )
         return json.dumps(result, default=str)
     except Exception as e:
-        logger.error("memory_add failed: %s (type: %s)", e, type(e).__name__)
-        # log full traceback for API errors
+        # MCP stderr doesn't reach Railway logs, write to file
         import traceback
-        logger.error("traceback: %s", traceback.format_exc())
+        try:
+            with open("/data/mem0_debug.log", "a") as df:
+                import datetime
+                df.write(f"\n{datetime.datetime.utcnow().isoformat()} memory_add FAILED\n")
+                df.write(f"error: {type(e).__name__}: {e}\n")
+                df.write(traceback.format_exc())
+                df.write("\n")
+        except Exception:
+            pass
         return f"Failed to store memory: {e}"
 
 

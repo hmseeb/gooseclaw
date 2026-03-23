@@ -146,14 +146,17 @@ def build_mem0_config():
                      os.environ.get("ANTHROPIC_SECRET_KEY", "")
         if vault_key:
             api_key = vault_key
+    # Debug: write config diagnostics to file (MCP stderr doesn't reach Railway logs)
+    _debug_path = "/data/mem0_debug.log"
+    try:
+        key_preview = (api_key[:8] + "...") if api_key and len(api_key) > 8 else "NONE"
+        with open(_debug_path, "a") as _df:
+            import datetime
+            _df.write(f"{datetime.datetime.utcnow().isoformat()} provider={provider} mem0_provider={mem0_provider} model={cheap_model} key={key_preview} graph={'graph_store' in config if 'graph_store' in dir() else 'N/A'}\n")
+    except Exception:
+        pass
     if api_key:
         llm_config["api_key"] = api_key
-        import sys
-        key_preview = api_key[:8] + "..." if len(api_key) > 8 else "???"
-        print(f"[mem0-config] provider={provider}, model={cheap_model}, key={key_preview}", file=sys.stderr)
-    else:
-        import sys
-        print(f"[mem0-config] WARNING: no API key found for provider={provider}", file=sys.stderr)
 
     config = {
         "vector_store": {

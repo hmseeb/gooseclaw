@@ -103,6 +103,11 @@ def _patch_anthropic_top_p():
         def _patched_create(self, **kwargs):
             if "temperature" in kwargs and "top_p" in kwargs:
                 kwargs.pop("top_p")
+            # mem0 passes tool_choice as a string but Anthropic API
+            # now requires a dict like {"type": "auto"}
+            tc = kwargs.get("tool_choice")
+            if isinstance(tc, str):
+                kwargs["tool_choice"] = {"type": tc}
             return _orig_create(self, **kwargs)
 
         anthropic.resources.messages.Messages.create = _patched_create

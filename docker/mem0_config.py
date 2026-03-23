@@ -68,6 +68,22 @@ def _load_setup():
     return None
 
 
+VAULT_PATH = os.path.join(os.environ.get("DATA_DIR", "/data"), "secrets", "vault.yaml")
+
+
+def _read_vault_secret(key):
+    """Read a single secret from the vault file."""
+    try:
+        import yaml
+        if os.path.exists(VAULT_PATH):
+            with open(VAULT_PATH) as f:
+                vault = yaml.safe_load(f) or {}
+            return vault.get(key, "")
+    except Exception:
+        pass
+    return ""
+
+
 _anthropic_patched = False
 
 
@@ -113,14 +129,23 @@ def build_mem0_config():
     if mem0_provider == "anthropic":
         _patch_anthropic_top_p()
 
-    # Set API key: try env var first, fall back to setup.json api_key field.
-    # MCP subprocesses may not inherit all parent env vars.
+    # Set API key. claude-code uses OAuth tokens that don't work with the
+    # Anthropic API directly. Check vault secrets as fallback.
     env_key = PROVIDER_ENV_KEYS.get(provider)
     api_key = ""
     if env_key:
         api_key = os.environ.get(env_key, "")
     if not api_key and setup:
         api_key = setup.get("api_key", "")
+    # claude-code OAuth tokens can't call Anthropic API directly.
+    # fall back to vault's ANTHROPIC_SECRET_KEY or ANTHROPIC_API_KEY.
+    if provider == "claude-code" or not api_key:
+        vault_key = _read_vault_secret("ANTHROPIC_SECRET_KEY") or \
+                     _read_vault_secret("ANTHROPIC_API_KEY") or \
+                     os.environ.get("ANTHROPIC_API_KEY", "") or \
+                     os.environ.get("ANTHROPIC_SECRET_KEY", "")
+        if vault_key:
+            api_key = vault_key
     if api_key:
         llm_config["api_key"] = api_key
 

@@ -23,7 +23,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from mem0_config import build_mem0_config
 
 config = build_mem0_config()
-memory = Memory.from_config(config)
+try:
+    memory = Memory.from_config(config)
+except Exception as e:
+    # Graph store (Neo4j) auth failures crash the whole server.
+    # Fall back to vector-only mode so tools still load.
+    if "graph_store" in config:
+        logger.warning("mem0 init failed with graph store (%s), retrying without it", e)
+        del config["graph_store"]
+        memory = Memory.from_config(config)
+    else:
+        raise
 USER_ID = os.environ.get("MEM0_USER_ID", "default")
 
 mcp = FastMCP("mem0-memory")

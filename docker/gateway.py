@@ -9417,7 +9417,9 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                 for key in SENSITIVE_KEYS:
                     if key == "web_auth_token_hash":
                         continue  # handled above
-                    if config.get(key) == _REDACTED and key in existing_setup:
+                    # restore if redacted OR missing (UI strips some keys
+                    # like telegram_bot_token entirely instead of redacting)
+                    if key in existing_setup and config.get(key) in (_REDACTED, None):
                         config[key] = existing_setup[key]
                 # preserve saved_keys (per-provider credential store)
                 if "saved_keys" in config and "saved_keys" in existing_setup:

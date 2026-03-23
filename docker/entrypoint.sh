@@ -511,7 +511,20 @@ extensions:
       HF_HUB_OFFLINE: "1"
       TOKENIZERS_PARALLELISM: "false"
       MEM0_ENABLE_GRAPH: "true"
-    env_keys: []
+      MEM0_CHROMA_PATH: /data/mem0/chroma
+      NEO4J_URL: bolt://localhost:7687
+      NEO4J_USERNAME: neo4j
+      NEO4J_PASSWORD: none
+      CONFIG_DIR: /data/config
+    env_keys:
+      - ANTHROPIC_API_KEY
+      - OPENAI_API_KEY
+      - GOOGLE_API_KEY
+      - GROQ_API_KEY
+      - OPENROUTER_API_KEY
+      - DEEPSEEK_API_KEY
+      - TOGETHER_API_KEY
+      - CLAUDE_CODE_OAUTH_TOKEN
     timeout: 300
     bundled: null
     available_tools: []
@@ -533,9 +546,9 @@ try:
             'enabled': True, 'type': 'stdio', 'name': 'mem0-memory',
             'description': 'Long-term memory with semantic search and contradiction resolution',
             'cmd': 'python3', 'args': ['/app/docker/memory/server.py'],
-            'envs': {'MEM0_USER_ID': 'default', 'MEM0_TELEMETRY': 'false', 'OPENBLAS_NUM_THREADS': '4', 'HF_HUB_OFFLINE': '1', 'TOKENIZERS_PARALLELISM': 'false', 'MEM0_ENABLE_GRAPH': 'true'},
-            'env_keys': [],
-            'env_keys': [], 'timeout': 300, 'bundled': None, 'available_tools': [],
+            'envs': {'MEM0_USER_ID': 'default', 'MEM0_TELEMETRY': 'false', 'OPENBLAS_NUM_THREADS': '4', 'HF_HUB_OFFLINE': '1', 'TOKENIZERS_PARALLELISM': 'false', 'MEM0_ENABLE_GRAPH': 'true', 'MEM0_CHROMA_PATH': '/data/mem0/chroma', 'NEO4J_URL': 'bolt://localhost:7687', 'NEO4J_USERNAME': 'neo4j', 'NEO4J_PASSWORD': 'none', 'CONFIG_DIR': '/data/config'},
+            'env_keys': ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GOOGLE_API_KEY', 'GROQ_API_KEY', 'OPENROUTER_API_KEY', 'DEEPSEEK_API_KEY', 'TOGETHER_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN'],
+            'timeout': 300, 'bundled': None, 'available_tools': [],
         },
     }
     with open('$CONFIG_DIR/config.yaml') as f:
@@ -600,8 +613,8 @@ fi
 # Re-indexes system namespace on every boot (system.md, onboarding.md, schemas/).
 # Runtime namespace (user facts, integrations) is never wiped.
 
-mkdir -p /data/knowledge/chroma
-chown -R gooseclaw:gooseclaw /data/knowledge
+mkdir -p /data/knowledge/chroma /data/mem0/chroma
+chown -R gooseclaw:gooseclaw /data/knowledge /data/mem0
 
 echo "[knowledge] indexing system knowledge base..."
 if runuser -u gooseclaw -- env PYTHONPATH=/app/docker python3 /app/docker/knowledge/indexer.py; then
@@ -622,7 +635,7 @@ fi
 
 if [ ! -f "$DATA_DIR/knowledge/.mem0_migrated" ]; then
     echo "[mem0-migrate] migrating runtime memories to mem0..."
-    if runuser -u gooseclaw -- env PYTHONPATH=/app/docker MEM0_USER_ID=default MEM0_TELEMETRY=false python3 /app/docker/knowledge/migrate_to_mem0.py; then
+    if runuser -u gooseclaw -- env PYTHONPATH=/app/docker MEM0_USER_ID=default MEM0_TELEMETRY=false MEM0_CHROMA_PATH=/data/mem0/chroma python3 /app/docker/knowledge/migrate_to_mem0.py; then
         echo "[mem0-migrate] migration complete"
     else
         echo "[mem0-migrate] WARNING: migration failed (non-fatal)"
@@ -630,6 +643,7 @@ if [ ! -f "$DATA_DIR/knowledge/.mem0_migrated" ]; then
 fi
 
 export KNOWLEDGE_DB_PATH="/data/knowledge/chroma"
+export MEM0_CHROMA_PATH="/data/mem0/chroma"
 
 # ---- neo4j graph database (background) ----
 if command -v neo4j &>/dev/null; then
@@ -637,9 +651,20 @@ if command -v neo4j &>/dev/null; then
     mkdir -p /data/neo4j
     chown -R neo4j:neo4j /data/neo4j 2>/dev/null || true
 
-    export NEO4J_AUTH=neo4j/CZ8HDBvelivNlHpNDdRTLxs
+    # Disable Neo4j auth — it's local-only behind gateway auth.
+    # Eliminates password mismatch on persistent volumes forever.
+    export NEO4J_AUTH=none
     export NEO4J_USERNAME=neo4j
-    export NEO4J_PASSWORD="CZ8HDBvelivNlHpNDdRTLxs"
+    export NEO4J_PASSWORD=none
+    # Belt and suspenders: env var + conf file (covers all Neo4j versions)
+    for _conf in /etc/neo4j/neo4j.conf /var/lib/neo4j/conf/neo4j.conf; do
+        if [ -f "$_conf" ]; then
+            grep -q "dbms.security.auth_enabled" "$_conf" && \
+                sed -i 's/^#*\s*dbms.security.auth_enabled=.*/dbms.security.auth_enabled=false/' "$_conf" || \
+                echo "dbms.security.auth_enabled=false" >> "$_conf"
+            break
+        fi
+    done
     export NEO4J_server_memory_heap_initial__size=128m
     export NEO4J_server_memory_heap_max__size=256m
     export NEO4J_server_memory_pagecache__size=64m

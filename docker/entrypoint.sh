@@ -547,7 +547,7 @@ try:
             'enabled': True, 'type': 'stdio', 'name': 'mem0-memory',
             'description': 'Long-term memory with semantic search and contradiction resolution',
             'cmd': 'python3', 'args': ['/app/docker/memory/server.py'],
-            'envs': {'MEM0_USER_ID': 'default', 'MEM0_TELEMETRY': 'false', 'OPENBLAS_NUM_THREADS': '1', 'HF_HUB_OFFLINE': '0', 'HF_HOME': '/data/hf_cache', 'TOKENIZERS_PARALLELISM': 'false', 'MEM0_ENABLE_GRAPH': 'true', 'MEM0_CHROMA_PATH': '/data/mem0/chroma', 'NEO4J_URL': 'bolt://localhost:7687', 'NEO4J_USERNAME': 'neo4j', 'NEO4J_PASSWORD': 'none', 'CONFIG_DIR': '/data/config'},
+            'envs': {'MEM0_USER_ID': 'default', 'MEM0_TELEMETRY': 'false', 'OPENBLAS_NUM_THREADS': '1', 'HF_HUB_OFFLINE': '0', 'HF_HOME': '/data/hf_cache', 'TOKENIZERS_PARALLELISM': 'false', 'MEM0_ENABLE_GRAPH': 'true', 'MEM0_CHROMA_PATH': '/data/mem0/chroma', 'NEO4J_URL': 'bolt://localhost:7687', 'NEO4J_USERNAME': 'neo4j', 'NEO4J_PASSWORD': 'gooseclaw', 'CONFIG_DIR': '/data/config'},
             'env_keys': ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GOOGLE_API_KEY', 'GROQ_API_KEY', 'OPENROUTER_API_KEY', 'DEEPSEEK_API_KEY', 'TOGETHER_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN'],
             'timeout': 300, 'bundled': None, 'available_tools': [],
         },
@@ -555,16 +555,28 @@ try:
     with open('$CONFIG_DIR/config.yaml') as f:
         config = yaml.safe_load(f) or {}
     exts = config.get('extensions', {})
-    added = []
+    updated = []
     for name, defn in required.items():
         if name not in exts:
             exts[name] = defn
-            added.append(name)
-    if added:
+            updated.append(f'{name} (added)')
+        else:
+            # force-update envs and env_keys on existing extensions
+            # so config changes (HF_HOME, NEO4J_PASSWORD, etc.) propagate
+            changed = False
+            if exts[name].get('envs') != defn.get('envs'):
+                exts[name]['envs'] = defn['envs']
+                changed = True
+            if exts[name].get('env_keys') != defn.get('env_keys'):
+                exts[name]['env_keys'] = defn['env_keys']
+                changed = True
+            if changed:
+                updated.append(f'{name} (envs updated)')
+    if updated:
         config['extensions'] = exts
         with open('$CONFIG_DIR/config.yaml', 'w') as f:
             yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-        print(f'[mcp] synced new extensions: {\", \".join(added)}')
+        print(f'[mcp] synced extensions: {\", \".join(updated)}')
 except Exception as e:
     print(f'[mcp] WARN: extension sync failed: {e}', file=sys.stderr)
 " 2>/dev/null || true

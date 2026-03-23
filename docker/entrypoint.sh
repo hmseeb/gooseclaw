@@ -507,7 +507,7 @@ extensions:
     envs:
       MEM0_USER_ID: default
       MEM0_TELEMETRY: "false"
-      OPENBLAS_NUM_THREADS: "4"
+      OPENBLAS_NUM_THREADS: "1"
       HF_HUB_OFFLINE: "1"
       TOKENIZERS_PARALLELISM: "false"
       MEM0_ENABLE_GRAPH: "true"
@@ -546,7 +546,7 @@ try:
             'enabled': True, 'type': 'stdio', 'name': 'mem0-memory',
             'description': 'Long-term memory with semantic search and contradiction resolution',
             'cmd': 'python3', 'args': ['/app/docker/memory/server.py'],
-            'envs': {'MEM0_USER_ID': 'default', 'MEM0_TELEMETRY': 'false', 'OPENBLAS_NUM_THREADS': '4', 'HF_HUB_OFFLINE': '1', 'TOKENIZERS_PARALLELISM': 'false', 'MEM0_ENABLE_GRAPH': 'true', 'MEM0_CHROMA_PATH': '/data/mem0/chroma', 'NEO4J_URL': 'bolt://localhost:7687', 'NEO4J_USERNAME': 'neo4j', 'NEO4J_PASSWORD': 'none', 'CONFIG_DIR': '/data/config'},
+            'envs': {'MEM0_USER_ID': 'default', 'MEM0_TELEMETRY': 'false', 'OPENBLAS_NUM_THREADS': '1', 'HF_HUB_OFFLINE': '1', 'TOKENIZERS_PARALLELISM': 'false', 'MEM0_ENABLE_GRAPH': 'true', 'MEM0_CHROMA_PATH': '/data/mem0/chroma', 'NEO4J_URL': 'bolt://localhost:7687', 'NEO4J_USERNAME': 'neo4j', 'NEO4J_PASSWORD': 'none', 'CONFIG_DIR': '/data/config'},
             'env_keys': ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GOOGLE_API_KEY', 'GROQ_API_KEY', 'OPENROUTER_API_KEY', 'DEEPSEEK_API_KEY', 'TOGETHER_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN'],
             'timeout': 300, 'bundled': None, 'available_tools': [],
         },

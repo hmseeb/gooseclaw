@@ -113,12 +113,16 @@ def build_mem0_config():
     if mem0_provider == "anthropic":
         _patch_anthropic_top_p()
 
-    # Set API key from environment based on provider
+    # Set API key: try env var first, fall back to setup.json api_key field.
+    # MCP subprocesses may not inherit all parent env vars.
     env_key = PROVIDER_ENV_KEYS.get(provider)
+    api_key = ""
     if env_key:
         api_key = os.environ.get(env_key, "")
-        if api_key:
-            llm_config["api_key"] = api_key
+    if not api_key and setup:
+        api_key = setup.get("api_key", "")
+    if api_key:
+        llm_config["api_key"] = api_key
 
     config = {
         "vector_store": {

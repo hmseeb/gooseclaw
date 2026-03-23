@@ -148,6 +148,12 @@ def build_mem0_config():
             api_key = vault_key
     if api_key:
         llm_config["api_key"] = api_key
+        import sys
+        key_preview = api_key[:8] + "..." if len(api_key) > 8 else "???"
+        print(f"[mem0-config] provider={provider}, model={cheap_model}, key={key_preview}", file=sys.stderr)
+    else:
+        import sys
+        print(f"[mem0-config] WARNING: no API key found for provider={provider}", file=sys.stderr)
 
     config = {
         "vector_store": {

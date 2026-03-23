@@ -53,7 +53,10 @@ def memory_add(content: str) -> str:
         )
         return json.dumps(result, default=str)
     except Exception as e:
-        logger.error("memory_add failed: %s", e)
+        logger.error("memory_add failed: %s (type: %s)", e, type(e).__name__)
+        # log full traceback for API errors
+        import traceback
+        logger.error("traceback: %s", traceback.format_exc())
         return f"Failed to store memory: {e}"
 
 

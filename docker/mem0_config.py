@@ -101,6 +101,7 @@ def _patch_anthropic_top_p():
         _orig_create = anthropic.resources.messages.Messages.create
 
         def _patched_create(self, **kwargs):
+            import json as _json
             if "temperature" in kwargs and "top_p" in kwargs:
                 kwargs.pop("top_p")
             # mem0 passes tool_choice as a string but Anthropic API
@@ -124,7 +125,24 @@ def _patch_anthropic_top_p():
                     else:
                         fixed.append(t)
                 kwargs["tools"] = fixed
-            return _orig_create(self, **kwargs)
+            response = _orig_create(self, **kwargs)
+            # mem0 does response.content[0].text but API may return
+            # ToolUseBlock first. convert tool inputs to TextBlock.
+            if response.content:
+                from anthropic.types import TextBlock
+                new_content = []
+                for block in response.content:
+                    if hasattr(block, "text"):
+                        new_content.append(block)
+                    elif hasattr(block, "input"):
+                        new_content.append(TextBlock(
+                            type="text",
+                            text=_json.dumps(block.input) if isinstance(block.input, dict) else str(block.input),
+                        ))
+                    else:
+                        new_content.append(block)
+                response.content = new_content
+            return response
 
         anthropic.resources.messages.Messages.create = _patched_create
         _anthropic_patched = True

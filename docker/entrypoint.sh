@@ -651,14 +651,10 @@ if command -v neo4j &>/dev/null; then
     mkdir -p /data/neo4j
     chown -R neo4j:neo4j /data/neo4j 2>/dev/null || true
 
-    # Force-reset Neo4j auth on every boot. The system database only stores
-    # auth + database catalog. Both get rebuilt on start. Actual graph data
-    # lives in the neo4j database and is untouched.
-    # This eliminates password mismatch on persistent volumes forever.
+    # Self-healing Neo4j auth. Try set-initial-password first (works on
+    # fresh data dirs). After Neo4j starts, verify auth actually works.
+    # Only nuke the system db as a last resort to preserve catalog metadata.
     _NEO4J_PW="gooseclaw"
-    for _datadir in /data/neo4j /var/lib/neo4j/data; do
-        rm -rf "$_datadir/databases/system" "$_datadir/transactions/system" 2>/dev/null || true
-    done
     neo4j-admin dbms set-initial-password "$_NEO4J_PW" 2>/dev/null || true
     export NEO4J_AUTH="neo4j/$_NEO4J_PW"
     export NEO4J_USERNAME=neo4j
@@ -689,6 +685,30 @@ if command -v neo4j &>/dev/null; then
     done
 
     if [ "$NEO4J_READY" = "true" ]; then
+        # verify auth works. if not, nuke system db and restart neo4j.
+        if ! python3 -c "
+from neo4j import GraphDatabase
+d = GraphDatabase.driver('bolt://localhost:7687', auth=('neo4j', '$_NEO4J_PW'))
+d.verify_connectivity()
+d.close()
+" 2>/dev/null; then
+            echo "[neo4j] auth mismatch detected, resetting system db..."
+            kill "$NEO4J_PID" 2>/dev/null; sleep 2
+            for _datadir in /data/neo4j /var/lib/neo4j/data; do
+                rm -rf "$_datadir/databases/system" "$_datadir/transactions/system" 2>/dev/null || true
+            done
+            neo4j-admin dbms set-initial-password "$_NEO4J_PW" 2>/dev/null || true
+            neo4j console &
+            NEO4J_PID=$!
+            echo "[neo4j] restarting after auth reset..."
+            for i in $(seq 1 60); do
+                python3 -c "import socket; socket.create_connection(('localhost',7687),1)" 2>/dev/null && break
+                sleep 1
+            done
+            echo "[neo4j] back up (${i}s)"
+        else
+            echo "[neo4j] auth verified"
+        fi
         export NEO4J_ENABLED=true
         export MEM0_ENABLE_GRAPH=true
         echo "[neo4j] graph memory enabled"

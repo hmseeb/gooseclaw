@@ -514,7 +514,7 @@ extensions:
       MEM0_CHROMA_PATH: /data/mem0/chroma
       NEO4J_URL: bolt://localhost:7687
       NEO4J_USERNAME: neo4j
-      NEO4J_PASSWORD: none
+      NEO4J_PASSWORD: gooseclaw
       CONFIG_DIR: /data/config
     env_keys:
       - ANTHROPIC_API_KEY
@@ -651,20 +651,18 @@ if command -v neo4j &>/dev/null; then
     mkdir -p /data/neo4j
     chown -R neo4j:neo4j /data/neo4j 2>/dev/null || true
 
-    # Disable Neo4j auth — it's local-only behind gateway auth.
-    # Eliminates password mismatch on persistent volumes forever.
-    export NEO4J_AUTH=none
-    export NEO4J_USERNAME=neo4j
-    export NEO4J_PASSWORD=none
-    # Belt and suspenders: env var + conf file (covers all Neo4j versions)
-    for _conf in /etc/neo4j/neo4j.conf /var/lib/neo4j/conf/neo4j.conf; do
-        if [ -f "$_conf" ]; then
-            grep -q "dbms.security.auth_enabled" "$_conf" && \
-                sed -i 's/^#*\s*dbms.security.auth_enabled=.*/dbms.security.auth_enabled=false/' "$_conf" || \
-                echo "dbms.security.auth_enabled=false" >> "$_conf"
-            break
-        fi
+    # Force-reset Neo4j auth on every boot. The system database only stores
+    # auth + database catalog. Both get rebuilt on start. Actual graph data
+    # lives in the neo4j database and is untouched.
+    # This eliminates password mismatch on persistent volumes forever.
+    _NEO4J_PW="gooseclaw"
+    for _datadir in /data/neo4j /var/lib/neo4j/data; do
+        rm -rf "$_datadir/databases/system" "$_datadir/transactions/system" 2>/dev/null || true
     done
+    neo4j-admin dbms set-initial-password "$_NEO4J_PW" 2>/dev/null || true
+    export NEO4J_AUTH="neo4j/$_NEO4J_PW"
+    export NEO4J_USERNAME=neo4j
+    export NEO4J_PASSWORD="$_NEO4J_PW"
     export NEO4J_server_memory_heap_initial__size=128m
     export NEO4J_server_memory_heap_max__size=256m
     export NEO4J_server_memory_pagecache__size=64m

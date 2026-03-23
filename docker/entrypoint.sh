@@ -617,6 +617,18 @@ fi
 mkdir -p /data/knowledge/chroma /data/mem0/chroma /data/hf_cache
 chown -R gooseclaw:gooseclaw /data/knowledge /data/mem0 /data/hf_cache
 
+# Pre-download sentence-transformers model so MCP subprocess finds it cached.
+# Runs once, persists on volume across deploys.
+if [ ! -d "/data/hf_cache/hub/models--sentence-transformers--all-MiniLM-L6-v2" ]; then
+    echo "[hf] downloading sentence-transformers model to persistent cache..."
+    runuser -u gooseclaw -- env HF_HOME=/data/hf_cache python3 -c "
+from sentence_transformers import SentenceTransformer
+SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
+" 2>/dev/null && echo "[hf] model cached" || echo "[hf] WARNING: model download failed"
+else
+    echo "[hf] sentence-transformers model already cached"
+fi
+
 echo "[knowledge] indexing system knowledge base..."
 if runuser -u gooseclaw -- env PYTHONPATH=/app/docker python3 /app/docker/knowledge/indexer.py; then
     echo "[knowledge] indexing complete"
@@ -636,7 +648,7 @@ fi
 
 if [ ! -f "$DATA_DIR/knowledge/.mem0_migrated" ]; then
     echo "[mem0-migrate] migrating runtime memories to mem0..."
-    if runuser -u gooseclaw -- env PYTHONPATH=/app/docker MEM0_USER_ID=default MEM0_TELEMETRY=false MEM0_CHROMA_PATH=/data/mem0/chroma python3 /app/docker/knowledge/migrate_to_mem0.py; then
+    if runuser -u gooseclaw -- env PYTHONPATH=/app/docker MEM0_USER_ID=default MEM0_TELEMETRY=false MEM0_CHROMA_PATH=/data/mem0/chroma HF_HOME=/data/hf_cache python3 /app/docker/knowledge/migrate_to_mem0.py; then
         echo "[mem0-migrate] migration complete"
     else
         echo "[mem0-migrate] WARNING: migration failed (non-fatal)"

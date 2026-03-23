@@ -108,6 +108,22 @@ def _patch_anthropic_top_p():
             tc = kwargs.get("tool_choice")
             if isinstance(tc, str):
                 kwargs["tool_choice"] = {"type": tc}
+            # mem0 sends tools in OpenAI format {"type": "function", "function": {...}}
+            # but Anthropic expects {"name": ..., "input_schema": ...}
+            tools = kwargs.get("tools")
+            if tools and isinstance(tools, list):
+                fixed = []
+                for t in tools:
+                    if isinstance(t, dict) and t.get("type") == "function" and "function" in t:
+                        fn = t["function"]
+                        fixed.append({
+                            "name": fn.get("name", ""),
+                            "description": fn.get("description", ""),
+                            "input_schema": fn.get("parameters", {}),
+                        })
+                    else:
+                        fixed.append(t)
+                kwargs["tools"] = fixed
             return _orig_create(self, **kwargs)
 
         anthropic.resources.messages.Messages.create = _patched_create

@@ -23,6 +23,7 @@ PROVIDER_MAP = {
     "google": "google",
     "deepseek": "deepseek",
     "together": "together",
+    "openrouter": "litellm",
 }
 
 # Maps provider to env var name for API key
@@ -33,6 +34,7 @@ KEY_ENV_VARS = {
     "google": "GOOGLE_API_KEY",
     "deepseek": "DEEPSEEK_API_KEY",
     "together": "TOGETHER_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
 }
 
 # Maps provider to vault key names to check
@@ -43,6 +45,7 @@ VAULT_KEYS = {
     "google": ["google_api_key", "GOOGLE_API_KEY"],
     "deepseek": ["deepseek_api_key", "DEEPSEEK_API_KEY"],
     "together": ["together_api_key", "TOGETHER_API_KEY"],
+    "openrouter": ["openrouter_api_key", "OPENROUTER_API_KEY"],
 }
 
 

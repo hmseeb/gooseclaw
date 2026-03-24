@@ -21,7 +21,7 @@ VAULT_PATH = os.path.join(os.environ.get("DATA_DIR", "/data"), "secrets", "vault
 # and uses OpenAI-compatible API which mem0 actually supports properly.
 # mem0's anthropic adapter has 4+ incompatibilities with the current API.
 MEM0_LLM_PROVIDER = "groq"
-MEM0_LLM_MODEL = "llama-3.3-70b-versatile"
+MEM0_LLM_MODEL = "llama-3.1-70b-versatile"
 
 
 def _load_setup():

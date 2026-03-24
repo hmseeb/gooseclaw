@@ -2327,6 +2327,26 @@ def validate_setup_config(config):
                 if btoken and ":" not in btoken:
                     errors.append(f"bots[{i}] token must be in format digits:alphanumeric")
 
+    # fallback_providers / mem0_fallback_providers validation
+    for fb_field in ("fallback_providers", "mem0_fallback_providers"):
+        fb = config.get(fb_field)
+        if fb is not None:
+            if not isinstance(fb, list):
+                errors.append(f"{fb_field} must be an array")
+            else:
+                for i, entry in enumerate(fb):
+                    if not isinstance(entry, dict):
+                        errors.append(f"{fb_field}[{i}] must be an object")
+                        continue
+                    fp = entry.get("provider", "")
+                    if not fp:
+                        errors.append(f"{fb_field}[{i}] missing provider")
+                    elif fp not in env_map:
+                        errors.append(f"{fb_field}[{i}] unknown fallback provider: {fp!r}")
+                    fm = entry.get("model", "")
+                    if not fm:
+                        errors.append(f"{fb_field}[{i}] missing model")
+
     return len(errors) == 0, errors
 
 
@@ -7292,6 +7312,66 @@ def _is_fatal_provider_error(err):
     return ("broken pipe" in low
             or "write to stdin" in low
             or ("failed" in low and "stdin" in low))
+
+
+_RETRIABLE_STATUS_CODES = {"429", "500", "502", "503", "504", "529"}
+
+
+def _is_retriable_provider_error(error_string):
+    """Check if error should trigger fallback to next provider.
+
+    Retriable: rate limits (429), server errors (5xx), timeouts, connection errors.
+    NOT retriable: auth errors (401/403), bad requests (400), broken pipe (needs restart).
+    """
+    if not error_string:
+        return False
+    low = error_string.lower()
+    for code in _RETRIABLE_STATUS_CODES:
+        if code in error_string:
+            return True
+    if "timeout" in low or "timed out" in low or "took too long" in low:
+        return True
+    if "connection" in low and any(w in low for w in ("refused", "reset", "error", "aborted")):
+        return True
+    return False
+
+
+def _try_fallback_providers(relay_fn, user_text, session_id, error_string):
+    """Attempt fallback providers when primary LLM fails with retriable error."""
+    if not _is_retriable_provider_error(error_string):
+        return None
+
+    setup = load_setup()
+    if not setup:
+        return None
+
+    fallbacks = setup.get("fallback_providers", [])
+    if not fallbacks:
+        return None
+
+    for fb in fallbacks:
+        provider = fb.get("provider", "")
+        model = fb.get("model", "")
+        if not provider or not model:
+            continue
+
+        _gateway_log.info(f"fallback: trying {provider}/{model} after error: {error_string[:100]}")
+        _update_goose_session_provider(session_id, {
+            "provider": provider,
+            "model": model,
+            "id": f"fallback_{provider}_{model}",
+        })
+
+        text, err, media = relay_fn(user_text, session_id)
+        if not err:
+            _gateway_log.info(f"fallback succeeded with {provider}/{model}")
+            return (text, err, media)
+
+        if not _is_retriable_provider_error(err):
+            _gateway_log.warning(f"fallback {provider}/{model} hit non-retriable error: {err[:100]}")
+            break
+
+    return None  # All fallbacks exhausted
 
 
 def _relay_to_goosed(user_text, session_id, chat_id=None, channel=None,

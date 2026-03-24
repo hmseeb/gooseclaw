@@ -572,15 +572,18 @@ try:
     try:
         with open('$CONFIG_DIR/setup.json') as _sf:
             _setup = _json.load(_sf)
+        import os as _os
         _gk = _setup.get('groq_extraction_key', '')
         if not _gk:
             # fallback: check vault
-            import os as _os
             _vault_path = _os.path.join('$DATA_DIR', 'secrets', 'vault.yaml')
             if _os.path.exists(_vault_path):
                 with open(_vault_path) as _vf:
                     _vault = yaml.safe_load(_vf) or {}
                 _gk = _vault.get('groq_api_key', '') or _vault.get('GROQ_API_KEY', '')
+        if not _gk:
+            # fallback: check env var (Railway env vars)
+            _gk = _os.environ.get('GROQ_API_KEY', '')
         if _gk and 'mem0-memory' in exts:
             exts['mem0-memory'].setdefault('envs', {})['GROQ_API_KEY'] = _gk
             updated.append('mem0-memory (groq key injected)')

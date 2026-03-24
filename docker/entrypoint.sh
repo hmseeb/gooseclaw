@@ -319,6 +319,13 @@ if lfbt:
     print(f'export GOOSE_LEAD_FALLBACK_TURNS={shlex.quote(str(lfbt))}')
 if lcl:
     print(f'export GOOSE_LEAD_CONTEXT_LIMIT={shlex.quote(str(lcl))}')
+# fallback provider config -> export as JSON env vars for gateway.py
+fb = c.get('fallback_providers', [])
+if fb and isinstance(fb, list):
+    print(f'export FALLBACK_PROVIDERS={shlex.quote(json.dumps(fb))}')
+m0fb = c.get('mem0_fallback_providers', [])
+if m0fb and isinstance(m0fb, list):
+    print(f'export MEM0_FALLBACK_PROVIDERS={shlex.quote(json.dumps(m0fb))}')
 " > "$REHYDRATE_FILE" 2>/dev/null
     # source is safe because values are shlex.quote'd by the Python script
     . "$REHYDRATE_FILE"

@@ -127,10 +127,27 @@ Plans:
 - [ ] 25-01-PLAN.md — Neo4j in-container install, entrypoint startup, mem0 graph_store config (GRAPH-01, GRAPH-02)
 - [ ] 25-02-PLAN.md — Graph-augmented search + memory_entities/memory_relations MCP tools (GRAPH-03, GRAPH-04)
 
+### Phase 26: Fallback Provider System
+**Goal**: When primary LLM provider fails (rate limit, timeout, 5xx), auto-switch to next provider in user-configured fallback chain for both main LLM and mem0 extraction
+**Depends on**: Phase 25
+**Requirements**: FB-01, FB-02, FB-03, FB-04, FB-05, FB-06, FB-07, FB-08, FB-09
+**Success Criteria** (what must be TRUE):
+  1. When the primary provider returns a retriable error (429, 5xx, timeout), the system automatically tries the next fallback provider
+  2. User can configure fallback provider chains for both main LLM and mem0 extraction in the setup wizard and dashboard
+  3. Fallback chains support drag-to-reorder for priority ordering
+  4. Primary provider is always tried first on each new message (fallback is transient, not sticky)
+  5. Only providers with saved API keys are available as fallback options
+**Plans**: 3 plans
+
+Plans:
+- [ ] 26-01-PLAN.md — Test scaffold + error classification + validation + config persistence (FB-01, FB-04, FB-05, FB-09)
+- [ ] 26-02-PLAN.md — Setup wizard + dashboard UI + entrypoint rehydration (FB-06, FB-07, FB-08)
+- [ ] 26-03-PLAN.md — Main LLM fallback wiring + mem0 fallback wiring + verification (FB-02, FB-03, FB-09)
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 22 → 23 → 24 → 25
+Phases execute in numeric order: 22 → 23 → 24 → 25 → 26
 
 | Milestone | Phases | Plans | Status | Shipped |
 |-----------|--------|-------|--------|---------|
@@ -138,6 +155,6 @@ Phases execute in numeric order: 22 → 23 → 24 → 25
 | v2.0 Multi-Channel | 6-10 | 11 | Complete | 2026-03-13 |
 | v3.0 Rich Media | 11-17 | 15 | Complete | 2026-03-15 |
 | v4.0 Hardening | 18-21 | 12 | Complete | 2026-03-16 |
-| v5.0 mem0 Memory | 22-25 | TBD | Not started | - |
+| v5.0 mem0 Memory | 22-25 | 8 | Complete | 2026-03-20 |
 
-**Total: 21 phases, 52 plans shipped across 4 milestones. v5.0 in progress.**
+**Total: 25 phases, 60 plans shipped across 5 milestones. Phase 26 in progress.**

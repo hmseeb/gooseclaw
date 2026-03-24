@@ -42,6 +42,20 @@
 - [x] **GRAPH-03**: Relationship-enhanced search (graph augments vector results)
 - [x] **GRAPH-04**: Entity and relationship tools exposed via MCP (memory_entities, memory_relations)
 
+## v5.1 Requirements
+
+### Fallback Provider System
+
+- [ ] **FB-01**: Error classification distinguishes retriable errors (429, 5xx, timeout, connection) from permanent errors (401, 403, 400)
+- [ ] **FB-02**: Main LLM (goose agent) tries fallback providers in user-defined order when primary fails with retriable error
+- [ ] **FB-03**: mem0 extraction LLM tries fallback providers in user-defined order when primary fails
+- [ ] **FB-04**: Fallback provider config validated in `validate_setup_config()` (provider exists, model present, provider has API key)
+- [ ] **FB-05**: Fallback config persists in setup.json as `fallback_providers` and `mem0_fallback_providers` arrays
+- [ ] **FB-06**: Setup wizard (first-time setup, step 3) includes fallback provider configuration with drag-to-reorder
+- [ ] **FB-07**: Dashboard settings (post-setup) includes fallback provider configuration with drag-to-reorder
+- [ ] **FB-08**: Entrypoint rehydrates fallback provider env vars from setup.json on container restart
+- [ ] **FB-09**: Primary provider is always tried first on each new message (fallback is transient, not sticky)
+
 ## v5.x Requirements (Future)
 
 ### Enhanced Memory
@@ -59,8 +73,10 @@
 | Neo4j as separate Railway service | Runs inside the same container instead — zero extra cost |
 | Replacing user.md/soul.md with mem0 | Different access patterns: identity = always-present, memory = on-demand |
 | Real-time memory streaming in chat | Violates "show results, hide plumbing" |
-| Memory UI in setup wizard | The agent IS the memory interface |
 | OpenAI embedding key requirement | ChromaDB bundles its own embedder at zero cost |
+| Circuit breaker with open/half-open/closed states | Overkill for single-container single-process. Simple ordered fallback chain sufficient. |
+| Exponential backoff between fallback attempts | Switching providers, not retrying same one. Minimal delay is fine. |
+| Persistent fallback state across restarts | Fallback is transient resilience. Always start from primary on restart. |
 
 ## Traceability
 
@@ -88,12 +104,21 @@
 | GRAPH-02 | Phase 25 | Complete |
 | GRAPH-03 | Phase 25 | Complete |
 | GRAPH-04 | Phase 25 | Complete |
+| FB-01 | Phase 26 | Planned |
+| FB-02 | Phase 26 | Planned |
+| FB-03 | Phase 26 | Planned |
+| FB-04 | Phase 26 | Planned |
+| FB-05 | Phase 26 | Planned |
+| FB-06 | Phase 26 | Planned |
+| FB-07 | Phase 26 | Planned |
+| FB-08 | Phase 26 | Planned |
+| FB-09 | Phase 26 | Planned |
 
 **Coverage:**
-- v5.0 requirements: 22 total
-- Mapped to phases: 22
-- Unmapped: 0 ✓
+- v5.0 requirements: 22 total, all complete
+- v5.1 fallback requirements: 9 total, all planned
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-20*
-*Last updated: 2026-03-20 after initial definition*
+*Last updated: 2026-03-25 after Phase 26 planning*

@@ -522,9 +522,7 @@ extensions:
       TOKENIZERS_PARALLELISM: "false"
       MEM0_ENABLE_GRAPH: "true"
       MEM0_CHROMA_PATH: /data/mem0/chroma
-      NEO4J_URL: bolt://localhost:7687
-      NEO4J_USERNAME: neo4j
-      NEO4J_PASSWORD: gooseclaw
+      MEM0_KUZU_PATH: /data/mem0/kuzu
       CONFIG_DIR: /data/config
     env_keys: []
     timeout: 300
@@ -548,7 +546,7 @@ try:
             'enabled': True, 'type': 'stdio', 'name': 'mem0-memory',
             'description': 'Long-term memory with semantic search and contradiction resolution',
             'cmd': 'python3', 'args': ['/app/docker/memory/server.py'],
-            'envs': {'MEM0_USER_ID': 'default', 'MEM0_TELEMETRY': 'false', 'OPENBLAS_NUM_THREADS': '1', 'HF_HUB_OFFLINE': '0', 'HF_HOME': '/data/hf_cache', 'TOKENIZERS_PARALLELISM': 'false', 'MEM0_ENABLE_GRAPH': 'true', 'MEM0_CHROMA_PATH': '/data/mem0/chroma', 'NEO4J_URL': 'bolt://localhost:7687', 'NEO4J_USERNAME': 'neo4j', 'NEO4J_PASSWORD': 'gooseclaw', 'CONFIG_DIR': '/data/config'},
+            'envs': {'MEM0_USER_ID': 'default', 'MEM0_TELEMETRY': 'false', 'OPENBLAS_NUM_THREADS': '1', 'HF_HUB_OFFLINE': '0', 'HF_HOME': '/data/hf_cache', 'TOKENIZERS_PARALLELISM': 'false', 'MEM0_ENABLE_GRAPH': 'true', 'MEM0_CHROMA_PATH': '/data/mem0/chroma', 'MEM0_KUZU_PATH': '/data/mem0/kuzu', 'CONFIG_DIR': '/data/config'},
             'env_keys': [],
             'timeout': 300, 'bundled': None, 'available_tools': [],
         },
@@ -678,7 +676,7 @@ fi
 # Re-indexes system namespace on every boot (system.md, onboarding.md, schemas/).
 # Runtime namespace (user facts, integrations) is never wiped.
 
-mkdir -p /data/knowledge/chroma /data/mem0/chroma /data/hf_cache
+mkdir -p /data/knowledge/chroma /data/mem0/chroma /data/mem0/kuzu /data/hf_cache
 chown -R gooseclaw:gooseclaw /data/knowledge /data/mem0 /data/hf_cache
 
 # Pre-download sentence-transformers model so MCP subprocess finds it cached.
@@ -722,79 +720,10 @@ fi
 export KNOWLEDGE_DB_PATH="/data/knowledge/chroma"
 export MEM0_CHROMA_PATH="/data/mem0/chroma"
 
-# ---- neo4j graph database (background) ----
-if command -v neo4j &>/dev/null; then
-    echo "[neo4j] starting graph database..."
-    mkdir -p /data/neo4j
-    chown -R neo4j:neo4j /data/neo4j 2>/dev/null || true
-
-    # Self-healing Neo4j auth. Try set-initial-password first (works on
-    # fresh data dirs). After Neo4j starts, verify auth actually works.
-    # Only nuke the system db as a last resort to preserve catalog metadata.
-    _NEO4J_PW="gooseclaw"
-    neo4j-admin dbms set-initial-password "$_NEO4J_PW" 2>/dev/null || true
-    export NEO4J_AUTH="neo4j/$_NEO4J_PW"
-    export NEO4J_USERNAME=neo4j
-    export NEO4J_PASSWORD="$_NEO4J_PW"
-    export NEO4J_server_memory_heap_initial__size=128m
-    export NEO4J_server_memory_heap_max__size=256m
-    export NEO4J_server_memory_pagecache__size=64m
-    export NEO4J_server_threads_worker__count=4
-    export NEO4J_server_directories_data=/data/neo4j
-    export NEO4J_server_analytics_enabled=false
-
-    neo4j console &
-    NEO4J_PID=$!
-
-    echo "[neo4j] waiting for bolt://localhost:7687 (up to 120s)..."
-    NEO4J_READY=false
-    for i in $(seq 1 120); do
-        if python3 -c "import socket; socket.create_connection(('localhost',7687),1)" 2>/dev/null; then
-            NEO4J_READY=true
-            echo "[neo4j] ready (${i}s)"
-            break
-        fi
-        if ! kill -0 "$NEO4J_PID" 2>/dev/null; then
-            echo "[neo4j] FAILED to start (process exited)"
-            break
-        fi
-        sleep 1
-    done
-
-    if [ "$NEO4J_READY" = "true" ]; then
-        # verify auth works. if not, nuke system db and restart neo4j.
-        if ! python3 -c "
-from neo4j import GraphDatabase
-d = GraphDatabase.driver('bolt://localhost:7687', auth=('neo4j', '$_NEO4J_PW'))
-d.verify_connectivity()
-d.close()
-" 2>/dev/null; then
-            echo "[neo4j] auth mismatch detected, resetting system db..."
-            kill "$NEO4J_PID" 2>/dev/null; sleep 2
-            for _datadir in /data/neo4j /var/lib/neo4j/data; do
-                rm -rf "$_datadir/databases/system" "$_datadir/transactions/system" 2>/dev/null || true
-            done
-            neo4j-admin dbms set-initial-password "$_NEO4J_PW" 2>/dev/null || true
-            neo4j console &
-            NEO4J_PID=$!
-            echo "[neo4j] restarting after auth reset..."
-            for i in $(seq 1 60); do
-                python3 -c "import socket; socket.create_connection(('localhost',7687),1)" 2>/dev/null && break
-                sleep 1
-            done
-            echo "[neo4j] back up (${i}s)"
-        else
-            echo "[neo4j] auth verified"
-        fi
-        export NEO4J_ENABLED=true
-        export MEM0_ENABLE_GRAPH=true
-        echo "[neo4j] graph memory enabled"
-    else
-        echo "[neo4j] graph memory disabled (neo4j not ready)"
-    fi
-else
-    echo "[neo4j] not installed, graph memory disabled"
-fi
+# ---- graph memory (Kuzu — embedded, no separate service) ----
+export MEM0_ENABLE_GRAPH=true
+export MEM0_KUZU_PATH="/data/mem0/kuzu"
+echo "[kuzu] graph memory enabled (embedded at /data/mem0/kuzu)"
 
 # ─── MOIM (critical rules injected every turn, slim ~100 lines) ────────────
 # Full session context (onboarding, procedures, docs) loads via .goosehints

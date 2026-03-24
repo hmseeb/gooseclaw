@@ -253,14 +253,12 @@ def build_mem0_config():
         "version": "v1.1",
     }
 
-    # Graph store (Neo4j)
+    # Graph store (Kuzu — embedded, no separate service needed)
     if os.environ.get("MEM0_ENABLE_GRAPH", "").lower() in ("true", "1", "yes"):
         config["graph_store"] = {
-            "provider": "neo4j",
+            "provider": "kuzu",
             "config": {
-                "url": os.environ.get("NEO4J_URL", "bolt://localhost:7687"),
-                "username": os.environ.get("NEO4J_USERNAME", "neo4j"),
-                "password": os.environ.get("NEO4J_PASSWORD", "neo4j"),
+                "db": os.environ.get("MEM0_KUZU_PATH", "/data/mem0/kuzu"),
             }
         }
 

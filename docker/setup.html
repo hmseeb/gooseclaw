@@ -1646,6 +1646,22 @@ body::after {
       <div id="groqFormatError" style="display:none;font-size:12px;color:var(--error);margin-top:4px"></div>
     </div>
     <div class="field">
+      <label>Memory LLM Provider</label>
+      <select id="mem0Provider" onchange="onMem0ProviderChange()">
+        <option value="groq">Groq (free tier)</option>
+        <option value="openai">OpenAI</option>
+        <option value="anthropic">Anthropic</option>
+        <option value="google">Google</option>
+        <option value="deepseek">DeepSeek</option>
+        <option value="together">Together AI</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Memory LLM Model</label>
+      <input type="text" id="mem0Model" placeholder="llama-3.3-70b-versatile">
+      <div class="field-hint">LLM used for memory extraction. Groq is free. Uses your provider's API key unless a Groq key is set above.</div>
+    </div>
+    <div class="field">
       <label>Password</label>
       <div class="secret-field-wrapper">
         <input type="password" id="webPassword" placeholder="choose a password for web access">
@@ -3383,6 +3399,28 @@ function validateGroqFormat(input) {
   }
 }
 
+/* ── mem0 provider/model ── */
+
+const mem0Models = {
+  groq: 'llama-3.3-70b-versatile',
+  openai: 'gpt-4.1-nano',
+  anthropic: 'claude-haiku-4-5-20251001',
+  google: 'gemini-2.0-flash-lite',
+  deepseek: 'deepseek-chat',
+  together: 'meta-llama/Llama-3.3-70B-Instruct-Turbo',
+};
+
+function onMem0ProviderChange() {
+  const sel = document.getElementById('mem0Provider');
+  const modelEl = document.getElementById('mem0Model');
+  if (!sel || !modelEl) return;
+  const prov = sel.value;
+  if (mem0Models[prov]) {
+    modelEl.value = mem0Models[prov];
+    modelEl.placeholder = mem0Models[prov];
+  }
+}
+
 /* ── clipboard helpers ── */
 
 function copyRecoverySecret() {
@@ -4511,6 +4549,16 @@ function prefillWizard(config) {
     groqEl.placeholder = '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022 (clear and re-enter to change)';
   }
 
+  /* pre-fill mem0 provider/model */
+  const m0pEl = document.getElementById('mem0Provider');
+  if (m0pEl && config.mem0_provider) {
+    m0pEl.value = config.mem0_provider;
+  }
+  const m0mEl = document.getElementById('mem0Model');
+  if (m0mEl && config.mem0_model) {
+    m0mEl.value = config.mem0_model;
+  }
+
   /* pre-fill advanced multi-model settings */
   if (config.lead_provider) {
     /* open the advanced panel */
@@ -4879,6 +4927,8 @@ async function saveConfig() {
     timezone: document.getElementById('timezone')?.value || 'UTC',
     telegram_bot_token: document.getElementById('telegramToken')?.value || '',
     groq_extraction_key: document.getElementById('groqExtractionKey')?.value || '',
+    mem0_provider: document.getElementById('mem0Provider')?.value || 'groq',
+    mem0_model: document.getElementById('mem0Model')?.value || '',
     web_auth_token: document.getElementById('webPassword')?.value || '',
   };
 

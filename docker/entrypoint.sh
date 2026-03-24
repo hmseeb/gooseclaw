@@ -288,6 +288,12 @@ elif pt in env_map and ak:
 gek = c.get('groq_extraction_key', '')
 if gek and not os.environ.get('GROQ_API_KEY'):
     print(f'export GROQ_API_KEY={shlex.quote(gek)}')
+m0p = c.get('mem0_provider', '')
+m0m = c.get('mem0_model', '')
+if m0p:
+    print(f'export MEM0_PROVIDER={shlex.quote(m0p)}')
+if m0m:
+    print(f'export MEM0_MODEL={shlex.quote(m0m)}')
 tg = c.get('telegram_bot_token', '')
 if tg and not os.environ.get('TELEGRAM_BOT_TOKEN'):
     print(f'export TELEGRAM_BOT_TOKEN={shlex.quote(tg)}')
@@ -567,26 +573,55 @@ try:
                 changed = True
             if changed:
                 updated.append(f'{name} (envs updated)')
-    # inject GROQ_API_KEY from setup.json into mem0 extension envs
+    # inject mem0 provider API key into mem0 extension envs
     import json as _json
     try:
         with open('$CONFIG_DIR/setup.json') as _sf:
             _setup = _json.load(_sf)
         import os as _os
-        _gk = _setup.get('groq_extraction_key', '')
-        if not _gk:
-            # fallback: check vault
+        _m0p = _setup.get('mem0_provider', '') or 'groq'
+        _key_env_map = {
+            'groq': 'GROQ_API_KEY',
+            'openai': 'OPENAI_API_KEY',
+            'anthropic': 'ANTHROPIC_API_KEY',
+            'google': 'GOOGLE_API_KEY',
+            'deepseek': 'DEEPSEEK_API_KEY',
+            'together': 'TOGETHER_API_KEY',
+        }
+        _vault_key_map = {
+            'groq': ['groq_api_key', 'GROQ_API_KEY'],
+            'openai': ['openai_api_key', 'OPENAI_API_KEY'],
+            'anthropic': ['ANTHROPIC_SECRET_KEY', 'ANTHROPIC_API_KEY', 'anthropic_api_key'],
+            'google': ['google_api_key', 'GOOGLE_API_KEY'],
+            'deepseek': ['deepseek_api_key', 'DEEPSEEK_API_KEY'],
+            'together': ['together_api_key', 'TOGETHER_API_KEY'],
+        }
+        _target_env = _key_env_map.get(_m0p, 'GROQ_API_KEY')
+        _mk = ''
+        # 1. legacy groq_extraction_key
+        if _m0p == 'groq':
+            _mk = _setup.get('groq_extraction_key', '')
+        # 2. vault
+        if not _mk:
             _vault_path = _os.path.join('$DATA_DIR', 'secrets', 'vault.yaml')
             if _os.path.exists(_vault_path):
                 with open(_vault_path) as _vf:
                     _vault = yaml.safe_load(_vf) or {}
-                _gk = _vault.get('groq_api_key', '') or _vault.get('GROQ_API_KEY', '')
-        if not _gk:
-            # fallback: check env var (Railway env vars)
-            _gk = _os.environ.get('GROQ_API_KEY', '')
-        if _gk and 'mem0-memory' in exts:
-            exts['mem0-memory'].setdefault('envs', {})['GROQ_API_KEY'] = _gk
-            updated.append('mem0-memory (groq key injected)')
+                for _vk in _vault_key_map.get(_m0p, []):
+                    _mk = _vault.get(_vk, '')
+                    if _mk:
+                        break
+        # 3. env var
+        if not _mk:
+            _mk = _os.environ.get(_target_env, '')
+        # 4. saved_keys
+        if not _mk:
+            _saved = _setup.get('saved_keys', {})
+            if isinstance(_saved, dict):
+                _mk = _saved.get(_m0p, '')
+        if _mk and 'mem0-memory' in exts:
+            exts['mem0-memory'].setdefault('envs', {})[_target_env] = _mk
+            updated.append(f'mem0-memory ({_target_env} injected)')
     except Exception:
         pass
     if updated:

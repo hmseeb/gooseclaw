@@ -2180,6 +2180,11 @@ def validate_setup_config(config):
     if groq_key and not groq_key.startswith("gsk_"):
         errors.append("groq_extraction_key should start with 'gsk_'")
 
+    # mem0 provider validation
+    mem0_provider = config.get("mem0_provider", "")
+    if mem0_provider and mem0_provider not in ("groq", "openai", "anthropic", "google", "deepseek", "together"):
+        errors.append(f"unknown mem0_provider: {mem0_provider!r}")
+
     # telegram token format check (if provided)
     tg = config.get("telegram_bot_token", "")
     if tg and ":" not in tg:
@@ -2192,7 +2197,7 @@ def validate_setup_config(config):
 
     # string field max-length guard (prevent absurdly large values)
     for field in ("api_key", "claude_setup_token", "custom_key", "custom_url", "model",
-                  "lead_provider", "lead_model"):
+                  "lead_provider", "lead_model", "mem0_provider", "mem0_model"):
         val = config.get(field, "")
         if isinstance(val, str) and len(val) > 2000:
             errors.append(f"{field} exceeds maximum length (2000 chars)")
@@ -3278,6 +3283,14 @@ _PROVIDER_PIP_PACKAGES = {
     "google": ["google-generativeai"],
 }
 
+# Additional pip packages needed for mem0 LLM providers.
+_MEM0_PROVIDER_PIP_PACKAGES = {
+    "anthropic": ["anthropic"],
+    "google": ["google-generativeai"],
+    "together": ["together"],
+    "deepseek": ["openai"],  # deepseek uses openai-compatible SDK
+}
+
 
 def _install_provider_packages(provider_type):
     """Install provider-specific pip packages if missing."""
@@ -3345,6 +3358,24 @@ def apply_config(config):
 
     # install provider-specific packages for mem0 extraction
     _install_provider_packages(provider_type)
+
+    # install mem0 LLM provider packages if different from main provider
+    mem0_provider = config.get("mem0_provider", "")
+    if mem0_provider:
+        mem0_pkgs = _MEM0_PROVIDER_PIP_PACKAGES.get(mem0_provider, [])
+        for pkg in mem0_pkgs:
+            try:
+                __import__(pkg.replace("-", "_"))
+            except ImportError:
+                _gateway_log.info(f"installing {pkg} for mem0 provider {mem0_provider}...")
+                try:
+                    subprocess.run(
+                        ["pip3", "install", "--break-system-packages", "-q", pkg],
+                        check=True, timeout=120, capture_output=True,
+                    )
+                    _gateway_log.info(f"installed {pkg}")
+                except Exception as e:
+                    _gateway_log.warning(f"failed to install {pkg}: {e}")
 
     if provider_type == "claude-code":
         os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = config.get("claude_setup_token", "")

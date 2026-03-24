@@ -237,9 +237,11 @@ def build_mem0_config():
     }
     if api_key:
         llm_config["api_key"] = api_key
-    # OpenRouter uses OpenAI SDK with custom base URL
+    # OpenRouter uses OpenAI SDK with custom base URL.
+    # Set env var directly — more reliable than config keys.
     if provider == "openrouter":
-        llm_config["openai_base_url"] = "https://openrouter.ai/api/v1"
+        os.environ["OPENAI_BASE_URL"] = "https://openrouter.ai/api/v1"
+        os.environ.setdefault("OPENAI_API_KEY", api_key or "")
 
     config = {
         "vector_store": {

@@ -49,6 +49,46 @@ def _read_vault_secret(key):
     return ""
 
 
+_groq_patched = False
+
+
+def _patch_groq_xml():
+    """Patch Groq SDK to fix malformed XML function calls from llama models.
+
+    llama-3.3-70b sometimes generates:
+        <function=extract_entities {...}  </function>
+    instead of:
+        <function=extract_entities {...}></function>
+
+    We intercept the response and fix the XML before mem0 parses it.
+    """
+    global _groq_patched
+    if _groq_patched:
+        return
+    try:
+        import re
+        from groq.resources.chat import completions as _comp
+        _orig = _comp.Completions.create
+
+        def _patched(self, **kwargs):
+            resp = _orig(self, **kwargs)
+            if resp.choices:
+                for choice in resp.choices:
+                    msg = choice.message
+                    if msg and msg.content and "</function>" in msg.content:
+                        msg.content = re.sub(
+                            r'([^>])\s*</function>',
+                            r'\1></function>',
+                            msg.content,
+                        )
+            return resp
+
+        _comp.Completions.create = _patched
+        _groq_patched = True
+    except (ImportError, AttributeError):
+        pass
+
+
 def build_mem0_config():
     """Build mem0 config dict from setup.json and environment variables."""
     # Get Groq API key: env var > vault > setup.json saved_keys
@@ -60,6 +100,8 @@ def build_mem0_config():
         if setup:
             saved = setup.get("saved_keys", {})
             api_key = saved.get("groq", "") if isinstance(saved, dict) else ""
+
+    _patch_groq_xml()
 
     llm_config = {
         "model": MEM0_LLM_MODEL,

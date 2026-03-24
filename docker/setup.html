@@ -1937,6 +1937,42 @@ body::after {
       </div>
     </div>
 
+    <!-- memory LLM config section -->
+    <div class="lead-config-section" id="mem0ConfigSection" style="display:none">
+      <div class="channel-routing show">
+        <div class="channel-routing-header" onclick="toggleMem0Config()">
+          <h3>Memory LLM</h3>
+          <span class="channel-routing-toggle">&#9654;</span>
+        </div>
+        <div class="channel-routing-body" id="mem0ConfigBody">
+          <div class="lead-config-summary" id="mem0ConfigSummary"></div>
+          <div class="lead-config-edit" id="mem0ConfigEdit" style="display:none">
+            <div class="field" style="margin-bottom:10px">
+              <label style="font-size:12px;color:var(--text-secondary)">Provider</label>
+              <select id="dashMem0Provider" onchange="onDashMem0ProviderChange()">
+                <option value="groq">Groq (free tier)</option>
+                <option value="openai">OpenAI (recommended)</option>
+                <option value="anthropic">Anthropic (experimental)</option>
+                <option value="google">Google</option>
+                <option value="deepseek">DeepSeek</option>
+                <option value="together">Together AI</option>
+                <option value="openrouter">OpenRouter</option>
+              </select>
+              <div id="dashMem0CompatHint" class="field-hint" style="margin-top:4px"></div>
+            </div>
+            <div class="field" style="margin-bottom:10px">
+              <label style="font-size:12px;color:var(--text-secondary)">Model</label>
+              <input type="text" id="dashMem0Model" placeholder="llama-3.3-70b-versatile">
+            </div>
+            <div class="edit-actions">
+              <button class="save-btn" onclick="saveMem0Config()">Save</button>
+              <button class="cancel-btn" onclick="cancelMem0ConfigEdit()">Cancel</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="summary-container">
       <div class="dashboard-field" id="df-timezone">
         <span class="dashboard-field-label">Timezone</span>
@@ -3564,6 +3600,9 @@ function renderDashboardValues(config) {
 
   /* lead config */
   renderLeadConfigSection(config);
+
+  /* mem0 config */
+  renderMem0ConfigSection(config);
 }
 
 /* ── lead config on dashboard ── */
@@ -3802,6 +3841,110 @@ async function removeLeadConfig() {
     }
   } catch(e) {
     alert('Could not remove lead config');
+  }
+}
+
+/* ── mem0 config on dashboard ── */
+function renderMem0ConfigSection(config) {
+  const section = document.getElementById('mem0ConfigSection');
+  const summary = document.getElementById('mem0ConfigSummary');
+  if (!section || !summary) return;
+
+  section.style.display = '';
+  const routing = section.querySelector('.channel-routing');
+
+  const mp = config.mem0_provider || 'groq';
+  const mm = config.mem0_model || mem0Models[mp] || 'llama-3.3-70b-versatile';
+
+  const provNames = {
+    groq: 'Groq', openai: 'OpenAI', anthropic: 'Anthropic',
+    google: 'Google', deepseek: 'DeepSeek', together: 'Together AI',
+    openrouter: 'OpenRouter'
+  };
+  const provName = provNames[mp] || mp;
+
+  if (routing) routing.classList.add('expanded');
+
+  summary.innerHTML = `
+    <div class="channel-route-row" style="border-bottom:none">
+      <span class="channel-route-label" style="flex:1">
+        ${provName} <span style="color:var(--text-tertiary);font-weight:400;margin-left:4px">${mm}</span>
+      </span>
+      <button class="dashboard-edit-btn" onclick="startMem0ConfigEdit()">edit</button>
+    </div>`;
+}
+
+function toggleMem0Config() {
+  const section = document.getElementById('mem0ConfigSection');
+  const routing = section?.querySelector('.channel-routing');
+  if (!routing) return;
+  routing.classList.toggle('expanded');
+}
+
+function onDashMem0ProviderChange() {
+  const sel = document.getElementById('dashMem0Provider');
+  const modelEl = document.getElementById('dashMem0Model');
+  const hintEl = document.getElementById('dashMem0CompatHint');
+  if (!sel || !modelEl) return;
+  const prov = sel.value;
+  if (mem0Models[prov]) {
+    modelEl.value = mem0Models[prov];
+    modelEl.placeholder = mem0Models[prov];
+  }
+  if (hintEl && mem0Compat[prov]) {
+    hintEl.innerHTML = '<span style="color:' + mem0Compat[prov].color + '">\u25cf</span> ' + mem0Compat[prov].text;
+  } else if (hintEl) {
+    hintEl.innerHTML = '';
+  }
+}
+
+function startMem0ConfigEdit() {
+  const summary = document.getElementById('mem0ConfigSummary');
+  const edit = document.getElementById('mem0ConfigEdit');
+  if (summary) summary.style.display = 'none';
+  if (edit) edit.style.display = '';
+
+  const config = dashboardConfig;
+  const mp = config.mem0_provider || 'groq';
+  const sel = document.getElementById('dashMem0Provider');
+  if (sel) { sel.value = mp; onDashMem0ProviderChange(); }
+
+  const mm = document.getElementById('dashMem0Model');
+  if (mm && config.mem0_model) mm.value = config.mem0_model;
+}
+
+function cancelMem0ConfigEdit() {
+  const summary = document.getElementById('mem0ConfigSummary');
+  const edit = document.getElementById('mem0ConfigEdit');
+  if (summary) summary.style.display = '';
+  if (edit) edit.style.display = 'none';
+}
+
+async function saveMem0Config() {
+  const config = { ...dashboardConfig };
+  config.mem0_provider = document.getElementById('dashMem0Provider')?.value || 'groq';
+  config.mem0_model = document.getElementById('dashMem0Model')?.value || '';
+  config.saved_keys = savedKeys;
+
+  try {
+    const resp = await fetch('/api/setup/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    });
+    const data = await resp.json();
+    if (data.success) {
+      dashboardConfig = config;
+      cancelMem0ConfigEdit();
+      renderMem0ConfigSection(config);
+      const successEl = document.getElementById('dashboardSuccess');
+      if (successEl) successEl.classList.add('show');
+      pollDashboardRestart();
+    } else {
+      alert('Save failed: ' + (data.error || 'unknown error'));
+    }
+  } catch(e) {
+    alert('Could not save memory LLM config');
   }
 }
 

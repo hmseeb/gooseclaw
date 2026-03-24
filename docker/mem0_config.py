@@ -206,6 +206,72 @@ def _patch_anthropic():
         pass
 
 
+def build_mem0_config_for_provider(provider, model):
+    """Build mem0 config for a specific provider/model (used by fallback chain).
+
+    Returns a config dict suitable for Memory.from_config(), or None if the
+    provider is unsupported or has no API key.
+    """
+    if provider not in PROVIDER_MAP:
+        return None
+
+    setup = _load_setup()
+    api_key = _find_api_key(provider, setup)
+    if not api_key:
+        return None
+
+    mem0_provider = PROVIDER_MAP[provider]
+
+    # Apply provider-specific patches
+    if provider == "groq":
+        _patch_groq_xml()
+    elif provider == "anthropic":
+        _patch_anthropic()
+
+    llm_config = {
+        "model": model,
+        "max_tokens": 2000,
+    }
+    llm_config["api_key"] = api_key
+
+    # OpenRouter uses OpenAI SDK with custom base URL
+    if provider == "openrouter":
+        os.environ["OPENAI_BASE_URL"] = "https://openrouter.ai/api/v1"
+        os.environ.setdefault("OPENAI_API_KEY", api_key)
+
+    config = {
+        "vector_store": {
+            "provider": "chroma",
+            "config": {
+                "collection_name": "mem0_memories",
+                "path": os.environ.get("MEM0_CHROMA_PATH", "/data/knowledge/chroma"),
+            }
+        },
+        "embedder": {
+            "provider": "huggingface",
+            "config": {
+                "model": "sentence-transformers/all-MiniLM-L6-v2",
+            }
+        },
+        "llm": {
+            "provider": mem0_provider,
+            "config": llm_config,
+        },
+        "version": "v1.1",
+    }
+
+    # Graph store (Kuzu) if enabled
+    if os.environ.get("MEM0_ENABLE_GRAPH", "").lower() in ("true", "1", "yes"):
+        config["graph_store"] = {
+            "provider": "kuzu",
+            "config": {
+                "db": ":memory:",
+            }
+        }
+
+    return config
+
+
 def build_mem0_config():
     """Build mem0 config dict from setup.json and environment variables."""
     setup = _load_setup()

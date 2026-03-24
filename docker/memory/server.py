@@ -46,25 +46,32 @@ def memory_add(content: str) -> str:
     Args:
         content: Natural language content to remember
     """
-    try:
-        result = memory.add(
-            messages=[{"role": "user", "content": content}],
-            user_id=USER_ID,
-        )
-        return json.dumps(result, default=str)
-    except Exception as e:
-        # MCP stderr doesn't reach Railway logs, write to file
-        import traceback
+    import time
+    last_err = None
+    for attempt in range(3):
         try:
-            with open("/data/mem0_debug.log", "a") as df:
-                import datetime
-                df.write(f"\n{datetime.datetime.utcnow().isoformat()} memory_add FAILED\n")
-                df.write(f"error: {type(e).__name__}: {e}\n")
-                df.write(traceback.format_exc())
-                df.write("\n")
-        except Exception:
-            pass
-        return f"Failed to store memory: {e}"
+            result = memory.add(
+                messages=[{"role": "user", "content": content}],
+                user_id=USER_ID,
+            )
+            return json.dumps(result, default=str)
+        except Exception as e:
+            last_err = e
+            if attempt < 2:
+                time.sleep(0.5)
+                continue
+    # all retries failed, log the last error
+    import traceback
+    try:
+        with open("/data/mem0_debug.log", "a") as df:
+            import datetime
+            df.write(f"\n{datetime.datetime.utcnow().isoformat()} memory_add FAILED (3 attempts)\n")
+            df.write(f"error: {type(last_err).__name__}: {last_err}\n")
+            df.write(traceback.format_exc())
+            df.write("\n")
+    except Exception:
+        pass
+    return f"Failed to store memory: {last_err}"
 
 
 @mcp.tool()

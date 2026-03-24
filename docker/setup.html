@@ -1882,13 +1882,52 @@ body::after {
           <button class="save-btn" id="addModelSaveBtn" onclick="submitAddModel()">Add</button>
         </div>
       </div>
-      <div class="channel-routing" id="channelRouting">
-        <div class="channel-routing-header" onclick="toggleChannelRouting()">
-          <h3>Channel Settings</h3>
-          <span class="channel-routing-toggle">&#9654;</span>
-        </div>
-        <div class="channel-routing-body" id="channelRoutingBody"></div>
       </div>
+    </div>
+
+    <div class="summary-container">
+      <div class="dashboard-field" id="df-timezone">
+        <span class="dashboard-field-label">Timezone</span>
+        <span class="dashboard-field-value" id="dfv-timezone"></span>
+        <div class="dashboard-field-edit" id="dfe-timezone">
+          <select id="dfi-timezone"></select>
+        </div>
+        <button class="dashboard-edit-btn" onclick="startDashboardEdit('timezone')">edit</button>
+      </div>
+      <div class="dashboard-field" id="df-telegram">
+        <span class="dashboard-field-label">Telegram</span>
+        <span class="dashboard-field-value" id="dfv-telegram"></span>
+        <div class="dashboard-field-edit" id="dfe-telegram">
+          <div class="secret-field-wrapper">
+            <input type="password" id="dfi-telegram" placeholder="bot token from @BotFather">
+            <button type="button" class="secret-toggle-btn" onclick="toggleSecretVisibility(this)" title="Toggle visibility">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
+        </div>
+        <button class="dashboard-edit-btn" onclick="startDashboardEdit('telegram')">edit</button>
+      </div>
+      <div class="dashboard-field" id="df-authtoken">
+        <span class="dashboard-field-label">Password</span>
+        <span class="dashboard-field-value" id="dfv-authtoken"></span>
+        <div class="dashboard-field-edit" id="dfe-authtoken">
+          <div class="secret-field-wrapper">
+            <input type="password" id="dfi-authtoken" placeholder="enter new password">
+            <button type="button" class="secret-toggle-btn" onclick="toggleSecretVisibility(this)" title="Toggle visibility">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
+        </div>
+        <button class="dashboard-edit-btn" onclick="startDashboardEdit('authtoken')">edit</button>
+      </div>
+    </div>
+
+    <div class="channel-routing" id="channelRouting">
+      <div class="channel-routing-header" onclick="toggleChannelRouting()">
+        <h3>Channel Settings</h3>
+        <span class="channel-routing-toggle">&#9654;</span>
+      </div>
+      <div class="channel-routing-body" id="channelRoutingBody"></div>
     </div>
 
     <!-- lead model config section -->
@@ -1982,42 +2021,6 @@ body::after {
       </div>
     </div>
 
-    <div class="summary-container">
-      <div class="dashboard-field" id="df-timezone">
-        <span class="dashboard-field-label">Timezone</span>
-        <span class="dashboard-field-value" id="dfv-timezone"></span>
-        <div class="dashboard-field-edit" id="dfe-timezone">
-          <select id="dfi-timezone"></select>
-        </div>
-        <button class="dashboard-edit-btn" onclick="startDashboardEdit('timezone')">edit</button>
-      </div>
-      <div class="dashboard-field" id="df-telegram">
-        <span class="dashboard-field-label">Telegram</span>
-        <span class="dashboard-field-value" id="dfv-telegram"></span>
-        <div class="dashboard-field-edit" id="dfe-telegram">
-          <div class="secret-field-wrapper">
-            <input type="password" id="dfi-telegram" placeholder="bot token from @BotFather">
-            <button type="button" class="secret-toggle-btn" onclick="toggleSecretVisibility(this)" title="Toggle visibility">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-            </button>
-          </div>
-        </div>
-        <button class="dashboard-edit-btn" onclick="startDashboardEdit('telegram')">edit</button>
-      </div>
-      <div class="dashboard-field" id="df-authtoken">
-        <span class="dashboard-field-label">Password</span>
-        <span class="dashboard-field-value" id="dfv-authtoken"></span>
-        <div class="dashboard-field-edit" id="dfe-authtoken">
-          <div class="secret-field-wrapper">
-            <input type="password" id="dfi-authtoken" placeholder="enter new password">
-            <button type="button" class="secret-toggle-btn" onclick="toggleSecretVisibility(this)" title="Toggle visibility">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-            </button>
-          </div>
-        </div>
-        <button class="dashboard-edit-btn" onclick="startDashboardEdit('authtoken')">edit</button>
-      </div>
-    </div>
     <div id="pair-card-container" style="display:none"></div>
     <div class="dashboard-actions">
       <div class="dashboard-links">

@@ -3625,7 +3625,7 @@ function renderLeadConfigSection(config) {
   const routing = section.querySelector('.channel-routing');
 
   if (!lp) {
-    if (routing) routing.classList.add('expanded');
+    if (routing) routing.classList.remove('expanded');
     summary.innerHTML = `
       <div class="channel-route-row" style="border-bottom:none">
         <span class="channel-route-label" style="flex:1;color:var(--text-tertiary)">
@@ -3872,7 +3872,7 @@ function renderMem0ConfigSection(config) {
   };
   const provName = provNames[mp] || mp;
 
-  if (routing) routing.classList.add('expanded');
+  if (routing) routing.classList.remove('expanded');
 
   summary.innerHTML = `
     <div class="channel-route-row" style="border-bottom:none">

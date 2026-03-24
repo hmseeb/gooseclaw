@@ -156,5 +156,6 @@ Phases execute in numeric order: 22 → 23 → 24 → 25 → 26
 | v3.0 Rich Media | 11-17 | 15 | Complete | 2026-03-15 |
 | v4.0 Hardening | 18-21 | 12 | Complete | 2026-03-16 |
 | v5.0 mem0 Memory | 22-25 | 8 | Complete | 2026-03-20 |
+| v5.1 Fallback | 26 | 3 | Complete | 2026-03-25 |
 
-**Total: 25 phases, 60 plans shipped across 5 milestones. Phase 26 in progress.**
+**Total: 26 phases, 63 plans shipped across 6 milestones.**

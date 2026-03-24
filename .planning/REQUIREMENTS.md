@@ -46,15 +46,15 @@
 
 ### Fallback Provider System
 
-- [ ] **FB-01**: Error classification distinguishes retriable errors (429, 5xx, timeout, connection) from permanent errors (401, 403, 400)
-- [ ] **FB-02**: Main LLM (goose agent) tries fallback providers in user-defined order when primary fails with retriable error
-- [ ] **FB-03**: mem0 extraction LLM tries fallback providers in user-defined order when primary fails
-- [ ] **FB-04**: Fallback provider config validated in `validate_setup_config()` (provider exists, model present, provider has API key)
-- [ ] **FB-05**: Fallback config persists in setup.json as `fallback_providers` and `mem0_fallback_providers` arrays
-- [ ] **FB-06**: Setup wizard (first-time setup, step 3) includes fallback provider configuration with drag-to-reorder
-- [ ] **FB-07**: Dashboard settings (post-setup) includes fallback provider configuration with drag-to-reorder
-- [ ] **FB-08**: Entrypoint rehydrates fallback provider env vars from setup.json on container restart
-- [ ] **FB-09**: Primary provider is always tried first on each new message (fallback is transient, not sticky)
+- [x] **FB-01**: Error classification distinguishes retriable errors (429, 5xx, timeout, connection) from permanent errors (401, 403, 400)
+- [x] **FB-02**: Main LLM (goose agent) tries fallback providers in user-defined order when primary fails with retriable error
+- [x] **FB-03**: mem0 extraction LLM tries fallback providers in user-defined order when primary fails
+- [x] **FB-04**: Fallback provider config validated in `validate_setup_config()` (provider exists, model present, provider has API key)
+- [x] **FB-05**: Fallback config persists in setup.json as `fallback_providers` and `mem0_fallback_providers` arrays
+- [x] **FB-06**: Setup wizard (first-time setup, step 3) includes fallback provider configuration with drag-to-reorder
+- [x] **FB-07**: Dashboard settings (post-setup) includes fallback provider configuration with drag-to-reorder
+- [x] **FB-08**: Entrypoint rehydrates fallback provider env vars from setup.json on container restart
+- [x] **FB-09**: Primary provider is always tried first on each new message (fallback is transient, not sticky)
 
 ## v5.x Requirements (Future)
 
@@ -104,19 +104,19 @@
 | GRAPH-02 | Phase 25 | Complete |
 | GRAPH-03 | Phase 25 | Complete |
 | GRAPH-04 | Phase 25 | Complete |
-| FB-01 | Phase 26 | Planned |
-| FB-02 | Phase 26 | Planned |
-| FB-03 | Phase 26 | Planned |
-| FB-04 | Phase 26 | Planned |
-| FB-05 | Phase 26 | Planned |
-| FB-06 | Phase 26 | Planned |
-| FB-07 | Phase 26 | Planned |
-| FB-08 | Phase 26 | Planned |
-| FB-09 | Phase 26 | Planned |
+| FB-01 | Phase 26 | Complete |
+| FB-02 | Phase 26 | Complete |
+| FB-03 | Phase 26 | Complete |
+| FB-04 | Phase 26 | Complete |
+| FB-05 | Phase 26 | Complete |
+| FB-06 | Phase 26 | Complete |
+| FB-07 | Phase 26 | Complete |
+| FB-08 | Phase 26 | Complete |
+| FB-09 | Phase 26 | Complete |
 
 **Coverage:**
 - v5.0 requirements: 22 total, all complete
-- v5.1 fallback requirements: 9 total, all planned
+- v5.1 fallback requirements: 9 total, all complete
 - Unmapped: 0
 
 ---

@@ -1635,6 +1635,17 @@ body::after {
       </div>
     </div>
     <div class="field">
+      <label>Groq API Key <span style="color:var(--error);font-size:12px">(required for memory)</span></label>
+      <div class="secret-field-wrapper">
+        <input type="password" id="groqExtractionKey" placeholder="gsk_..." onblur="validateGroqFormat(this)">
+        <button type="button" class="secret-toggle-btn" onclick="toggleSecretVisibility(this)" title="Toggle visibility">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
+      </div>
+      <div class="field-hint">free at <a href="https://console.groq.com/keys" target="_blank" style="color:var(--accent)">console.groq.com/keys</a>. powers long-term memory (mem0).</div>
+      <div id="groqFormatError" style="display:none;font-size:12px;color:var(--error);margin-top:4px"></div>
+    </div>
+    <div class="field">
       <label>Password</label>
       <div class="secret-field-wrapper">
         <input type="password" id="webPassword" placeholder="choose a password for web access">
@@ -3359,6 +3370,19 @@ function validateTelegramFormat(input) {
   }
 }
 
+function validateGroqFormat(input) {
+  const errEl = document.getElementById('groqFormatError');
+  if (!errEl) return;
+  const val = input.value.trim();
+  if (!val) { errEl.style.display = 'none'; return; }
+  if (!val.startsWith('gsk_')) {
+    errEl.textContent = 'Groq keys start with gsk_';
+    errEl.style.display = '';
+  } else {
+    errEl.style.display = 'none';
+  }
+}
+
 /* ── clipboard helpers ── */
 
 function copyRecoverySecret() {
@@ -4480,6 +4504,13 @@ function prefillWizard(config) {
     tgEl.placeholder = '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022 (clear and re-enter to change)';
   }
 
+  /* pre-fill groq extraction key placeholder */
+  const groqEl = document.getElementById('groqExtractionKey');
+  if (groqEl && config.groq_extraction_key_set) {
+    groqEl.value = '';
+    groqEl.placeholder = '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022 (clear and re-enter to change)';
+  }
+
   /* pre-fill advanced multi-model settings */
   if (config.lead_provider) {
     /* open the advanced panel */
@@ -4847,6 +4878,7 @@ async function saveConfig() {
     model: document.getElementById('model')?.value || '',
     timezone: document.getElementById('timezone')?.value || 'UTC',
     telegram_bot_token: document.getElementById('telegramToken')?.value || '',
+    groq_extraction_key: document.getElementById('groqExtractionKey')?.value || '',
     web_auth_token: document.getElementById('webPassword')?.value || '',
   };
 
@@ -4913,6 +4945,11 @@ async function saveConfig() {
   /* handle telegram token: keep existing if blank during reconfigure */
   if (!config.telegram_bot_token && isReconfigure && dashboardConfig.telegram_bot_token_set) {
     delete config.telegram_bot_token;
+  }
+
+  /* handle groq extraction key: keep existing if blank during reconfigure */
+  if (!config.groq_extraction_key && isReconfigure && dashboardConfig.groq_extraction_key_set) {
+    delete config.groq_extraction_key;
   }
 
   /* handle password: keep existing if blank during reconfigure */

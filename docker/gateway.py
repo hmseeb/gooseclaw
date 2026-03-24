@@ -2175,6 +2175,11 @@ def validate_setup_config(config):
             if not has_cred:
                 errors.append(f"api_key or provider credentials required for {provider}")
 
+    # groq extraction key (required for mem0 memory)
+    groq_key = config.get("groq_extraction_key", "")
+    if groq_key and not groq_key.startswith("gsk_"):
+        errors.append("groq_extraction_key should start with 'gsk_'")
+
     # telegram token format check (if provided)
     tg = config.get("telegram_bot_token", "")
     if tg and ":" not in tg:
@@ -2400,6 +2405,7 @@ SENSITIVE_KEYS = [
     "azure_key",
     "telegram_bot_token",
     "litellm_host",
+    "groq_extraction_key",
 ]
 
 _REDACTED = "***REDACTED***"
@@ -9341,6 +9347,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                 "custom_key",
                 "web_auth_token",
                 "web_auth_token_hash",
+                "groq_extraction_key",
             )
             for key in _UI_SECRET_FIELDS:
                 val = safe.get(key, "")

@@ -285,6 +285,9 @@ elif pt in ('ollama', 'lm-studio', 'docker-model-runner', 'ramalama'):
 elif pt in env_map and ak:
     if not os.environ.get(env_map[pt]):
         print(f'export {env_map[pt]}={shlex.quote(ak)}')
+gek = c.get('groq_extraction_key', '')
+if gek and not os.environ.get('GROQ_API_KEY'):
+    print(f'export GROQ_API_KEY={shlex.quote(gek)}')
 tg = c.get('telegram_bot_token', '')
 if tg and not os.environ.get('TELEGRAM_BOT_TOKEN'):
     print(f'export TELEGRAM_BOT_TOKEN={shlex.quote(tg)}')
@@ -564,6 +567,25 @@ try:
                 changed = True
             if changed:
                 updated.append(f'{name} (envs updated)')
+    # inject GROQ_API_KEY from setup.json into mem0 extension envs
+    import json as _json
+    try:
+        with open('$CONFIG_DIR/setup.json') as _sf:
+            _setup = _json.load(_sf)
+        _gk = _setup.get('groq_extraction_key', '')
+        if not _gk:
+            # fallback: check vault
+            import os as _os
+            _vault_path = _os.path.join('$DATA_DIR', 'secrets', 'vault.yaml')
+            if _os.path.exists(_vault_path):
+                with open(_vault_path) as _vf:
+                    _vault = yaml.safe_load(_vf) or {}
+                _gk = _vault.get('groq_api_key', '') or _vault.get('GROQ_API_KEY', '')
+        if _gk and 'mem0-memory' in exts:
+            exts['mem0-memory'].setdefault('envs', {})['GROQ_API_KEY'] = _gk
+            updated.append('mem0-memory (groq key injected)')
+    except Exception:
+        pass
     if updated:
         config['extensions'] = exts
         with open('$CONFIG_DIR/config.yaml', 'w') as f:

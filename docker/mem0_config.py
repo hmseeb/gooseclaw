@@ -20,7 +20,6 @@ PROVIDER_MAP = {
     "groq": "groq",
     "openai": "openai",
     "anthropic": "anthropic",
-    "google": "google",
     "deepseek": "deepseek",
     "together": "together",
     "openrouter": "openai",  # uses openai SDK with custom base_url
@@ -31,7 +30,6 @@ KEY_ENV_VARS = {
     "groq": "GROQ_API_KEY",
     "openai": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
-    "google": "GOOGLE_API_KEY",
     "deepseek": "DEEPSEEK_API_KEY",
     "together": "TOGETHER_API_KEY",
     "openrouter": "OPENROUTER_API_KEY",
@@ -42,7 +40,6 @@ VAULT_KEYS = {
     "groq": ["groq_api_key", "GROQ_API_KEY"],
     "openai": ["openai_api_key", "OPENAI_API_KEY"],
     "anthropic": ["ANTHROPIC_SECRET_KEY", "ANTHROPIC_API_KEY", "anthropic_api_key"],
-    "google": ["google_api_key", "GOOGLE_API_KEY"],
     "deepseek": ["deepseek_api_key", "DEEPSEEK_API_KEY"],
     "together": ["together_api_key", "TOGETHER_API_KEY"],
     "openrouter": ["openrouter_api_key", "OPENROUTER_API_KEY"],
@@ -269,7 +266,7 @@ def build_mem0_config():
         config["graph_store"] = {
             "provider": "kuzu",
             "config": {
-                "db": os.environ.get("MEM0_KUZU_PATH", "/data/mem0/kuzu"),
+                "db": ":memory:",
             }
         }
 

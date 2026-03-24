@@ -2182,7 +2182,7 @@ def validate_setup_config(config):
 
     # mem0 provider validation
     mem0_provider = config.get("mem0_provider", "")
-    if mem0_provider and mem0_provider not in ("groq", "openai", "anthropic", "google", "deepseek", "together", "openrouter"):
+    if mem0_provider and mem0_provider not in ("groq", "openai", "anthropic", "deepseek", "together", "openrouter"):
         errors.append(f"unknown mem0_provider: {mem0_provider!r}")
 
     # telegram token format check (if provided)

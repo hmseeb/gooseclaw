@@ -522,7 +522,6 @@ extensions:
       TOKENIZERS_PARALLELISM: "false"
       MEM0_ENABLE_GRAPH: "true"
       MEM0_CHROMA_PATH: /data/mem0/chroma
-      MEM0_KUZU_PATH: /data/mem0/kuzu
       CONFIG_DIR: /data/config
     env_keys: []
     timeout: 300
@@ -546,7 +545,7 @@ try:
             'enabled': True, 'type': 'stdio', 'name': 'mem0-memory',
             'description': 'Long-term memory with semantic search and contradiction resolution',
             'cmd': 'python3', 'args': ['/app/docker/memory/server.py'],
-            'envs': {'MEM0_USER_ID': 'default', 'MEM0_TELEMETRY': 'false', 'OPENBLAS_NUM_THREADS': '1', 'HF_HUB_OFFLINE': '0', 'HF_HOME': '/data/hf_cache', 'TOKENIZERS_PARALLELISM': 'false', 'MEM0_ENABLE_GRAPH': 'true', 'MEM0_CHROMA_PATH': '/data/mem0/chroma', 'MEM0_KUZU_PATH': '/data/mem0/kuzu', 'CONFIG_DIR': '/data/config'},
+            'envs': {'MEM0_USER_ID': 'default', 'MEM0_TELEMETRY': 'false', 'OPENBLAS_NUM_THREADS': '1', 'HF_HUB_OFFLINE': '0', 'HF_HOME': '/data/hf_cache', 'TOKENIZERS_PARALLELISM': 'false', 'MEM0_ENABLE_GRAPH': 'true', 'MEM0_CHROMA_PATH': '/data/mem0/chroma', 'CONFIG_DIR': '/data/config'},
             'env_keys': [],
             'timeout': 300, 'bundled': None, 'available_tools': [],
         },
@@ -676,7 +675,10 @@ fi
 # Re-indexes system namespace on every boot (system.md, onboarding.md, schemas/).
 # Runtime namespace (user facts, integrations) is never wiped.
 
-mkdir -p /data/knowledge/chroma /data/mem0/chroma /data/mem0/kuzu /data/hf_cache
+# kuzu creates its own db file at /data/mem0/kuzu — do NOT mkdir it
+mkdir -p /data/knowledge/chroma /data/mem0/chroma /data/hf_cache
+# clean up if kuzu path was accidentally created as a directory
+[ -d /data/mem0/kuzu ] && [ ! -f /data/mem0/kuzu/data.kz ] && rm -rf /data/mem0/kuzu 2>/dev/null || true
 chown -R gooseclaw:gooseclaw /data/knowledge /data/mem0 /data/hf_cache
 
 # Pre-download sentence-transformers model so MCP subprocess finds it cached.
@@ -720,10 +722,9 @@ fi
 export KNOWLEDGE_DB_PATH="/data/knowledge/chroma"
 export MEM0_CHROMA_PATH="/data/mem0/chroma"
 
-# ---- graph memory (Kuzu — embedded, no separate service) ----
+# ---- graph memory (Kuzu in-memory mode) ----
 export MEM0_ENABLE_GRAPH=true
-export MEM0_KUZU_PATH="/data/mem0/kuzu"
-echo "[kuzu] graph memory enabled (embedded at /data/mem0/kuzu)"
+echo "[graph] graph memory enabled (kuzu :memory:)"
 
 # ─── MOIM (critical rules injected every turn, slim ~100 lines) ────────────
 # Full session context (onboarding, procedures, docs) loads via .goosehints

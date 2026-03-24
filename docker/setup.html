@@ -1651,7 +1651,6 @@ body::after {
         <option value="groq">Groq (free tier)</option>
         <option value="openai">OpenAI (recommended)</option>
         <option value="anthropic">Anthropic (experimental)</option>
-        <option value="google">Google</option>
         <option value="deepseek">DeepSeek</option>
         <option value="together">Together AI</option>
         <option value="openrouter">OpenRouter</option>
@@ -1992,7 +1991,6 @@ body::after {
                 <option value="groq">Groq (free tier)</option>
                 <option value="openai">OpenAI (recommended)</option>
                 <option value="anthropic">Anthropic (experimental)</option>
-                <option value="google">Google</option>
                 <option value="deepseek">DeepSeek</option>
                 <option value="together">Together AI</option>
                 <option value="openrouter">OpenRouter</option>
@@ -3465,7 +3463,6 @@ const mem0Compat = {
   groq: { color: '#f59e0b', text: 'Free tier (100k tokens/day). Graph memory may have intermittent extraction issues.' },
   openai: { color: '#22c55e', text: 'Best compatibility. Reliable tool calling for graph memory.' },
   anthropic: { color: '#f59e0b', text: 'Experimental. Requires real API key (not claude-code OAuth). Patched adapter.' },
-  google: { color: '#22c55e', text: 'Good compatibility. Cheap.' },
   deepseek: { color: '#22c55e', text: 'Very cheap. Good tool calling support.' },
   together: { color: '#22c55e', text: 'Good compatibility with Llama models.' },
   openrouter: { color: '#22c55e', text: 'Works with any model that supports tool use.' },
@@ -3870,7 +3867,7 @@ function renderMem0ConfigSection(config) {
 
   const provNames = {
     groq: 'Groq', openai: 'OpenAI', anthropic: 'Anthropic',
-    google: 'Google', deepseek: 'DeepSeek', together: 'Together AI',
+    deepseek: 'DeepSeek', together: 'Together AI',
     openrouter: 'OpenRouter'
   };
   const provName = provNames[mp] || mp;

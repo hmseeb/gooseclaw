@@ -23,15 +23,31 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from mem0_config import build_mem0_config
 
 config = build_mem0_config()
+_diag = open("/data/mem0_diag.log", "w")
+_diag.write(f"graph_store in config: {'graph_store' in config}\n")
+_diag.write(f"llm.provider: {config.get('llm', {}).get('provider', '?')}\n")
+_diag.write(f"llm.model: {config.get('llm', {}).get('config', {}).get('model', '?')}\n")
+_diag.write(f"llm has api_key: {bool(config.get('llm', {}).get('config', {}).get('api_key'))}\n")
+_diag.write(f"graph_store config: {config.get('graph_store', 'NONE')}\n")
+_diag.flush()
 try:
     memory = Memory.from_config(config)
+    has_graph = hasattr(memory, 'graph') and memory.graph is not None
+    _diag.write(f"mem0 init OK. has graph={has_graph}\n")
+    if has_graph:
+        _diag.write(f"graph type: {type(memory.graph)}\n")
+    _diag.flush()
 except Exception as e:
+    _diag.write(f"mem0 init FAILED: {type(e).__name__}: {e}\n")
+    _diag.flush()
     if "graph_store" in config:
-        logger.warning("mem0 init failed with graph store (%s), retrying without it", e)
         del config["graph_store"]
         memory = Memory.from_config(config)
+        _diag.write("RUNNING IN VECTOR-ONLY MODE\n")
+        _diag.flush()
     else:
         raise
+_diag.close()
 
 # Vector-only fallback instance (no graph store). Lazy-initialized on first
 # graph failure so we don't waste memory if graph always works.

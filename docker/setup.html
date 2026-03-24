@@ -1495,6 +1495,34 @@ body::after {
   max-height: 1000px;
   padding: 16px 0 0;
 }
+/* ── fallback provider list ── */
+.fallback-section { margin-top: 12px; }
+.fallback-section-label { font-size: 11px; font-weight: 600; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+.fallback-list { display: flex; flex-direction: column; gap: 6px; min-height: 8px; }
+.fallback-item {
+  display: flex; align-items: center; gap: 8px; padding: 6px 10px;
+  background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm, 6px);
+  height: 40px; user-select: none;
+}
+.fallback-item.dragging { opacity: 0.5; border-color: var(--accent); }
+.fallback-item .drag-handle { cursor: grab; color: var(--text-tertiary); width: 18px; font-size: 14px; text-align: center; }
+.fallback-item .fb-info { flex: 1; font-size: 13px; color: var(--text-primary); }
+.fallback-item .fb-info .fb-provider { font-weight: 500; }
+.fallback-item .fb-info .fb-model { color: var(--text-secondary); margin-left: 6px; font-size: 12px; }
+.fallback-item .fb-remove { background: none; border: none; color: var(--text-tertiary); cursor: pointer; font-size: 16px; padding: 2px 6px; border-radius: 4px; }
+.fallback-item .fb-remove:hover { color: var(--error); background: rgba(255,59,48,0.1); }
+.fallback-add-row { display: flex; gap: 6px; margin-top: 8px; align-items: center; }
+.fallback-add-row select, .fallback-add-row input { font-size: 12px; padding: 4px 8px; height: 32px; }
+.fallback-add-row select { flex: 0 0 140px; }
+.fallback-add-row input { flex: 1; }
+.fallback-add-row button { flex: 0 0 auto; padding: 4px 12px; height: 32px; font-size: 12px; background: var(--accent); color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500; }
+.fallback-add-row button:hover { background: var(--accent-bright); }
+.fallback-hint { font-size: 11px; color: var(--text-tertiary); margin-top: 4px; }
+.fallback-collapse { margin-top: 12px; }
+.fallback-collapse summary { cursor: pointer; font-size: 13px; font-weight: 500; color: var(--text-secondary); list-style: none; display: flex; align-items: center; gap: 6px; }
+.fallback-collapse summary::-webkit-details-marker { display: none; }
+.fallback-collapse summary::before { content: '\25B6'; font-size: 10px; transition: transform 0.2s; }
+.fallback-collapse[open] summary::before { transform: rotate(90deg); }
 </style>
 </head>
 <body>
@@ -1662,6 +1690,31 @@ body::after {
       <input type="text" id="mem0Model" placeholder="llama-3.3-70b-versatile">
       <div class="field-hint">Uses your provider's API key automatically. no extra key needed unless you pick Groq.</div>
     </div>
+    <!-- fallback providers (optional, collapsible) -->
+    <details class="fallback-collapse" id="wizFallbackCollapse">
+      <summary>Fallback Providers (optional)</summary>
+      <div class="fallback-section">
+        <div class="fallback-section-label">Main LLM Fallbacks</div>
+        <div class="fallback-list" id="wizFallbackList"></div>
+        <div class="fallback-add-row">
+          <select id="wizFbProviderSelect"><option value="">select provider</option></select>
+          <input type="text" id="wizFbModelInput" placeholder="model name">
+          <button type="button" onclick="addFallbackProvider('wizFallbackList','wizFbProviderSelect','wizFbModelInput')">+ Add</button>
+        </div>
+        <div class="fallback-hint">If your main provider fails (rate limit, timeout, outage), these providers are tried in order. Drag to reorder.</div>
+      </div>
+      <div class="fallback-section" style="margin-top:16px">
+        <div class="fallback-section-label">Memory LLM Fallbacks</div>
+        <div class="fallback-list" id="wizMem0FallbackList"></div>
+        <div class="fallback-add-row">
+          <select id="wizM0FbProviderSelect"><option value="">select provider</option></select>
+          <input type="text" id="wizM0FbModelInput" placeholder="model name">
+          <button type="button" onclick="addFallbackProvider('wizMem0FallbackList','wizM0FbProviderSelect','wizM0FbModelInput')">+ Add</button>
+        </div>
+        <div class="fallback-hint">If memory extraction fails, these providers are tried in order.</div>
+      </div>
+    </details>
+
     <div class="field">
       <label>Password</label>
       <div class="secret-field-wrapper">
@@ -2013,6 +2066,43 @@ body::after {
             <div style="display:flex;gap:8px;margin-top:12px">
               <button class="save-btn" onclick="saveMem0Config()" style="padding:6px 16px;border-radius:6px;border:none;background:var(--accent);color:#fff;cursor:pointer;font-size:13px">Save</button>
               <button onclick="cancelMem0ConfigEdit()" style="padding:6px 16px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--text-secondary);cursor:pointer;font-size:13px">Cancel</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- fallback provider config section -->
+    <div class="lead-config-section" id="fallbackConfigSection" style="display:none">
+      <div class="channel-routing show">
+        <div class="channel-routing-header" onclick="toggleFallbackConfig()">
+          <h3>Fallback Providers</h3>
+          <span class="channel-routing-toggle">&#9654;</span>
+        </div>
+        <div class="channel-routing-body" id="fallbackConfigBody">
+          <div class="lead-config-summary" id="fallbackConfigSummary"></div>
+          <div class="lead-config-edit" id="fallbackConfigEdit" style="display:none">
+            <div class="fallback-section">
+              <div class="fallback-section-label">Main LLM Fallbacks</div>
+              <div class="fallback-list" id="dashFallbackList"></div>
+              <div class="fallback-add-row">
+                <select id="dashFbProviderSelect"><option value="">select provider</option></select>
+                <input type="text" id="dashFbModelInput" placeholder="model name">
+                <button type="button" onclick="addFallbackProvider('dashFallbackList','dashFbProviderSelect','dashFbModelInput')">+ Add</button>
+              </div>
+            </div>
+            <div class="fallback-section" style="margin-top:16px">
+              <div class="fallback-section-label">Memory LLM Fallbacks</div>
+              <div class="fallback-list" id="dashMem0FallbackList"></div>
+              <div class="fallback-add-row">
+                <select id="dashM0FbProviderSelect"><option value="">select provider</option></select>
+                <input type="text" id="dashM0FbModelInput" placeholder="model name">
+                <button type="button" onclick="addFallbackProvider('dashMem0FallbackList','dashM0FbProviderSelect','dashM0FbModelInput')">+ Add</button>
+              </div>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:12px">
+              <button class="save-btn" onclick="saveFallbackConfig()" style="padding:6px 16px;border-radius:6px;border:none;background:var(--accent);color:#fff;cursor:pointer;font-size:13px">Save</button>
+              <button onclick="cancelFallbackConfigEdit()" style="padding:6px 16px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--text-secondary);cursor:pointer;font-size:13px">Cancel</button>
             </div>
           </div>
         </div>
@@ -3147,7 +3237,7 @@ function goToStep(n) {
 
   /* populate dynamic content for specific steps */
   if (n === 2) buildModelStep();
-  if (n === 3) populateLeadProviders();
+  if (n === 3) { populateLeadProviders(); initWizardFallbackDropdowns(); }
   if (n === 4) { buildSummary(); updateSaveBtn(); }
 
   /* update progress indicators for steps 0-4 */
@@ -3612,6 +3702,9 @@ function renderDashboardValues(config) {
 
   /* mem0 config */
   renderMem0ConfigSection(config);
+
+  /* fallback providers */
+  renderFallbackConfigSection(config);
 }
 
 /* ── lead config on dashboard ── */
@@ -3929,6 +4022,252 @@ function cancelMem0ConfigEdit() {
   if (edit) edit.style.display = 'none';
 }
 
+/* ── fallback providers ── */
+
+function getAvailableProviders(excludeProvider) {
+  /* Return providers that have entries in savedKeysSet (keys configured), excluding current primary */
+  const available = [];
+  const knownProviders = Object.keys(typeof PROVIDERS !== 'undefined' ? PROVIDERS : {});
+  for (const p of knownProviders) {
+    if (p === excludeProvider) continue;
+    if (savedKeysSet && savedKeysSet[p]) available.push(p);
+  }
+  /* Also include providers from savedKeys if savedKeysSet isn't populated */
+  if (available.length === 0 && savedKeys && typeof savedKeys === 'object') {
+    for (const p of Object.keys(savedKeys)) {
+      if (p === excludeProvider && knownProviders.length > 1) continue;
+      if (savedKeys[p]) available.push(p);
+    }
+  }
+  /* If still empty, offer all known providers as fallback (user may configure keys later) */
+  if (available.length === 0) {
+    for (const p of knownProviders) {
+      if (p === excludeProvider) continue;
+      if (['ollama','lm-studio','docker-model-runner','ramalama'].includes(p)) continue;
+      available.push(p);
+    }
+  }
+  return available;
+}
+
+function populateFallbackProviderDropdown(selectEl, excludeProvider) {
+  if (!selectEl) return;
+  const current = selectEl.value;
+  selectEl.innerHTML = '<option value="">select provider</option>';
+  const providers = getAvailableProviders(excludeProvider);
+  for (const p of providers) {
+    const prov = (typeof PROVIDERS !== 'undefined' && PROVIDERS[p]) || {};
+    const name = prov.name || p;
+    selectEl.innerHTML += `<option value="${p}">${name}</option>`;
+  }
+  if (current) selectEl.value = current;
+}
+
+function initDragAndDrop(listEl) {
+  if (!listEl) return;
+  listEl.addEventListener('dragstart', function(e) {
+    const item = e.target.closest('.fallback-item');
+    if (!item) return;
+    item.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+  });
+  listEl.addEventListener('dragover', function(e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const dragging = listEl.querySelector('.dragging');
+    if (!dragging) return;
+    const items = [...listEl.querySelectorAll('.fallback-item:not(.dragging)')];
+    const after = items.reduce((closest, child) => {
+      const box = child.getBoundingClientRect();
+      const offset = e.clientY - box.top - box.height / 2;
+      if (offset < 0 && offset > closest.offset) return { offset, element: child };
+      return closest;
+    }, { offset: Number.NEGATIVE_INFINITY }).element;
+    if (after) listEl.insertBefore(dragging, after);
+    else listEl.appendChild(dragging);
+  });
+  listEl.addEventListener('dragend', function(e) {
+    const item = e.target.closest('.fallback-item');
+    if (item) item.classList.remove('dragging');
+  });
+}
+
+function createFallbackItem(provider, model) {
+  const prov = (typeof PROVIDERS !== 'undefined' && PROVIDERS[provider]) || {};
+  const provName = prov.name || provider;
+  const div = document.createElement('div');
+  div.className = 'fallback-item';
+  div.draggable = true;
+  div.dataset.provider = provider;
+  div.dataset.model = model;
+  div.innerHTML = `<span class="drag-handle">\u2630</span>` +
+    `<span class="fb-info"><span class="fb-provider">${provName}</span><span class="fb-model">${model}</span></span>` +
+    `<button type="button" class="fb-remove" onclick="removeFallbackItem(this)" title="Remove">\u2715</button>`;
+  return div;
+}
+
+function addFallbackProvider(listId, providerSelectId, modelInputId) {
+  const listEl = document.getElementById(listId);
+  const selectEl = document.getElementById(providerSelectId);
+  const modelEl = document.getElementById(modelInputId);
+  if (!listEl || !selectEl || !modelEl) return;
+  const provider = selectEl.value;
+  const model = modelEl.value.trim();
+  if (!provider) { alert('Select a provider'); return; }
+  if (!model) { alert('Enter a model name'); return; }
+  const item = createFallbackItem(provider, model);
+  listEl.appendChild(item);
+  initDragAndDrop(listEl);
+  selectEl.value = '';
+  modelEl.value = '';
+}
+
+function removeFallbackItem(btn) {
+  const item = btn.closest('.fallback-item');
+  if (item) item.remove();
+}
+
+function collectFallbackList(listId) {
+  const listEl = document.getElementById(listId);
+  if (!listEl) return [];
+  const items = listEl.querySelectorAll('.fallback-item');
+  const result = [];
+  items.forEach(item => {
+    const provider = item.dataset.provider;
+    const model = item.dataset.model;
+    if (provider && model) result.push({ provider, model });
+  });
+  return result;
+}
+
+function populateFallbackList(listId, fallbacks) {
+  const listEl = document.getElementById(listId);
+  if (!listEl) return;
+  listEl.innerHTML = '';
+  if (!Array.isArray(fallbacks)) return;
+  for (const fb of fallbacks) {
+    if (fb.provider && fb.model) {
+      listEl.appendChild(createFallbackItem(fb.provider, fb.model));
+    }
+  }
+  initDragAndDrop(listEl);
+}
+
+function renderFallbackConfigSection(config) {
+  const section = document.getElementById('fallbackConfigSection');
+  const summary = document.getElementById('fallbackConfigSummary');
+  if (!section || !summary) return;
+
+  section.style.display = '';
+  const routing = section.querySelector('.channel-routing');
+
+  const fb = config.fallback_providers || [];
+  const m0fb = config.mem0_fallback_providers || [];
+
+  if (fb.length === 0 && m0fb.length === 0) {
+    if (routing) routing.classList.remove('expanded');
+    summary.innerHTML = `
+      <div class="channel-route-row" style="border-bottom:none">
+        <span class="channel-route-label" style="flex:1;color:var(--text-tertiary)">
+          No fallback providers configured
+        </span>
+        <button class="dashboard-edit-btn" onclick="startFallbackConfigEdit()">configure</button>
+      </div>`;
+    return;
+  }
+
+  if (routing) routing.classList.add('expanded');
+
+  const mainChain = fb.map(f => {
+    const prov = (typeof PROVIDERS !== 'undefined' && PROVIDERS[f.provider]) || {};
+    return (prov.name || f.provider);
+  }).join(' \u203A ') || 'none';
+
+  const memChain = m0fb.map(f => {
+    const prov = (typeof PROVIDERS !== 'undefined' && PROVIDERS[f.provider]) || {};
+    return (prov.name || f.provider);
+  }).join(' \u203A ') || 'none';
+
+  summary.innerHTML = `
+    <div class="channel-route-row">
+      <span class="channel-route-label" style="flex:1">
+        <span style="color:var(--text-tertiary);font-size:11px">Main:</span> ${mainChain}
+      </span>
+      <button class="dashboard-edit-btn" onclick="startFallbackConfigEdit()">edit</button>
+    </div>
+    <div class="channel-route-row" style="border-bottom:none">
+      <span class="channel-route-label" style="flex:1">
+        <span style="color:var(--text-tertiary);font-size:11px">Memory:</span> ${memChain}
+      </span>
+    </div>`;
+}
+
+function toggleFallbackConfig() {
+  const section = document.getElementById('fallbackConfigSection');
+  const routing = section?.querySelector('.channel-routing');
+  if (!routing) return;
+  routing.classList.toggle('expanded');
+}
+
+function startFallbackConfigEdit() {
+  const summary = document.getElementById('fallbackConfigSummary');
+  const edit = document.getElementById('fallbackConfigEdit');
+  if (summary) summary.style.display = 'none';
+  if (edit) edit.style.display = '';
+
+  const config = dashboardConfig;
+  const primary = config.provider_type || '';
+  populateFallbackProviderDropdown(document.getElementById('dashFbProviderSelect'), primary);
+  populateFallbackProviderDropdown(document.getElementById('dashM0FbProviderSelect'), primary);
+  populateFallbackList('dashFallbackList', config.fallback_providers || []);
+  populateFallbackList('dashMem0FallbackList', config.mem0_fallback_providers || []);
+}
+
+function cancelFallbackConfigEdit() {
+  const summary = document.getElementById('fallbackConfigSummary');
+  const edit = document.getElementById('fallbackConfigEdit');
+  if (summary) summary.style.display = '';
+  if (edit) edit.style.display = 'none';
+}
+
+async function saveFallbackConfig() {
+  const config = { ...dashboardConfig };
+  const fb = collectFallbackList('dashFallbackList');
+  const m0fb = collectFallbackList('dashMem0FallbackList');
+  if (fb.length > 0) config.fallback_providers = fb;
+  else delete config.fallback_providers;
+  if (m0fb.length > 0) config.mem0_fallback_providers = m0fb;
+  else delete config.mem0_fallback_providers;
+  config.saved_keys = savedKeys;
+
+  try {
+    const resp = await fetch('/api/setup/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    });
+    const data = await resp.json();
+    if (data.success) {
+      dashboardConfig = config;
+      cancelFallbackConfigEdit();
+      renderFallbackConfigSection(config);
+    } else {
+      alert('Save failed: ' + (data.errors || data.error || 'unknown'));
+    }
+  } catch(e) {
+    alert('Could not save fallback config');
+  }
+}
+
+function initWizardFallbackDropdowns() {
+  const primary = selectedProvider || '';
+  populateFallbackProviderDropdown(document.getElementById('wizFbProviderSelect'), primary);
+  populateFallbackProviderDropdown(document.getElementById('wizM0FbProviderSelect'), primary);
+  /* init drag-and-drop on wizard lists */
+  initDragAndDrop(document.getElementById('wizFallbackList'));
+  initDragAndDrop(document.getElementById('wizMem0FallbackList'));
+}
+
 async function saveMem0Config() {
   const config = { ...dashboardConfig };
   config.mem0_provider = document.getElementById('dashMem0Provider')?.value || 'groq';
@@ -4020,6 +4359,12 @@ async function saveDashboardChanges() {
   if (atField && atField.classList.contains('editing') && newAt) {
     config.web_auth_token = newAt;
   }
+
+  /* fallback providers from dashboard */
+  const dashFb = collectFallbackList('dashFallbackList');
+  const dashM0Fb = collectFallbackList('dashMem0FallbackList');
+  if (dashFb.length > 0) config.fallback_providers = dashFb;
+  if (dashM0Fb.length > 0) config.mem0_fallback_providers = dashM0Fb;
 
   /* persist saved keys */
   config.saved_keys = savedKeys;
@@ -4732,6 +5077,17 @@ function prefillWizard(config) {
     m0mEl.value = config.mem0_model;
   }
 
+  /* pre-fill fallback providers */
+  if (config.fallback_providers || config.mem0_fallback_providers) {
+    populateFallbackList('wizFallbackList', config.fallback_providers || []);
+    populateFallbackList('wizMem0FallbackList', config.mem0_fallback_providers || []);
+    /* auto-open the details if there are items */
+    const collapse = document.getElementById('wizFallbackCollapse');
+    if (collapse && ((config.fallback_providers || []).length > 0 || (config.mem0_fallback_providers || []).length > 0)) {
+      collapse.open = true;
+    }
+  }
+
   /* pre-fill advanced multi-model settings */
   if (config.lead_provider) {
     /* open the advanced panel */
@@ -5195,6 +5551,12 @@ async function saveConfig() {
     if (leadFBT) config.lead_fallback_turns = parseInt(leadFBT, 10);
     if (leadCL) config.lead_context_limit = parseInt(leadCL, 10);
   }
+
+  /* fallback providers from wizard */
+  const wizFb = collectFallbackList('wizFallbackList');
+  const wizM0Fb = collectFallbackList('wizMem0FallbackList');
+  if (wizFb.length > 0) config.fallback_providers = wizFb;
+  if (wizM0Fb.length > 0) config.mem0_fallback_providers = wizM0Fb;
 
   /* persist saved_keys across provider switches */
   config.saved_keys = savedKeys;

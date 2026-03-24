@@ -6943,19 +6943,76 @@ def _get_mem0_executor():
     return _mem0_executor
 
 
+def _reinit_mem0_with_provider(provider, model):
+    """Reinitialize the mem0 singleton with a fallback provider. Thread-safe."""
+    global _mem0_instance
+    try:
+        from mem0 import Memory
+        from mem0_config import build_mem0_config_for_provider
+        config = build_mem0_config_for_provider(provider, model)
+        if config is None:
+            _memory_log.warning(f"mem0 fallback: no config for {provider}/{model}")
+            return False
+        with _mem0_init_lock:
+            _mem0_instance = Memory.from_config(config)
+        _memory_log.info(f"mem0 reinitialized with fallback {provider}/{model}")
+        return True
+    except Exception as e:
+        _memory_log.error(f"mem0 fallback reinit failed: {e}")
+        return False
+
+
 def _mem0_add_with_timeout(messages, user_id="default", timeout=60):
-    """Run mem0.add() in a thread pool with timeout."""
+    """Run mem0.add() in a thread pool with timeout, with fallback chain."""
     from concurrent.futures import TimeoutError as FuturesTimeoutError
     executor = _get_mem0_executor()
+
+    # Try primary
     future = executor.submit(_mem0_add_knowledge, messages, user_id)
     try:
-        return future.result(timeout=timeout)
+        result = future.result(timeout=timeout)
+        if result is not None:
+            return result
     except FuturesTimeoutError:
         _memory_log.error(f"mem0.add timed out after {timeout}s")
-        return None
     except Exception as e:
         _memory_log.error(f"mem0.add failed: {e}")
+
+    # Primary failed, try fallback providers
+    setup = load_setup()
+    fallbacks = (setup or {}).get("mem0_fallback_providers", [])
+    if not fallbacks:
         return None
+
+    for fb in fallbacks:
+        provider = fb.get("provider", "")
+        model = fb.get("model", "")
+        if not provider or not model:
+            continue
+
+        _memory_log.info(f"mem0 fallback: trying {provider}/{model}")
+        if not _reinit_mem0_with_provider(provider, model):
+            continue
+
+        future = executor.submit(_mem0_add_knowledge, messages, user_id)
+        try:
+            result = future.result(timeout=timeout)
+            if result is not None:
+                _memory_log.info(f"mem0 fallback succeeded with {provider}/{model}")
+                # Reset to primary on next call by clearing singleton
+                # (lazy reinit will rebuild with primary config)
+                with _mem0_init_lock:
+                    _mem0_instance = None
+                return result
+        except FuturesTimeoutError:
+            _memory_log.error(f"mem0 fallback {provider}/{model} timed out")
+        except Exception as e:
+            _memory_log.error(f"mem0 fallback {provider}/{model} failed: {e}")
+
+    # All fallbacks exhausted, reset to primary config
+    with _mem0_init_lock:
+        _mem0_instance = None
+    return None
 
 
 # ── memory extraction prompts ────────────────────────────────────────────────
@@ -7406,10 +7463,19 @@ def _relay_to_goosed(user_text, session_id, chat_id=None, channel=None,
 
     text, err, media = relay_fn(user_text, session_id)
 
-    # if error or empty response, try creating a new session and retrying
-    # but NOT if the relay was cancelled (e.g. /stop or /clear killed it)
+    # ── fallback provider chain ──
+    # Check for cancellation first (shared with retry logic below)
     cancelled = (sock_ref and len(sock_ref) > 1
                  and hasattr(sock_ref[1], 'is_set') and sock_ref[1].is_set())
+    if err and session_id and not cancelled:
+        fb_result = _try_fallback_providers(relay_fn, user_text, session_id, err)
+        if fb_result is not None:
+            text, err, media = fb_result
+            # restore primary provider for next message (fallback is transient)
+            _set_session_default_provider(session_id)
+
+    # if error or empty response, try creating a new session and retrying
+    # but NOT if the relay was cancelled (e.g. /stop or /clear killed it)
     if err and chat_id and not cancelled:
         reason = err if err else "empty response"
         ch = channel or "telegram"

@@ -193,3 +193,300 @@ class TestPrimaryRestore:
             error_string="401 Unauthorized",
         )
         assert result is None, "Fallback should not trigger for non-retriable errors"
+
+
+class TestMainLLMFallback:
+    """Test main LLM fallback wiring via _try_fallback_providers."""
+
+    def test_fallback_skipped_for_non_retriable_error(self, gateway_module):
+        """Non-retriable error (401) should not trigger fallback."""
+        result = gateway_module._try_fallback_providers(
+            relay_fn=lambda t, s: ("ok", "", []),
+            user_text="test",
+            session_id="s1",
+            error_string="401 Unauthorized",
+        )
+        assert result is None
+
+    def test_fallback_tries_providers_in_order(self, gateway_module, tmp_path):
+        """Fallback chain walks providers in config order until one succeeds."""
+        orig_setup_file = gateway_module.SETUP_FILE
+        orig_config_dir = gateway_module.CONFIG_DIR
+        tried_providers = []
+
+        try:
+            config_dir = tmp_path / "config"
+            config_dir.mkdir()
+            gateway_module.CONFIG_DIR = str(config_dir)
+            gateway_module.SETUP_FILE = str(config_dir / "setup.json")
+
+            config = {
+                "provider_type": "openai",
+                "fallback_providers": [
+                    {"provider": "anthropic", "model": "claude-sonnet"},
+                    {"provider": "groq", "model": "llama"},
+                ],
+            }
+            gateway_module.save_setup(config)
+
+            call_count = [0]
+
+            def mock_relay(text, sid):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    return ("", "500 server error", [])
+                return ("success from fallback", "", [])
+
+            with patch.object(gateway_module, '_update_goose_session_provider') as mock_update:
+                mock_update.side_effect = lambda sid, cfg: tried_providers.append(cfg.get('provider'))
+                result = gateway_module._try_fallback_providers(
+                    relay_fn=mock_relay,
+                    user_text="test",
+                    session_id="s1",
+                    error_string="429 rate limit",
+                )
+
+            assert result is not None
+            assert result[0] == "success from fallback"
+            assert tried_providers[0] == "anthropic"
+        finally:
+            gateway_module.SETUP_FILE = orig_setup_file
+            gateway_module.CONFIG_DIR = orig_config_dir
+
+    def test_fallback_stops_on_non_retriable(self, gateway_module, tmp_path):
+        """If a fallback returns non-retriable error (403), chain stops."""
+        orig_setup_file = gateway_module.SETUP_FILE
+        orig_config_dir = gateway_module.CONFIG_DIR
+        try:
+            config_dir = tmp_path / "config"
+            config_dir.mkdir()
+            gateway_module.CONFIG_DIR = str(config_dir)
+            gateway_module.SETUP_FILE = str(config_dir / "setup.json")
+
+            config = {
+                "provider_type": "openai",
+                "fallback_providers": [
+                    {"provider": "anthropic", "model": "claude"},
+                    {"provider": "groq", "model": "llama"},
+                ],
+            }
+            gateway_module.save_setup(config)
+
+            call_count = [0]
+
+            def mock_relay(text, sid):
+                call_count[0] += 1
+                return ("", "403 Forbidden", [])
+
+            with patch.object(gateway_module, '_update_goose_session_provider'):
+                result = gateway_module._try_fallback_providers(
+                    relay_fn=mock_relay,
+                    user_text="test",
+                    session_id="s1",
+                    error_string="429 rate limit",
+                )
+
+            # Should stop after first fallback's non-retriable error, not try second
+            assert result is None
+            assert call_count[0] == 1
+        finally:
+            gateway_module.SETUP_FILE = orig_setup_file
+            gateway_module.CONFIG_DIR = orig_config_dir
+
+    def test_fallback_returns_none_when_exhausted(self, gateway_module, tmp_path):
+        """All fallbacks fail with retriable errors, returns None."""
+        orig_setup_file = gateway_module.SETUP_FILE
+        orig_config_dir = gateway_module.CONFIG_DIR
+        try:
+            config_dir = tmp_path / "config"
+            config_dir.mkdir()
+            gateway_module.CONFIG_DIR = str(config_dir)
+            gateway_module.SETUP_FILE = str(config_dir / "setup.json")
+
+            config = {
+                "provider_type": "openai",
+                "fallback_providers": [
+                    {"provider": "anthropic", "model": "claude"},
+                ],
+            }
+            gateway_module.save_setup(config)
+
+            def mock_relay(text, sid):
+                return ("", "500 server error", [])
+
+            with patch.object(gateway_module, '_update_goose_session_provider'):
+                result = gateway_module._try_fallback_providers(
+                    relay_fn=mock_relay,
+                    user_text="test",
+                    session_id="s1",
+                    error_string="500 server error",
+                )
+
+            assert result is None
+        finally:
+            gateway_module.SETUP_FILE = orig_setup_file
+            gateway_module.CONFIG_DIR = orig_config_dir
+
+    def test_fallback_skipped_when_no_config(self, gateway_module, tmp_path):
+        """No fallback_providers in setup means no fallback attempted."""
+        orig_setup_file = gateway_module.SETUP_FILE
+        orig_config_dir = gateway_module.CONFIG_DIR
+        try:
+            config_dir = tmp_path / "config"
+            config_dir.mkdir()
+            gateway_module.CONFIG_DIR = str(config_dir)
+            gateway_module.SETUP_FILE = str(config_dir / "setup.json")
+
+            config = {"provider_type": "openai"}
+            gateway_module.save_setup(config)
+
+            result = gateway_module._try_fallback_providers(
+                relay_fn=lambda t, s: ("ok", "", []),
+                user_text="test",
+                session_id="s1",
+                error_string="429 rate limit",
+            )
+
+            assert result is None
+        finally:
+            gateway_module.SETUP_FILE = orig_setup_file
+            gateway_module.CONFIG_DIR = orig_config_dir
+
+
+class TestMem0Fallback:
+    """Test mem0 extraction fallback wiring."""
+
+    def test_mem0_fallback_skipped_when_no_config(self, gateway_module, tmp_path):
+        """No mem0_fallback_providers means no fallback after primary failure."""
+        orig_setup_file = gateway_module.SETUP_FILE
+        orig_config_dir = gateway_module.CONFIG_DIR
+        try:
+            config_dir = tmp_path / "config"
+            config_dir.mkdir()
+            gateway_module.CONFIG_DIR = str(config_dir)
+            gateway_module.SETUP_FILE = str(config_dir / "setup.json")
+
+            config = {"provider_type": "openai"}
+            gateway_module.save_setup(config)
+
+            with patch.object(gateway_module, '_mem0_add_knowledge', side_effect=Exception("primary failed")):
+                result = gateway_module._mem0_add_with_timeout(
+                    [{"role": "user", "text": "hello"}],
+                    user_id="test",
+                    timeout=5,
+                )
+            assert result is None
+        finally:
+            gateway_module.SETUP_FILE = orig_setup_file
+            gateway_module.CONFIG_DIR = orig_config_dir
+
+    def test_mem0_fallback_tries_providers(self, gateway_module, tmp_path):
+        """Primary fails, fallback succeeds."""
+        orig_setup_file = gateway_module.SETUP_FILE
+        orig_config_dir = gateway_module.CONFIG_DIR
+        orig_instance = gateway_module._mem0_instance
+        try:
+            config_dir = tmp_path / "config"
+            config_dir.mkdir()
+            gateway_module.CONFIG_DIR = str(config_dir)
+            gateway_module.SETUP_FILE = str(config_dir / "setup.json")
+
+            config = {
+                "provider_type": "openai",
+                "mem0_fallback_providers": [
+                    {"provider": "groq", "model": "llama-3.3-70b-versatile"},
+                ],
+            }
+            gateway_module.save_setup(config)
+
+            call_count = [0]
+
+            def mock_add(messages, user_id="default"):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    raise Exception("primary provider failed")
+                return {"results": ["memory extracted"]}
+
+            with patch.object(gateway_module, '_mem0_add_knowledge', side_effect=mock_add):
+                with patch.object(gateway_module, '_reinit_mem0_with_provider', return_value=True):
+                    result = gateway_module._mem0_add_with_timeout(
+                        [{"role": "user", "text": "hello"}],
+                        user_id="test",
+                        timeout=10,
+                    )
+
+            assert result is not None
+            assert result.get("results") is not None
+        finally:
+            gateway_module.SETUP_FILE = orig_setup_file
+            gateway_module.CONFIG_DIR = orig_config_dir
+            gateway_module._mem0_instance = orig_instance
+
+    def test_mem0_singleton_reset_after_fallback(self, gateway_module, tmp_path):
+        """After fallback (success or exhaustion), _mem0_instance is reset to None."""
+        orig_setup_file = gateway_module.SETUP_FILE
+        orig_config_dir = gateway_module.CONFIG_DIR
+        orig_instance = gateway_module._mem0_instance
+        try:
+            config_dir = tmp_path / "config"
+            config_dir.mkdir()
+            gateway_module.CONFIG_DIR = str(config_dir)
+            gateway_module.SETUP_FILE = str(config_dir / "setup.json")
+
+            config = {
+                "provider_type": "openai",
+                "mem0_fallback_providers": [
+                    {"provider": "groq", "model": "llama"},
+                ],
+            }
+            gateway_module.save_setup(config)
+
+            # All attempts fail
+            with patch.object(gateway_module, '_mem0_add_knowledge', side_effect=Exception("fail")):
+                with patch.object(gateway_module, '_reinit_mem0_with_provider', return_value=True):
+                    result = gateway_module._mem0_add_with_timeout(
+                        [{"role": "user", "text": "hello"}],
+                        user_id="test",
+                        timeout=5,
+                    )
+
+            assert result is None
+            # Instance should be reset to None for lazy reinit with primary
+            assert gateway_module._mem0_instance is None
+        finally:
+            gateway_module.SETUP_FILE = orig_setup_file
+            gateway_module.CONFIG_DIR = orig_config_dir
+            gateway_module._mem0_instance = orig_instance
+
+    def test_mem0_fallback_skips_bad_provider(self, gateway_module, tmp_path):
+        """Provider with no API key (reinit fails) is skipped."""
+        orig_setup_file = gateway_module.SETUP_FILE
+        orig_config_dir = gateway_module.CONFIG_DIR
+        orig_instance = gateway_module._mem0_instance
+        try:
+            config_dir = tmp_path / "config"
+            config_dir.mkdir()
+            gateway_module.CONFIG_DIR = str(config_dir)
+            gateway_module.SETUP_FILE = str(config_dir / "setup.json")
+
+            config = {
+                "provider_type": "openai",
+                "mem0_fallback_providers": [
+                    {"provider": "nonexistent", "model": "bad"},
+                ],
+            }
+            gateway_module.save_setup(config)
+
+            with patch.object(gateway_module, '_mem0_add_knowledge', side_effect=Exception("fail")):
+                with patch.object(gateway_module, '_reinit_mem0_with_provider', return_value=False):
+                    result = gateway_module._mem0_add_with_timeout(
+                        [{"role": "user", "text": "hello"}],
+                        user_id="test",
+                        timeout=5,
+                    )
+
+            assert result is None
+        finally:
+            gateway_module.SETUP_FILE = orig_setup_file
+            gateway_module.CONFIG_DIR = orig_config_dir
+            gateway_module._mem0_instance = orig_instance

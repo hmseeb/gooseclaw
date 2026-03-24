@@ -26,14 +26,27 @@ config = build_mem0_config()
 try:
     memory = Memory.from_config(config)
 except Exception as e:
-    # Graph store (Neo4j) auth failures crash the whole server.
-    # Fall back to vector-only mode so tools still load.
     if "graph_store" in config:
         logger.warning("mem0 init failed with graph store (%s), retrying without it", e)
         del config["graph_store"]
         memory = Memory.from_config(config)
     else:
         raise
+
+# Vector-only fallback instance (no graph store). Lazy-initialized on first
+# graph failure so we don't waste memory if graph always works.
+_vector_memory = None
+
+
+def _get_vector_memory():
+    global _vector_memory
+    if _vector_memory is None:
+        vec_config = build_mem0_config()
+        vec_config.pop("graph_store", None)
+        _vector_memory = Memory.from_config(vec_config)
+    return _vector_memory
+
+
 USER_ID = os.environ.get("MEM0_USER_ID", "default")
 
 mcp = FastMCP("mem0-memory")
@@ -60,18 +73,29 @@ def memory_add(content: str) -> str:
             if attempt < 2:
                 time.sleep(0.5)
                 continue
-    # all retries failed, log the last error
-    import traceback
+    # graph memory failed 3x. fall back to vector-only save.
     try:
-        with open("/data/mem0_debug.log", "a") as df:
-            import datetime
-            df.write(f"\n{datetime.datetime.utcnow().isoformat()} memory_add FAILED (3 attempts)\n")
-            df.write(f"error: {type(last_err).__name__}: {last_err}\n")
-            df.write(traceback.format_exc())
-            df.write("\n")
-    except Exception:
-        pass
-    return f"Failed to store memory: {last_err}"
+        vec_mem = _get_vector_memory()
+        result = vec_mem.add(
+            messages=[{"role": "user", "content": content}],
+            user_id=USER_ID,
+        )
+        logger.warning("graph memory failed, saved via vector-only fallback")
+        return json.dumps(result, default=str)
+    except Exception as vec_err:
+        # both paths failed, log everything
+        import traceback
+        try:
+            with open("/data/mem0_debug.log", "a") as df:
+                import datetime
+                df.write(f"\n{datetime.datetime.utcnow().isoformat()} memory_add FAILED (graph 3x + vector)\n")
+                df.write(f"graph error: {type(last_err).__name__}: {last_err}\n")
+                df.write(f"vector error: {type(vec_err).__name__}: {vec_err}\n")
+                df.write(traceback.format_exc())
+                df.write("\n")
+        except Exception:
+            pass
+        return f"Failed to store memory: {vec_err}"
 
 
 @mcp.tool()

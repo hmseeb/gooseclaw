@@ -2411,6 +2411,7 @@ SENSITIVE_KEYS = [
     "telegram_bot_token",
     "litellm_host",
     "groq_extraction_key",
+    "mem0_api_key",
 ]
 
 _REDACTED = "***REDACTED***"

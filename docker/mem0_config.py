@@ -74,6 +74,12 @@ def _read_vault_secret(key):
 
 def _find_api_key(provider, setup):
     """Find API key for provider from env var, vault, or setup.json."""
+    # 0. explicit mem0_api_key from setup.json (set via dashboard)
+    if setup:
+        val = setup.get("mem0_api_key", "")
+        if val:
+            return val
+
     # 1. env var
     env_key = KEY_ENV_VARS.get(provider, "")
     if env_key:

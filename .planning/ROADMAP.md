@@ -142,7 +142,7 @@ Plans:
 Plans:
 - [x] 26-01-PLAN.md — Test scaffold + error classification + validation + config persistence (FB-01, FB-04, FB-05, FB-09)
 - [x] 26-02-PLAN.md — Setup wizard + dashboard UI + entrypoint rehydration (FB-06, FB-07, FB-08)
-- [ ] 26-03-PLAN.md — Main LLM fallback wiring + mem0 fallback wiring + verification (FB-02, FB-03, FB-09)
+- [x] 26-03-PLAN.md — Main LLM fallback wiring + mem0 fallback wiring + verification (FB-02, FB-03, FB-09)
 
 ## Progress
 

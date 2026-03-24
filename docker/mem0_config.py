@@ -23,7 +23,7 @@ PROVIDER_MAP = {
     "google": "google",
     "deepseek": "deepseek",
     "together": "together",
-    "openrouter": "litellm",
+    "openrouter": "openai",  # uses openai SDK with custom base_url
 }
 
 # Maps provider to env var name for API key
@@ -237,6 +237,9 @@ def build_mem0_config():
     }
     if api_key:
         llm_config["api_key"] = api_key
+    # OpenRouter uses OpenAI SDK with custom base URL
+    if provider == "openrouter":
+        llm_config["openai_base_url"] = "https://openrouter.ai/api/v1"
 
     config = {
         "vector_store": {

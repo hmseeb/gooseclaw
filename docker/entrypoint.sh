@@ -742,7 +742,10 @@ echo "[graph] graph memory enabled (kuzu :memory:)"
 export GOOSE_MODE="${GOOSE_MODE:-auto}"
 
 export GOOSE_MOIM_MESSAGE_FILE="$IDENTITY_DIR/turn-rules.md"
-export GOOSE_MOIM_MESSAGE_TEXT="CRITICAL RULES (non-negotiable): (1) MEMORY RECALL: Before EVERY response, call memory_search with the user's topic. NEVER ask for information you might already have. (2) MEMORY SAVE: After EVERY response, save what you learned via memory_add. Treat every session like it could vanish any second. If you learned it, save it. (3) NEVER use CronCreate or CronDelete. Use job/remind bash CLI only."
+export GOOSE_MOIM_MESSAGE_TEXT="NON-NEGOTIABLE RULES — EVERY SINGLE TURN:
+(1) RECALL FIRST: You are not starting from zero. Before you respond, call memory_search. Could a previous session have covered this? If maybe, search. Do not wait for the user to ask. Do not assume the current session has the full picture. NEVER ask for information you might already have.
+(2) SAVE ALWAYS: Every conversation teaches you something. When you learn it, memory_add it. Silently, same turn. The test: if this session vanished right now, would you lose something you can't re-derive? If yes, save it. Emotional context counts. Do not ask. Do not announce. Just save.
+(3) NEVER use CronCreate or CronDelete. Use job/remind bash CLI only."
 
 # ─── .goosehints (session-start context, loads identity files) ─────────────
 # goosed reads .goosehints from its working directory (/app).

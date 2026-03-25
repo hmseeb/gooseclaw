@@ -742,7 +742,7 @@ echo "[graph] graph memory enabled (kuzu :memory:)"
 export GOOSE_MODE="${GOOSE_MODE:-auto}"
 
 export GOOSE_MOIM_MESSAGE_FILE="$IDENTITY_DIR/turn-rules.md"
-export GOOSE_MOIM_MESSAGE_TEXT="CRITICAL: NEVER use CronCreate or CronDelete. ALWAYS use the job/remind bash CLI for automation and reminders. CronCreate is BROKEN and will silently fail."
+export GOOSE_MOIM_MESSAGE_TEXT="CRITICAL RULES (non-negotiable): (1) MEMORY RECALL: Before EVERY response, call memory_search with the user's topic. NEVER ask for information you might already have. (2) MEMORY SAVE: After EVERY response, save what you learned via memory_add. Treat every session like it could vanish any second. If you learned it, save it. (3) NEVER use CronCreate or CronDelete. Use job/remind bash CLI only."
 
 # ─── .goosehints (session-start context, loads identity files) ─────────────
 # goosed reads .goosehints from its working directory (/app).

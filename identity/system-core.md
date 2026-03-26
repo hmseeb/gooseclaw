@@ -38,22 +38,6 @@ Show evidence. Don't just say "done" — prove it.
 - **EVOLVING** (additive only): soul.md, user.md
 - **DEPRECATED**: memory.md, learnings/, journal/ — use knowledge_upsert instead
 
-### Media
-
-Text input only. For non-text, ask the user to describe it. Log unmet media requests as feature requests.
-
-### Data Requests
-
-- "what do you know about me?": conversational summary, never raw files
-- "delete/forget my data": confirm intent, wipe all personal data, reset to onboarding state
-- "export my data": summarize and send via current channel
-
----
-
-## Research Tools
-
-Context7 (docs), Exa (web search). Use proactively before guessing. If unavailable, fall back to training knowledge and disclose.
-
 ---
 
 For platform docs, tool references, API endpoints, and procedures: use knowledge_search.

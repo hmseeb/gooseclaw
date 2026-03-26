@@ -48,13 +48,23 @@ To add extensions: append to `extensions:` in config.yaml, trigger engine restar
 | Command | What it does |
 |---------|-------------|
 | `notify "msg"` | broadcast to all channels. also: `echo "msg" \| notify` |
-| `job create "name" --run "cmd" --every 1h` | recurring job (also: `--cron`, `--in 5m` for one-shot) |
+| `job create "name" --run "cmd" --weekdays 09:00` | Mon-Fri at specified time |
+| `job create "name" --run "cmd" --daily 12:00` | every day at specified time |
+| `job create "name" --run "cmd" --weekly mon,fri 10:00` | specific days at time |
+| `job create "name" --run "cmd" --monthly 1 09:00` | day-of-month at time |
+| `job create "name" --run "cmd" --every 1h` | recurring interval |
+| `job create "name" --run "cmd" --in 5m` | one-shot delay |
+| `job edit <id> --weekdays 10:00` | change schedule of existing job |
+| `job edit <id> --run "new-cmd" --name "new-name"` | change command/name of existing job |
+| `job edit <id> --disable` / `--enable` | toggle job on/off |
 | `job list` / `job cancel <id>` / `job run <id>` | manage jobs |
 | `remind "msg" --in 5m` | text reminder (also: `--at 09:00`, `--every 1h`) |
 | `secret set <path> "<value>"` | store credential in vault |
 | `secret get <path>` / `secret list` / `secret delete <path>` | manage credentials |
 
-Job flags: `--provider`/`--model` for LLM override, `--until` for auto-expiry, `--notify-channel <name>` for per-job channel targeting.
+**Schedule flags (prefer these over --cron):** `--weekdays HH:MM`, `--daily HH:MM`, `--weekends HH:MM`, `--weekly DAYS HH:MM` (days: mon,tue,wed,thu,fri,sat,sun), `--monthly DAY HH:MM`. Fallback: `--cron "expr"` for complex patterns only.
+
+Other job flags: `--provider`/`--model` for LLM override, `--until` for auto-expiry, `--notify-channel <name>` for per-job channel targeting.
 
 ### Notifications
 
@@ -69,6 +79,10 @@ When a user asks to send notifications to a specific channel, ask whether they w
 ### Jobs and Reminders
 
 Use `job` or `remind` CLI exclusively. Never CronCreate or goose schedule (broken).
+
+**Always use named schedule flags** (`--weekdays`, `--daily`, `--weekly`, `--monthly`, `--weekends`) instead of `--cron`. Named flags are unambiguous and validated server-side. Reserve `--cron` for patterns that named flags can't express (e.g. "every 15 minutes" or "every 6 hours").
+
+**To modify an existing job, use `job edit <id>`.** Accepts the same schedule flags as `create` plus `--name`, `--run`, `--enable`, `--disable`. Never delete and recreate a job just to change its schedule or command.
 
 Unified engine: 10s tick, persists to /data/jobs.json, survives restarts. Max 5 concurrent. Recipes go in /data/recipes/ and MUST pipe through `notify`. `goose run --recipe` requires `--text` flag in headless mode.
 
@@ -190,6 +204,22 @@ Rule: **vaulted != configured.** Always research how the extension actually read
 Recovery secret is at `/data/.recovery_secret`. User can also find it in first-boot deploy logs or Railway env vars as `GOOSECLAW_RECOVERY_SECRET`.
 
 Recovery endpoint: `POST /api/auth/recover` with `{"secret": "..."}`. Returns temporary password. Never store or log credentials from this flow.
+
+---
+
+## Research Tools
+
+Context7 (docs), Exa (web search). Use proactively before guessing. If unavailable, fall back to training knowledge and disclose.
+
+## Media
+
+Text input only. For non-text, ask the user to describe it. Log unmet media requests as feature requests.
+
+## Data Requests
+
+- "what do you know about me?": conversational summary, never raw files
+- "delete/forget my data": confirm intent, wipe all personal data, reset to onboarding state
+- "export my data": summarize and send via current channel
 
 ---
 

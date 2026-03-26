@@ -3847,6 +3847,116 @@ def humanize_cron(expr):
         return expr
 
 
+def schedule_to_cron(schedule):
+    """Convert a structured schedule object to a 5-field cron expression.
+
+    Accepts:
+      schedule.frequency: "daily" | "weekdays" | "weekends" | "weekly" | "monthly" | "custom"
+      schedule.time: "HH:MM" (required for all except "custom")
+      schedule.days: list of day names or numbers (for "weekly" or "custom")
+                     names: "sun","mon","tue","wed","thu","fri","sat"
+                     numbers: 0-6 (0=Sunday)
+      schedule.day_of_month: int 1-31 (for "monthly")
+
+    Returns (cron_expr, error_string). On success error is "".
+    """
+    if not isinstance(schedule, dict):
+        return None, "schedule must be an object"
+
+    freq = schedule.get("frequency", "").lower().strip()
+    time_str = schedule.get("time", "").strip()
+    days = schedule.get("days", [])
+    dom = schedule.get("day_of_month")
+
+    valid_freqs = {"daily", "weekdays", "weekends", "weekly", "monthly", "custom"}
+    if freq not in valid_freqs:
+        return None, f"frequency must be one of: {', '.join(sorted(valid_freqs))}"
+
+    # custom = pass raw cron through
+    if freq == "custom":
+        raw = schedule.get("cron", "").strip()
+        if not raw:
+            return None, "custom frequency requires a 'cron' field"
+        valid, err = _validate_cron(raw)
+        if not valid:
+            return None, f"invalid cron: {err}"
+        return raw, ""
+
+    # all other frequencies need a time
+    if not time_str:
+        return None, "time is required (HH:MM format)"
+    try:
+        parts = time_str.split(":")
+        hour = int(parts[0])
+        minute = int(parts[1]) if len(parts) > 1 else 0
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            raise ValueError
+    except (ValueError, IndexError):
+        return None, "time must be HH:MM format (00:00-23:59)"
+
+    day_name_map = {"sun": 0, "mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6}
+
+    if freq == "daily":
+        return f"{minute} {hour} * * *", ""
+
+    if freq == "weekdays":
+        return f"{minute} {hour} * * 1-5", ""
+
+    if freq == "weekends":
+        return f"{minute} {hour} * * 0,6", ""
+
+    if freq == "weekly":
+        if not days:
+            return None, "weekly frequency requires 'days' (e.g. [\"mon\"] or [1])"
+        cron_days = []
+        for d in days:
+            if isinstance(d, str):
+                d_lower = d.lower().strip()
+                if d_lower not in day_name_map:
+                    return None, f"unknown day name: '{d}'. use: sun,mon,tue,wed,thu,fri,sat"
+                cron_days.append(day_name_map[d_lower])
+            elif isinstance(d, (int, float)):
+                d_int = int(d)
+                if not (0 <= d_int <= 6):
+                    return None, f"day number must be 0-6 (0=Sunday), got {d_int}"
+                cron_days.append(d_int)
+            else:
+                return None, f"invalid day value: {d}"
+        cron_days = sorted(set(cron_days))
+        dow_str = ",".join(str(d) for d in cron_days)
+        return f"{minute} {hour} * * {dow_str}", ""
+
+    if freq == "monthly":
+        if dom is None:
+            return None, "monthly frequency requires 'day_of_month' (1-31)"
+        try:
+            dom = int(dom)
+            if not (1 <= dom <= 31):
+                raise ValueError
+        except (ValueError, TypeError):
+            return None, "day_of_month must be 1-31"
+        return f"{minute} {hour} {dom} * *", ""
+
+    return None, f"unhandled frequency: {freq}"
+
+
+def get_next_cron_runs(cron_expr, count=3):
+    """Return the next N occurrence timestamps for a cron expression."""
+    runs = []
+    ts = time.time()
+    for _ in range(count):
+        next_ts = _next_cron_occurrence(cron_expr, after_ts=ts)
+        if next_ts is None:
+            break
+        runs.append({
+            "timestamp": next_ts,
+            "iso": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(next_ts)),
+            "relative": _relative_time(next_ts - time.time()),
+        })
+        ts = next_ts
+    return runs
+
+
 def delete_job(job_id):
     """Delete/cancel a job by ID. Returns True if found."""
     with _jobs_lock:
@@ -10462,6 +10572,14 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                     self.send_json(400, {"error": "recurring_seconds must be an integer"})
                     return
 
+            # convert structured schedule to cron if provided
+            if data.get("schedule") and not data.get("cron"):
+                cron_result, sched_err = schedule_to_cron(data["schedule"])
+                if sched_err:
+                    self.send_json(400, {"error": f"invalid schedule: {sched_err}"})
+                    return
+                data["cron"] = cron_result
+
             # validate cron expression if provided
             if data.get("cron"):
                 valid, cron_err = _validate_cron(data["cron"])
@@ -10500,6 +10618,9 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json(409, {"error": err or "unknown error"})
             else:
                 response = {"created": True, "job": job}
+                if job.get("cron"):
+                    response["cron_human"] = humanize_cron(job["cron"])
+                    response["next_runs"] = get_next_cron_runs(job["cron"], count=3)
                 if job.get("fire_at"):
                     response["fires_in_seconds"] = round(job["fire_at"] - time.time())
                     response["fires_at_human"] = time.strftime("%Y-%m-%d %H:%M:%S %Z", time.localtime(job["fire_at"]))
@@ -10526,6 +10647,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                 j["fires_at_human"] = time.strftime("%Y-%m-%d %H:%M:%S %Z", time.localtime(j["fire_at"]))
             if j.get("cron"):
                 j["cron_human"] = humanize_cron(j["cron"])
+                j["next_runs"] = get_next_cron_runs(j["cron"], count=3)
             if j.get("expires_at"):
                 j["expires_in_seconds"] = round(j["expires_at"] - now)
                 j["expires_at_human"] = time.strftime("%Y-%m-%d %H:%M:%S %Z", time.localtime(j["expires_at"]))
@@ -10697,6 +10819,15 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(400, {"error": "invalid JSON"})
             return
 
+        # convert structured schedule to cron if provided
+        if data.get("schedule") and not data.get("cron"):
+            cron_result, sched_err = schedule_to_cron(data["schedule"])
+            if sched_err:
+                self.send_json(400, {"error": f"invalid schedule: {sched_err}"})
+                return
+            data["cron"] = cron_result
+            data.pop("schedule", None)
+
         # sanitize string fields
         for field in ("name", "command", "text", "cron", "model", "provider"):
             if data.get(field):
@@ -10707,7 +10838,11 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             status_code = 404 if "not found" in err else 400
             self.send_json(status_code, {"error": err})
         else:
-            self.send_json(200, {"updated": True, "job": updated})
+            resp = {"updated": True, "job": updated}
+            if updated and updated.get("cron"):
+                resp["cron_human"] = humanize_cron(updated["cron"])
+                resp["next_runs"] = get_next_cron_runs(updated["cron"], count=3)
+            self.send_json(200, resp)
 
     # ── channel plugin endpoints ──
 

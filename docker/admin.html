@@ -634,7 +634,7 @@ tr:hover td { background: rgba(124, 58, 237, 0.02); }
 }
 
 .create-panel.open {
-  max-height: 600px;
+  max-height: 800px;
 }
 
 .create-inner {
@@ -753,6 +753,62 @@ tr:hover td { background: rgba(124, 58, 237, 0.02); }
 
 .type-tab:not(:last-child) {
   border-right: 1px solid var(--border-subtle);
+}
+
+/* ── schedule builder ── */
+.day-picker {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.day-btn {
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.day-btn:hover {
+  border-color: var(--border-accent);
+  color: var(--text-primary);
+}
+.day-btn.active {
+  background: rgba(124, 58, 237, 0.15);
+  border-color: var(--accent);
+  color: var(--text-accent);
+  font-weight: 600;
+}
+.sched-preview {
+  margin: 8px 0 4px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: rgba(52, 211, 153, 0.06);
+  border: 1px solid rgba(52, 211, 153, 0.15);
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-family: 'JetBrains Mono', monospace;
+  line-height: 1.6;
+}
+.sched-preview .preview-label {
+  color: var(--success);
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 4px;
+  display: block;
+}
+.sched-preview .preview-cron {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+input[type="time"] {
+  color-scheme: dark;
 }
 
 .submit-btn {
@@ -1042,19 +1098,48 @@ tr:hover td { background: rgba(124, 58, 237, 0.02); }
         </div>
         <div class="form-row">
           <div class="form-group">
-            <label>Schedule Type</label>
+            <label>Frequency</label>
             <select id="sched-type" onchange="updateSchedFields()">
-              <option value="cron">Cron expression</option>
+              <option value="weekdays">Weekdays (Mon-Fri)</option>
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+              <option value="weekends">Weekends</option>
+              <option value="monthly">Monthly</option>
               <option value="every">Every interval</option>
-              <option value="in">In (delay)</option>
-              <option value="at">At (time)</option>
+              <option value="in">One-time delay</option>
+              <option value="cron">Custom cron</option>
             </select>
           </div>
-          <div class="form-group">
-            <label id="sched-label">Cron Expression</label>
+          <div class="form-group" id="sched-time-group">
+            <label>Time</label>
+            <input type="time" id="sched-time" value="09:00">
+          </div>
+          <div class="form-group" id="sched-value-group" style="display:none">
+            <label id="sched-label">Value</label>
             <input type="text" id="sched-value" placeholder="0 */6 * * *">
           </div>
         </div>
+        <div class="form-row" id="sched-days-row" style="display:none">
+          <div class="form-group" style="grid-column:1/-1">
+            <label>Days</label>
+            <div class="day-picker" id="sched-days">
+              <button type="button" class="day-btn" data-day="1" onclick="toggleDay(this)">Mon</button>
+              <button type="button" class="day-btn" data-day="2" onclick="toggleDay(this)">Tue</button>
+              <button type="button" class="day-btn" data-day="3" onclick="toggleDay(this)">Wed</button>
+              <button type="button" class="day-btn" data-day="4" onclick="toggleDay(this)">Thu</button>
+              <button type="button" class="day-btn" data-day="5" onclick="toggleDay(this)">Fri</button>
+              <button type="button" class="day-btn" data-day="6" onclick="toggleDay(this)">Sat</button>
+              <button type="button" class="day-btn" data-day="0" onclick="toggleDay(this)">Sun</button>
+            </div>
+          </div>
+        </div>
+        <div class="form-row" id="sched-dom-row" style="display:none">
+          <div class="form-group">
+            <label>Day of Month</label>
+            <input type="number" id="sched-dom" min="1" max="31" value="1" placeholder="1">
+          </div>
+        </div>
+        <div id="sched-preview" class="sched-preview" style="display:none"></div>
         <button class="submit-btn" onclick="submitJob()" id="submit-btn">Create Job</button>
       </div>
     </div>
@@ -1286,6 +1371,11 @@ function renderJobsTable(jobs, wrap) {
     else if (j.cron) sched = j.cron;
     else if (j.fires_at_human) sched = j.fires_at_human;
     if (j.recurring_seconds) sched += ' (every ' + formatDuration(j.recurring_seconds) + ')';
+    // show next run time if available
+    let nextRunTip = '';
+    if (j.next_runs && j.next_runs.length > 0) {
+      nextRunTip = j.next_runs.map(r => r.iso + ' (' + r.relative + ')').join('\n');
+    }
 
     // LLM display
     const isGooseJob = j.command && j.command.includes('goose');
@@ -1317,7 +1407,7 @@ function renderJobsTable(jobs, wrap) {
     html += '<tr id="job-row-' + j.id + '">'
       + '<td><span class="type-badge ' + typeCls + '">' + j.type + '</span></td>'
       + '<td class="name-cell" title="' + escAttr(j.name) + '">' + escHtml(j.name) + '</td>'
-      + '<td class="schedule-cell">' + escHtml(sched || '\u2014') + '</td>'
+      + '<td class="schedule-cell" title="' + escAttr(nextRunTip) + '">' + escHtml(sched || '\u2014') + '</td>'
       + '<td class="llm-cell">' + llmDisplay + '</td>'
       + '<td><span class="status-badge ' + statusCls + '">' + statusText
       + (tipHtml ? '<div class="status-tip">' + tipHtml + '</div>' : '')
@@ -1343,8 +1433,8 @@ function renderJobsTable(jobs, wrap) {
     // inline edit row (hidden by default, toggled by editJob)
     if (editingJobId === j.id) {
       const isScript = j.type !== 'reminder';
-      const schedVal = j.cron || (j.recurring_seconds ? formatDuration(j.recurring_seconds) : '') || '';
-      const schedLabel = j.cron ? 'Cron' : j.recurring_seconds ? 'Interval' : 'Schedule';
+      // detect schedule type from current cron
+      const editSched = detectScheduleType(j);
       html += '<tr class="edit-row"><td colspan="6"><div class="inline-edit">';
       if (isScript) {
         html += '<div class="form-group"><label>Name</label>'
@@ -1374,9 +1464,46 @@ function renderJobsTable(jobs, wrap) {
           + '<input type="text" id="edit-custom-model" value="' + escAttr(showCustom ? curModel : '') + '" placeholder="provider/model-name"></div>';
       }
 
-      html += '<div class="form-group"><label>' + schedLabel + '</label>'
-        + '<input type="text" id="edit-schedule" value="' + escAttr(schedVal) + '" placeholder="0 */6 * * *"></div>'
-        + '<div class="inline-edit-actions">'
+      // schedule builder
+      const freqOpts = [
+        ['weekdays', 'Weekdays (Mon-Fri)'], ['daily', 'Daily'], ['weekly', 'Weekly'],
+        ['weekends', 'Weekends'], ['monthly', 'Monthly'], ['every', 'Every interval'], ['cron', 'Custom cron']
+      ];
+      let freqSelect = '<select id="edit-freq" onchange="updateEditSchedFields()">';
+      for (const [val, label] of freqOpts) {
+        freqSelect += '<option value="' + val + '"' + (val === editSched.freq ? ' selected' : '') + '>' + label + '</option>';
+      }
+      freqSelect += '</select>';
+      html += '<div class="form-group"><label>Frequency</label>' + freqSelect + '</div>';
+
+      // time input (for visual types)
+      const showTime = !['every', 'cron'].includes(editSched.freq);
+      html += '<div class="form-group" id="edit-time-group" style="display:' + (showTime ? '' : 'none') + '"><label>Time</label>'
+        + '<input type="time" id="edit-time" value="' + escAttr(editSched.time) + '"></div>';
+
+      // value input (for cron/every)
+      const showVal = ['every', 'cron'].includes(editSched.freq);
+      const valLabel = editSched.freq === 'every' ? 'Interval' : 'Cron Expression';
+      const valPlaceholder = editSched.freq === 'every' ? '1h' : '0 */6 * * *';
+      html += '<div class="form-group" id="edit-value-group" style="display:' + (showVal ? '' : 'none') + '"><label id="edit-val-label">' + valLabel + '</label>'
+        + '<input type="text" id="edit-schedule" value="' + escAttr(editSched.rawVal) + '" placeholder="' + valPlaceholder + '"></div>';
+
+      // day picker (for weekly)
+      const dayNames = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+      const dayNums = [1, 2, 3, 4, 5, 6, 0];
+      let dayBtns = '';
+      for (let i = 0; i < 7; i++) {
+        const active = editSched.days.includes(dayNums[i]) ? ' active' : '';
+        dayBtns += '<button type="button" class="day-btn' + active + '" data-day="' + dayNums[i] + '" onclick="toggleDay(this)">' + dayNames[i] + '</button>';
+      }
+      html += '<div class="form-group" id="edit-days-row" style="grid-column:1/-1;display:' + (editSched.freq === 'weekly' ? '' : 'none') + '"><label>Days</label>'
+        + '<div class="day-picker" id="edit-days">' + dayBtns + '</div></div>';
+
+      // day of month (for monthly)
+      html += '<div class="form-group" id="edit-dom-row" style="display:' + (editSched.freq === 'monthly' ? '' : 'none') + '"><label>Day of Month</label>'
+        + '<input type="number" id="edit-dom" min="1" max="31" value="' + editSched.dom + '"></div>';
+
+      html += '<div class="inline-edit-actions">'
         + '<button class="save-btn" onclick="saveInlineEdit(\'' + j.id + '\')">Save</button>'
         + '<button class="cancel-btn" onclick="cancelEdit()">Cancel</button>'
         + '</div></div></td></tr>';
@@ -1484,18 +1611,155 @@ function setJobType(type) {
 
 function updateSchedFields() {
   const type = document.getElementById('sched-type').value;
+  const timeGroup = document.getElementById('sched-time-group');
+  const valueGroup = document.getElementById('sched-value-group');
+  const daysRow = document.getElementById('sched-days-row');
+  const domRow = document.getElementById('sched-dom-row');
   const label = document.getElementById('sched-label');
   const input = document.getElementById('sched-value');
-  const map = {
-    cron: ['Cron Expression', '0 */6 * * *'],
-    every: ['Interval', '1h'],
-    in: ['Delay', '5m'],
-    at: ['Time (HH:MM)', '09:00'],
-  };
-  label.textContent = map[type][0];
-  input.placeholder = map[type][1];
+
+  // reset visibility
+  timeGroup.style.display = 'none';
+  valueGroup.style.display = 'none';
+  daysRow.style.display = 'none';
+  domRow.style.display = 'none';
+
+  if (type === 'cron') {
+    valueGroup.style.display = '';
+    label.textContent = 'Cron Expression';
+    input.placeholder = '0 */6 * * *';
+  } else if (type === 'every') {
+    valueGroup.style.display = '';
+    label.textContent = 'Interval';
+    input.placeholder = '1h';
+  } else if (type === 'in') {
+    valueGroup.style.display = '';
+    label.textContent = 'Delay';
+    input.placeholder = '5m';
+  } else if (type === 'weekly') {
+    timeGroup.style.display = '';
+    daysRow.style.display = '';
+  } else if (type === 'monthly') {
+    timeGroup.style.display = '';
+    domRow.style.display = '';
+  } else {
+    // daily, weekdays, weekends
+    timeGroup.style.display = '';
+  }
   if (!editingJobId) input.value = '';
+  updateSchedPreview();
 }
+
+function toggleDay(btn) {
+  btn.classList.toggle('active');
+  updateSchedPreview();
+}
+
+function getSelectedDays() {
+  return Array.from(document.querySelectorAll('#sched-days .day-btn.active'))
+    .map(b => parseInt(b.dataset.day));
+}
+
+function buildSchedulePayload() {
+  const type = document.getElementById('sched-type').value;
+  const timeVal = document.getElementById('sched-time').value;
+  const cronVal = document.getElementById('sched-value').value.trim();
+
+  if (type === 'cron') {
+    return { cron: cronVal };
+  }
+  if (type === 'every') {
+    const secs = parseDuration(cronVal);
+    return secs ? { recurring_seconds: secs } : null;
+  }
+  if (type === 'in') {
+    const secs = parseDuration(cronVal);
+    return secs ? { delay_seconds: secs } : null;
+  }
+
+  // structured schedule types
+  const schedule = { frequency: type, time: timeVal || '09:00' };
+  if (type === 'weekly') {
+    const days = getSelectedDays();
+    if (days.length === 0) return null;
+    schedule.days = days;
+  }
+  if (type === 'monthly') {
+    const dom = parseInt(document.getElementById('sched-dom').value);
+    if (isNaN(dom) || dom < 1 || dom > 31) return null;
+    schedule.day_of_month = dom;
+  }
+  return { schedule };
+}
+
+function scheduleToPreviewCron() {
+  const type = document.getElementById('sched-type').value;
+  const timeVal = document.getElementById('sched-time').value || '09:00';
+  const [h, m] = timeVal.split(':').map(Number);
+  const minute = isNaN(m) ? 0 : m;
+  const hour = isNaN(h) ? 9 : h;
+
+  if (type === 'daily') return `${minute} ${hour} * * *`;
+  if (type === 'weekdays') return `${minute} ${hour} * * 1-5`;
+  if (type === 'weekends') return `${minute} ${hour} * * 0,6`;
+  if (type === 'weekly') {
+    const days = getSelectedDays();
+    if (days.length === 0) return null;
+    return `${minute} ${hour} * * ${days.sort().join(',')}`;
+  }
+  if (type === 'monthly') {
+    const dom = parseInt(document.getElementById('sched-dom').value);
+    if (isNaN(dom)) return null;
+    return `${minute} ${hour} ${dom} * *`;
+  }
+  if (type === 'cron') {
+    const val = document.getElementById('sched-value').value.trim();
+    return val.split(' ').length === 5 ? val : null;
+  }
+  return null;
+}
+
+function humanizeCronLocal(expr) {
+  if (!expr) return '';
+  const parts = expr.split(' ');
+  if (parts.length !== 5) return expr;
+  const [min, hr, dom, month, dow] = parts;
+  const time = `${hr.padStart(2,'0')}:${min.padStart(2,'0')}`;
+  const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  if (dow === '1-5') return `Weekdays at ${time}`;
+  if (dow === '0,6') return `Weekends at ${time}`;
+  if (dow !== '*' && dom === '*') {
+    const mapped = dow.split(',').map(d => dayNames[parseInt(d)] || d).join(', ');
+    return `${mapped} at ${time}`;
+  }
+  if (dom !== '*' && dow === '*') return `${dom}${ordinal(parseInt(dom))} of each month at ${time}`;
+  if (dom === '*' && dow === '*') return `Daily at ${time}`;
+  return expr;
+}
+
+function ordinal(n) {
+  if (n > 3 && n < 21) return 'th';
+  switch (n % 10) { case 1: return 'st'; case 2: return 'nd'; case 3: return 'rd'; default: return 'th'; }
+}
+
+function updateSchedPreview() {
+  const el = document.getElementById('sched-preview');
+  if (!el) return;
+  const cron = scheduleToPreviewCron();
+  if (!cron) { el.style.display = 'none'; return; }
+  const human = humanizeCronLocal(cron);
+  el.style.display = '';
+  el.innerHTML = '<span class="preview-label">Schedule Preview</span>'
+    + escHtml(human)
+    + ' <span class="preview-cron">(' + escHtml(cron) + ')</span>';
+}
+
+// update preview on time/dom changes
+document.addEventListener('input', function(e) {
+  if (e.target.id === 'sched-time' || e.target.id === 'sched-dom' || e.target.id === 'sched-value') {
+    updateSchedPreview();
+  }
+});
 
 function editJob(id) {
   if (editingJobId === id) { cancelEdit(); return; }  // toggle off
@@ -1530,12 +1794,98 @@ function toggleCustomModel() {
   if (sel && grp) grp.style.display = sel.value === '__custom' ? '' : 'none';
 }
 
+function detectScheduleType(job) {
+  const result = { freq: 'cron', time: '09:00', days: [], dom: 1, rawVal: '' };
+  if (job.recurring_seconds) {
+    result.freq = 'every';
+    result.rawVal = formatDuration(job.recurring_seconds);
+    return result;
+  }
+  if (!job.cron) return result;
+  const parts = job.cron.trim().split(/\s+/);
+  if (parts.length !== 5) { result.rawVal = job.cron; return result; }
+  const [min, hr, dom, month, dow] = parts;
+  if (hr !== '*' && min !== '*') result.time = hr.padStart(2, '0') + ':' + min.padStart(2, '0');
+
+  if (dow === '1-5' && dom === '*' && month === '*') { result.freq = 'weekdays'; return result; }
+  if (dow === '0,6' && dom === '*' && month === '*') { result.freq = 'weekends'; return result; }
+  if (dom === '*' && month === '*' && dow === '*') { result.freq = 'daily'; return result; }
+  if (dom !== '*' && month === '*' && dow === '*') {
+    result.freq = 'monthly';
+    result.dom = parseInt(dom) || 1;
+    return result;
+  }
+  if (dow !== '*' && dom === '*' && month === '*') {
+    result.freq = 'weekly';
+    result.days = dow.split(',').map(d => parseInt(d)).filter(d => !isNaN(d));
+    return result;
+  }
+  // fallback to raw cron
+  result.rawVal = job.cron;
+  return result;
+}
+
+function updateEditSchedFields() {
+  const freq = document.getElementById('edit-freq').value;
+  const timeGroup = document.getElementById('edit-time-group');
+  const valueGroup = document.getElementById('edit-value-group');
+  const daysRow = document.getElementById('edit-days-row');
+  const domRow = document.getElementById('edit-dom-row');
+  const valLabel = document.getElementById('edit-val-label');
+
+  timeGroup.style.display = 'none';
+  valueGroup.style.display = 'none';
+  daysRow.style.display = 'none';
+  domRow.style.display = 'none';
+
+  if (freq === 'cron') {
+    valueGroup.style.display = '';
+    valLabel.textContent = 'Cron Expression';
+  } else if (freq === 'every') {
+    valueGroup.style.display = '';
+    valLabel.textContent = 'Interval';
+  } else if (freq === 'weekly') {
+    timeGroup.style.display = '';
+    daysRow.style.display = '';
+  } else if (freq === 'monthly') {
+    timeGroup.style.display = '';
+    domRow.style.display = '';
+  } else {
+    timeGroup.style.display = '';
+  }
+}
+
+function buildEditSchedulePayload() {
+  const freq = document.getElementById('edit-freq').value;
+  const timeVal = document.getElementById('edit-time').value;
+  const rawVal = document.getElementById('edit-schedule').value.trim();
+
+  if (freq === 'cron') return rawVal ? { cron: rawVal } : null;
+  if (freq === 'every') {
+    const secs = parseDuration(rawVal);
+    return secs ? { recurring_seconds: secs } : null;
+  }
+
+  const schedule = { frequency: freq, time: timeVal || '09:00' };
+  if (freq === 'weekly') {
+    const days = Array.from(document.querySelectorAll('#edit-days .day-btn.active'))
+      .map(b => parseInt(b.dataset.day));
+    if (days.length === 0) return null;
+    schedule.days = days;
+  }
+  if (freq === 'monthly') {
+    const dom = parseInt(document.getElementById('edit-dom').value);
+    if (isNaN(dom) || dom < 1 || dom > 31) return null;
+    schedule.day_of_month = dom;
+  }
+  return { schedule };
+}
+
 async function saveInlineEdit(id) {
   const body = {};
   const nameEl = document.getElementById('edit-name');
   const cmdEl = document.getElementById('edit-command');
   const textEl = document.getElementById('edit-text');
-  const schedEl = document.getElementById('edit-schedule');
   const modelEl = document.getElementById('edit-model');
   const customModelEl = document.getElementById('edit-custom-model');
 
@@ -1556,20 +1906,12 @@ async function saveInlineEdit(id) {
     } else if (mv) {
       body.model = mv;
     } else {
-      body.model = '';  // clear override, use default
+      body.model = '';
     }
   }
-  if (schedEl && schedEl.value.trim()) {
-    const val = schedEl.value.trim();
-    // detect if it's a cron or interval
-    if (val.split(' ').length === 5) {
-      body.cron = val;
-    } else {
-      const secs = parseDuration(val);
-      if (secs) body.recurring_seconds = secs;
-      else body.cron = val;  // let server validate
-    }
-  }
+  // schedule from visual builder
+  const schedPayload = buildEditSchedulePayload();
+  if (schedPayload) Object.assign(body, schedPayload);
 
   const data = await api('/api/jobs/' + id, {
     method: 'PUT',
@@ -1590,16 +1932,18 @@ async function createJob() {
   const btn = document.getElementById('submit-btn');
   btn.disabled = true;
 
-  const schedType = document.getElementById('sched-type').value;
-  const schedVal = document.getElementById('sched-value').value.trim();
-
-  if (!schedVal) {
-    toast('schedule value required', 'error');
+  const schedPayload = buildSchedulePayload();
+  if (!schedPayload) {
+    const schedType = document.getElementById('sched-type').value;
+    const msg = schedType === 'weekly' ? 'select at least one day'
+      : schedType === 'every' || schedType === 'in' ? 'enter a valid duration'
+      : 'schedule value required';
+    toast(msg, 'error');
     btn.disabled = false;
     return;
   }
 
-  const body = { type: currentJobType };
+  const body = { type: currentJobType, ...schedPayload };
 
   if (currentJobType === 'script') {
     body.name = document.getElementById('job-name').value.trim();
@@ -1609,23 +1953,6 @@ async function createJob() {
   } else {
     body.text = document.getElementById('job-text').value.trim();
     if (!body.text) { toast('message required', 'error'); btn.disabled = false; return; }
-  }
-
-  if (schedType === 'cron') {
-    body.cron = schedVal;
-  } else if (schedType === 'every') {
-    body.recurring_seconds = parseDuration(schedVal);
-    if (!body.recurring_seconds) { toast('invalid interval', 'error'); btn.disabled = false; return; }
-  } else if (schedType === 'in') {
-    body.delay_seconds = parseDuration(schedVal);
-    if (!body.delay_seconds) { toast('invalid duration', 'error'); btn.disabled = false; return; }
-  } else if (schedType === 'at') {
-    const [h, m] = schedVal.split(':').map(Number);
-    if (isNaN(h) || isNaN(m)) { toast('use HH:MM format', 'error'); btn.disabled = false; return; }
-    const now = new Date();
-    const target = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m, 0);
-    if (target <= now) target.setDate(target.getDate() + 1);
-    body.fire_at = target.getTime() / 1000;
   }
 
   const data = await api('/api/jobs', {
@@ -1652,6 +1979,10 @@ function resetJobForm() {
   document.getElementById('job-command').value = '';
   document.getElementById('job-text').value = '';
   document.getElementById('sched-value').value = '';
+  document.getElementById('sched-time').value = '09:00';
+  document.querySelectorAll('#sched-days .day-btn').forEach(b => b.classList.remove('active'));
+  const preview = document.getElementById('sched-preview');
+  if (preview) preview.style.display = 'none';
 }
 
 // ── plugins ──

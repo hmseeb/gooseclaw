@@ -3771,12 +3771,14 @@ def update_job(job_id, updates):
         for key, val in updates.items():
             if key in allowed:
                 job[key] = val
-        # re-enabling an escalated job resets auto-fix state
+        # re-enabling an escalated job resets auto-fix state and circuit breaker
         if updates.get("enabled") is True and job.get("human_attention_required"):
             job["human_attention_required"] = False
             job["failure_count"] = 0
             job["auto_fix_attempts"] = 0
+            job["total_failures"] = 0
             job["auto_fix_history"] = []
+            job.pop("last_autofix_ts", None)
     _save_jobs()
     _jobs_log.info(f"updated: {job.get('name', job_id)} ({job_id})")
     return dict(job), ""
@@ -4207,9 +4209,10 @@ def get_schedule_context(hours=24):
         for j in troubled:
             name = j.get("name", j.get("id", "?"))
             fc = j.get("failure_count", 0)
+            tf = j.get("total_failures", 0)
             fix_attempts = j.get("auto_fix_attempts", 0)
             last_out = j.get("last_output", "")[:200]
-            status_str = "NEEDS HUMAN" if j.get("human_attention_required") else f"failing ({fc} consecutive)"
+            status_str = "NEEDS HUMAN" if j.get("human_attention_required") else f"failing ({fc} consecutive, {tf} total)"
             line = f"  - {name}: {status_str}"
             if fix_attempts > 0:
                 line += f", {fix_attempts} auto-fix attempt(s)"
@@ -4418,7 +4421,14 @@ def _handle_job_failure(job, status, output):
 
     All state reads and mutations happen under a single _jobs_lock acquisition
     to prevent race conditions from concurrent failures.
+
+    Circuit breaker: tracks total_failures across the entire lifecycle to prevent
+    infinite retry loops. Auto-disables after CIRCUIT_BREAKER_THRESHOLD total failures.
+    Autofix sessions have a cooldown window to prevent thread storms.
     """
+    CIRCUIT_BREAKER_THRESHOLD = 10  # total failures before hard disable
+    AUTOFIX_COOLDOWN_SECONDS = 120  # min gap between autofix sessions
+
     job_id = job.get("id", "unknown")
     job_name = job.get("name", job_id)
     max_retries = job.get("max_retries", 3)
@@ -4429,26 +4439,54 @@ def _handle_job_failure(job, status, output):
     with _jobs_lock:
         fc = job.get("failure_count", 0) + 1
         job["failure_count"] = fc
+
+        # circuit breaker: track total failures across entire lifecycle
+        total = job.get("total_failures", 0) + 1
+        job["total_failures"] = total
+
         fix_attempts = job.get("auto_fix_attempts", 0)
 
-        if fc <= max_retries:
-            # tier 1: auto-retry with exponential backoff
-            tier = 1
-            backoff = 30 * (2 ** (fc - 1))  # 30s, 60s, 120s
-            job["fire_at"] = time.time() + backoff
-            job["fired"] = False
-        elif fix_attempts < max_fix_attempts:
-            # tier 2: LLM auto-fix via isolated session
-            tier = 2
-            job["auto_fix_attempts"] = fix_attempts + 1
-        elif not job.get("human_attention_required"):
-            # tier 3: escalate to human
+        if total >= CIRCUIT_BREAKER_THRESHOLD:
+            # hard circuit breaker: too many total failures, disable immediately
             tier = 3
             job["human_attention_required"] = True
             job["enabled"] = False
+            # clear any pending fire_at to stop retries
+            if job.get("cron") and job.get("fire_at"):
+                del job["fire_at"]
         else:
-            # already escalated, nothing to do
-            tier = 0
+
+            if fc <= max_retries:
+                # tier 1: auto-retry with exponential backoff (capped at 5 min)
+                tier = 1
+                backoff = min(30 * (2 ** (fc - 1)), 300)
+                job["fire_at"] = time.time() + backoff
+                job["fired"] = False
+            elif fix_attempts < max_fix_attempts:
+                # tier 2: LLM auto-fix via isolated session (with cooldown)
+                last_fix_ts = job.get("last_autofix_ts", 0)
+                if time.time() - last_fix_ts < AUTOFIX_COOLDOWN_SECONDS:
+                    # cooldown not elapsed, delay retry instead of spawning a session
+                    tier = 1
+                    backoff = AUTOFIX_COOLDOWN_SECONDS
+                    job["fire_at"] = time.time() + backoff
+                    job["fired"] = False
+                    _gateway_log.info(f"{job_name}: autofix cooldown, retry in {backoff}s")
+                else:
+                    tier = 2
+                    job["auto_fix_attempts"] = fix_attempts + 1
+                    job["last_autofix_ts"] = time.time()
+            elif not job.get("human_attention_required"):
+                # tier 3: escalate to human
+                tier = 3
+                job["human_attention_required"] = True
+                job["enabled"] = False
+                # clear any pending fire_at
+                if job.get("cron") and job.get("fire_at"):
+                    del job["fire_at"]
+            else:
+                # already escalated, nothing to do
+                tier = 0
 
     if tier == 0:
         return
@@ -4456,9 +4494,9 @@ def _handle_job_failure(job, status, output):
     _save_jobs()
 
     if tier == 1:
-        _gateway_log.info(f"{job_name}: retry {fc}/{max_retries} in {backoff}s")
+        _gateway_log.info(f"{job_name}: retry {fc}/{max_retries} in {backoff}s (total failures: {total})")
     elif tier == 2:
-        _gateway_log.info(f"{job_name}: LLM fix attempt {fix_attempts + 1}/{max_fix_attempts}")
+        _gateway_log.info(f"{job_name}: LLM fix attempt {fix_attempts + 1}/{max_fix_attempts} (total failures: {total})")
         threading.Thread(
             target=_inject_fix_request,
             args=(job, status, output, fix_attempts + 1),
@@ -4470,14 +4508,15 @@ def _handle_job_failure(job, status, output):
             f"  attempt {h['attempt']}: {h.get('diagnosis', 'n/a')}"
             for h in history
         )
+        breaker_msg = f" Circuit breaker tripped ({total} total failures)." if total >= CIRCUIT_BREAKER_THRESHOLD else ""
         msg = (
-            f"[ESCALATION] Job '{job_name}' needs human attention.\n"
-            f"Failed {fc} times, {fix_attempts} auto-fix attempts exhausted.\n"
+            f"[ESCALATION] Job '{job_name}' needs human attention.{breaker_msg}\n"
+            f"Failed {fc} times, {job.get('auto_fix_attempts', 0)} auto-fix attempts.\n"
             f"Last error: {output[:300]}\n"
             f"Fix history:\n{history_text}\n"
-            f"Job disabled until manual intervention."
+            f"Job disabled until manual intervention. Use `job edit {job_id[:8]} --enable` to re-enable."
         )
-        _gateway_log.info(f"{job_name}: ESCALATED to human")
+        _gateway_log.info(f"{job_name}: ESCALATED to human (total_failures={total})")
         notify_all(msg)
 
 
@@ -4485,12 +4524,15 @@ def _handle_job_success(job):
     """Reset failure tracking on successful run."""
     fc = job.get("failure_count", 0)
     fix_attempts = job.get("auto_fix_attempts", 0)
-    if fc > 0 or fix_attempts > 0:
+    total = job.get("total_failures", 0)
+    if fc > 0 or fix_attempts > 0 or total > 0:
         job_name = job.get("name", job.get("id", "unknown"))
         with _jobs_lock:
             job["failure_count"] = 0
             job["auto_fix_attempts"] = 0
+            job["total_failures"] = 0
             job["human_attention_required"] = False
+            job.pop("last_autofix_ts", None)
             if fix_attempts > 0:
                 job["auto_fix_history"] = []
             # clear retry fire_at for cron jobs so they return to normal schedule

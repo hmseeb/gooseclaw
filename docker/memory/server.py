@@ -127,7 +127,7 @@ def memory_search(query: str, limit: int = 5) -> str:
     """
     limit = max(1, min(limit, 20))
     try:
-        results = memory.search(query=query, user_id=USER_ID, limit=limit, enable_graph=True)
+        results = memory.search(query=query, user_id=USER_ID, limit=limit)
         # Handle both dict and list response formats
         relations = []
         if isinstance(results, dict):
@@ -258,7 +258,7 @@ def memory_entities(query: str = "", limit: int = 10) -> str:
     """
     limit = max(1, min(limit, 50))
     try:
-        results = memory.search(query=query or "entities", user_id=USER_ID, limit=limit, enable_graph=True)
+        results = memory.search(query=query or "entities", user_id=USER_ID, limit=limit)
         if isinstance(results, dict):
             relations = results.get("relations", [])
         else:
@@ -291,7 +291,7 @@ def memory_relations(entity: str, limit: int = 10) -> str:
     """
     limit = max(1, min(limit, 50))
     try:
-        results = memory.search(query=entity, user_id=USER_ID, limit=limit, enable_graph=True)
+        results = memory.search(query=entity, user_id=USER_ID, limit=limit)
         if isinstance(results, dict):
             relations = results.get("relations", [])
         else:

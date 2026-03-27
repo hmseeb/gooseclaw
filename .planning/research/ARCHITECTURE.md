@@ -1,697 +1,947 @@
-# Architecture Research: mem0 Memory Layer Integration
+# Architecture: Voice Dashboard Integration
 
-**Domain:** AI agent memory system (vector + knowledge graph) for GooseClaw
-**Researched:** 2026-03-19
-**Confidence:** HIGH (verified against official docs, multiple sources, existing codebase)
+**Domain:** Real-time voice AI dashboard for GooseClaw
+**Researched:** 2026-03-27
+**Confidence:** HIGH (verified against Gemini Live API docs, existing gateway.py codebase, RFC 6455)
 
-## System Overview: Current vs. Target
+## System Overview
 
-### Current Architecture (What Exists)
+### Current Architecture (Relevant Components)
 
 ```
 +-------------------------------------------------------------------+
-|                    Railway Container (single)                      |
+|                    Railway Container                                |
 |-------------------------------------------------------------------|
 |                                                                    |
 |  entrypoint.sh                                                     |
 |       |                                                            |
-|       +-- gateway.py (HTTP server, stdlib only)                    |
+|       +-- gateway.py (ThreadingHTTPServer, stdlib only, ~10K lines)|
 |       |       |                                                    |
-|       |       +-- memory_writer_loop() ----------+                 |
-|       |       |   (idle detection,               |                 |
-|       |       |    LLM extraction via            |                 |
-|       |       |    goosed session,               |                 |
-|       |       |    routes to user.md             |                 |
-|       |       |    + ChromaDB runtime)           |                 |
-|       |       |                                  |                 |
-|       |       +-- goosed (lifecycle mgmt) -------+                 |
-|       |               |                          |                 |
-|       |               +-- knowledge MCP ---------+                 |
-|       |               |   (server.py, stdio,                       |
-|       |               |    ChromaDB system + runtime)              |
-|       |               |                                            |
-|       |               +-- memory MCP (builtin, goose-native)       |
-|       |               +-- context7 MCP (npx, stdio)                |
-|       |               +-- exa MCP (streamable_http)                |
-|       |               +-- developer MCP (platform)                 |
+|       |       +-- do_GET / do_POST routing                         |
+|       |       |   +-- /setup -> setup.html (self-contained)        |
+|       |       |   +-- /admin -> admin.html (self-contained)        |
+|       |       |   +-- /login -> login page                         |
+|       |       |   +-- /api/* -> JSON endpoints                     |
+|       |       |   +-- /* -> proxy_to_goose() (reverse proxy)       |
+|       |       |                                                    |
+|       |       +-- goosed lifecycle (start, restart, health)        |
+|       |       +-- channel plugins (Telegram, etc.)                 |
+|       |       +-- job engine, cron, notification bus               |
 |       |                                                            |
-|       +-- telegram gateway (managed by gateway.py)                 |
+|       +-- channel plugins (/data/channels/*.py)                    |
 |                                                                    |
+|  /data/secrets/vault.yaml  (API keys)                              |
+|  /data/config/setup.json   (provider config)                       |
++-------------------------------------------------------------------+
+```
+
+### Target Architecture (Voice Dashboard Added)
+
+```
++-------------------------------------------------------------------+
+|                    Railway Container                                |
 |-------------------------------------------------------------------|
-|  /data (Railway volume)                                            |
-|  +-- knowledge/chroma/  (ChromaDB: system + runtime collections)   |
-|  +-- identity/user.md   (identity traits, appended by memory       |
-|  |                       writer)                                   |
-|  +-- config/            (config.yaml, setup.json)                  |
-|  +-- secrets/vault.yaml (API keys)                                 |
+|                                                                    |
+|  gateway.py                                                        |
+|       |                                                            |
+|       +-- do_GET routing                                           |
+|       |   +-- /voice -> voice.html (NEW, self-contained)           |
+|       |   +-- /api/voice/token -> mint ephemeral session (NEW)     |
+|       |   +-- /api/voice/tools -> list available tools (NEW)       |
+|       |   +-- /setup, /admin, /login (unchanged)                   |
+|       |                                                            |
+|       +-- WebSocket upgrade detection (NEW)                        |
+|       |   +-- /ws/voice -> voice WebSocket handler                 |
+|       |       +-- Thread-per-connection (matches ThreadingHTTP)    |
+|       |       +-- Bidirectional relay:                              |
+|       |           browser <-> gateway.py <-> Gemini Live API       |
+|       |       +-- Tool call interception and execution             |
+|       |                                                            |
+|       +-- Gemini Live API client (NEW, stdlib ssl+socket)          |
+|       |   +-- WebSocket client to wss://generativelanguage...      |
+|       |   +-- API key from vault (never exposed to browser)        |
+|       |                                                            |
+|       +-- Tool executor (NEW)                                      |
+|       |   +-- Dispatches Gemini function calls to goosed           |
+|       |   +-- Returns results back through WebSocket               |
+|       |                                                            |
+|       +-- goosed lifecycle, channels, jobs (unchanged)             |
+|                                                                    |
+|  /data/secrets/vault.yaml  (+ GEMINI_API_KEY)                      |
+|  /data/config/setup.json   (+ gemini key flag)                     |
 +-------------------------------------------------------------------+
 ```
 
-### Target Architecture (What We're Building)
+## Core Architectural Decision: Server-Side WebSocket Proxy
 
-```
-+-------------------------------------------------------------------+
-|                    Railway Project (multi-service)                  |
-|                                                                    |
-|  +-------------------------------------------------------------+  |
-|  |              GooseClaw Container (existing)                  |  |
-|  |                                                              |  |
-|  |  gateway.py                                                  |  |
-|  |      |                                                       |  |
-|  |      +-- memory_writer_loop() -- mem0 Python lib --------+  |  |
-|  |      |   (MODIFIED: uses mem0.add() instead of            |  |  |
-|  |      |    manual LLM extraction + ChromaDB upsert)        |  |  |
-|  |      |                                                     |  |  |
-|  |      +-- goosed                                            |  |  |
-|  |              |                                             |  |  |
-|  |              +-- mem0 MCP (NEW, stdio, Python) -----------+  |  |
-|  |              |   (search, add, get tools for goose)       |  |  |
-|  |              |                                             |  |  |
-|  |              +-- knowledge MCP (KEPT for system docs)      |  |  |
-|  |              +-- context7, exa, developer (unchanged)      |  |  |
-|  |              +-- memory MCP (builtin, can disable)         |  |  |
-|  |                                                            |  |  |
-|  +--------------------------------------+---------------------+  |
-|                                          | private network        |
-|  +--------------------------------------+---------------------+  |
-|  |         pgvector Service (Railway DB)                      |  |
-|  |                                                            |  |
-|  |  ankane/pgvector:v0.5.1                                    |  |
-|  |  +-- mem0 vector embeddings                                |  |
-|  |  +-- mem0 history (SQLAlchemy)                             |  |
-|  |                                                            |  |
-|  |  Volume: postgres_data (Railway-managed)                   |  |
-|  +------------------------------------------------------------+  |
-|                                                                    |
-|  +------------------------------------------------------------+  |
-|  |         Neo4j Service (Railway template) [PHASE 2]         |  |
-|  |                                                            |  |
-|  |  neo4j:5.26.4 + APOC                                      |  |
-|  |  +-- entity graph (people, projects, orgs)                 |  |
-|  |  +-- relationship edges                                    |  |
-|  |                                                            |  |
-|  |  Volume: neo4j_data (Railway-managed)                      |  |
-|  +------------------------------------------------------------+  |
-|                                                                    |
-+-------------------------------------------------------------------+
-```
+**Decision: gateway.py acts as a WebSocket proxy between browser and Gemini Live API. The browser never sees the Gemini API key.**
 
-## Integration Decision: MCP Server + Embedded Library (Hybrid)
+### Why Server-Side Proxy (Not Direct Browser-to-Gemini)
 
-**Decision: Use mem0 as BOTH an MCP server (for goose tool access) AND embedded in gateway.py (for the memory writer pipeline).**
+| Approach | Security | Complexity | Stdlib Compatible |
+|----------|----------|------------|-------------------|
+| Browser direct to Gemini (API key in JS) | BAD: key exposed | Low | N/A |
+| Ephemeral token (browser direct with short-lived token) | Good | Medium | NO: requires `google-genai` SDK for token minting, REST endpoint undocumented |
+| Server-side WebSocket proxy | Good: key stays server-side | Medium | YES: stdlib socket + ssl |
 
-### Why Not MCP-Only
+**Ephemeral tokens are the "right" approach per Google's docs, but the REST API for minting tokens is undocumented.** Google only provides SDK methods (`client.auth_tokens.create()`). Since gateway.py is stdlib-only (no pip), we cannot import the google-genai SDK. The underlying REST endpoint exists but is not publicly documented, making it fragile to reverse-engineer.
 
-The memory writer runs in gateway.py's background thread. It currently calls `_do_rest_relay()` to create a goosed session for LLM extraction, then manually parses JSON and upserts to ChromaDB. Replacing this with `mem0.Memory.add()` directly in gateway.py is cleaner because:
+The server-side proxy approach:
+1. Keeps the API key on the server (vault.yaml). Browser never sees it.
+2. Uses stdlib `ssl` + `socket` to open a WebSocket client connection to Gemini.
+3. Uses stdlib `socket` to accept a WebSocket connection from the browser.
+4. Relays JSON messages bidirectionally in a dedicated thread per connection.
+5. Intercepts `toolCall` messages from Gemini to execute tools server-side.
 
-1. mem0's `add()` does LLM extraction + contradiction resolution + embedding + storage in one call
-2. No need to create a goosed session just to extract memories (saves LLM tokens, avoids session overhead)
-3. The memory writer already breaks the "stdlib only" rule by importing chromadb directly. Adding mem0ai is the same pattern.
+This is architecturally similar to how `proxy_to_goose()` already works (gateway.py proxies HTTP to goosed), except bidirectional and persistent.
 
-### Why Not Embedded-Only
-
-Goose needs MCP tools to search and add memories during conversations. An MCP server (stdio) provides `memory_search`, `memory_add`, etc. as tools goose can call directly. This is the standard GooseClaw extension pattern.
-
-### The Hybrid Pattern
-
-```
-gateway.py (memory writer background thread)
-    +-- from mem0 import Memory
-        +-- memory.add(messages, user_id="haseeb")     # end-of-session extraction
-        +-- memory.search(query, user_id="haseeb")      # internal lookups
-
-mem0_mcp/server.py (MCP extension, stdio)
-    +-- from mem0 import Memory
-        +-- @mcp.tool() memory_search(...)               # goose calls during chat
-        +-- @mcp.tool() memory_add(...)                  # goose stores facts live
-        +-- @mcp.tool() memory_get(...)                  # goose retrieves by ID
-```
-
-Both share the same mem0 config pointing to the same pgvector + neo4j backends. No conflict because mem0 uses standard PostgreSQL connections (connection pooling handles concurrency).
-
-## Component Responsibilities
+## Component Boundaries
 
 | Component | Responsibility | New/Modified | Communicates With |
 |-----------|---------------|-------------|-------------------|
-| **mem0 MCP server** | Expose memory tools to goose (search, add, get, delete) | NEW | goosed (stdio), pgvector, neo4j |
-| **gateway.py memory writer** | End-of-session extraction, idle detection, auto-feed conversations | MODIFIED | mem0 lib (embedded), pgvector, neo4j |
-| **pgvector service** | Store vector embeddings, mem0 history tables | NEW (Railway service) | mem0 lib (via psycopg) |
-| **Neo4j service** | Entity/relationship graph storage | NEW (Railway service, Phase 2) | mem0 lib (via neo4j driver) |
-| **knowledge MCP** | System docs only (onboarding, schemas, platform reference) | MODIFIED (scope narrowed) | goosed (stdio), ChromaDB (local) |
-| **ChromaDB** | System namespace only (no more runtime/user memories) | MODIFIED (runtime collection deprecated) | knowledge MCP server |
-| **config.yaml** | mem0 MCP extension registration | MODIFIED | entrypoint.sh, goosed |
-| **entrypoint.sh** | pgvector readiness check, mem0 config generation | MODIFIED | gateway.py, config files |
-| **Dockerfile** | Install mem0ai + psycopg + neo4j driver | MODIFIED | pip install |
-| **requirements.txt** | Add mem0ai, psycopg[binary], neo4j | MODIFIED | Dockerfile |
+| **voice.html** | Voice dashboard UI (mic, visualizer, transcript) | NEW | gateway.py (WebSocket + REST APIs) |
+| **WebSocket acceptor** | Detect WS upgrade on /ws/voice, perform handshake | NEW (in gateway.py) | Browser WebSocket |
+| **WebSocket proxy loop** | Bidirectional relay: browser frames <-> Gemini frames | NEW (in gateway.py) | Browser, Gemini Live API |
+| **Gemini WS client** | Open outbound WebSocket to Gemini, send setup config | NEW (in gateway.py) | Gemini Live API (wss://) |
+| **Tool executor** | Intercept toolCall from Gemini, dispatch to goosed, return toolResponse | NEW (in gateway.py) | goosed (/agent/reply REST) |
+| **Voice API endpoints** | /api/voice/token (session init), /api/voice/tools (tool list) | NEW (in gateway.py) | voice.html |
+| **Setup wizard** | Add Gemini API key as optional provider | MODIFIED | vault.yaml |
+| **Vault** | Store GEMINI_API_KEY | MODIFIED (new key) | gateway.py |
+| **gateway.py routing** | Add /voice, /ws/voice, /api/voice/* routes | MODIFIED | All voice components |
 
-## Data Flow
+## Data Flows
 
-### Flow 1: Goose Searches Memories (During Conversation)
-
-```
-User asks: "what was that project deadline?"
-    |
-    v
-goosed receives message
-    |
-    v
-goosed calls mem0 MCP tool: memory_search(query="project deadline", user_id="haseeb")
-    |
-    v
-mem0 MCP server.py:
-    1. memory.search(query="project deadline", user_id="haseeb", limit=5)
-    2. mem0 lib embeds query via configured embedder
-    3. pgvector returns top-k similar memories
-    4. [Phase 2] neo4j returns related entities
-    5. [optional] reranker reorders results
-    |
-    v
-MCP returns structured results to goosed
-    |
-    v
-goosed incorporates memories into response
-```
-
-### Flow 2: End-of-Session Memory Extraction (Background)
+### Flow 1: Voice Session Establishment
 
 ```
-User goes idle for N minutes
-    |
-    v
-gateway.py _memory_writer_loop() detects idle
-    |
-    v
-Fetches conversation messages via _fetch_session_messages(sid)
-    |
-    v
-CURRENT: creates goosed session, sends MEMORY_EXTRACT_PROMPT,
-         parses JSON, manually upserts to ChromaDB + user.md
-
-NEW: calls mem0.Memory.add(messages=conversation, user_id="haseeb")
-     mem0 internally:
-         1. LLM extracts facts from conversation
-         2. Embeds each fact
-         3. Searches pgvector for existing similar memories
-         4. LLM decides ADD/UPDATE/DELETE for each fact
-         5. Writes to pgvector + neo4j graph
-    |
-    v
-Done. No goosed session needed. No manual JSON parsing.
+Browser                    gateway.py                    Gemini Live API
+   |                          |                              |
+   |  GET /voice              |                              |
+   |  (with auth cookie)      |                              |
+   |------------------------->|                              |
+   |  <- voice.html           |                              |
+   |                          |                              |
+   |  GET /api/voice/token    |                              |
+   |  (check Gemini key)      |                              |
+   |------------------------->|                              |
+   |  <- {ready: true,        |                              |
+   |      tools: [...]}       |                              |
+   |                          |                              |
+   |  WS Upgrade: /ws/voice   |                              |
+   |  Sec-WebSocket-Key: xxx  |                              |
+   |------------------------->|                              |
+   |  <- 101 Switching Proto  |                              |
+   |                          |                              |
+   |  (WS open)               |  WS Connect to:             |
+   |                          |  wss://generativelanguage..  |
+   |                          |  ?key=GEMINI_API_KEY         |
+   |                          |-------------------------->   |
+   |                          |  <- WS open                  |
+   |                          |                              |
+   |                          |  Send setup config:          |
+   |                          |  {config: {model: ...,       |
+   |                          |   tools: [...],              |
+   |                          |   responseModalities: [AUDIO]|
+   |                          |   systemInstruction: ...}}   |
+   |                          |-------------------------->   |
+   |                          |  <- {setupComplete: ...}     |
+   |                          |                              |
+   |  <- {type: "ready"}      |                              |
 ```
 
-### Flow 3: Goose Adds Memory Live (During Conversation)
+### Flow 2: Audio Streaming (Ongoing)
 
 ```
-User says: "remember, I switched to Cursor from VS Code"
-    |
-    v
-goosed calls mem0 MCP tool: memory_add(
-    messages=[{"role": "user", "content": "I switched to Cursor from VS Code"}],
-    user_id="haseeb"
-)
-    |
-    v
-mem0 processes: extracts fact "user switched from VS Code to Cursor",
-                checks for existing "user uses VS Code" memory,
-                LLM decides UPDATE (contradiction resolution),
-                updates pgvector embedding, updates neo4j graph
-    |
-    v
-MCP returns confirmation to goosed
+Browser                    gateway.py                    Gemini Live API
+   |                          |                              |
+   |  mic audio chunk         |                              |
+   |  (PCM 16kHz, base64)     |                              |
+   |  {realtimeInput: {       |                              |
+   |    audio: {data: "...",  |                              |
+   |    mimeType: "audio/pcm  |                              |
+   |    ;rate=16000"}}}        |                              |
+   |------------------------->|                              |
+   |                          |  Forward verbatim            |
+   |                          |-------------------------->   |
+   |                          |                              |
+   |                          |  <- {serverContent: {        |
+   |                          |       modelTurn: {parts: [{  |
+   |                          |         inlineData: {        |
+   |                          |           data: "base64...", |
+   |                          |           mimeType: "audio   |
+   |                          |           /pcm;rate=24000"   |
+   |                          |       }}]}}}                 |
+   |                          |                              |
+   |  <- forward verbatim     |                              |
+   |  (browser plays audio)   |                              |
+   |                          |                              |
+   |                          |  <- {serverContent: {        |
+   |                          |       outputTranscription:   |
+   |                          |       {text: "Hello!"}}}     |
+   |  <- forward verbatim     |                              |
+   |  (browser shows text)    |                              |
 ```
 
-### Flow 4: Identity Routing (What Changes for user.md)
+### Flow 3: Tool Calling (Mid-Conversation)
 
-The current memory writer routes "identity" traits to user.md and "knowledge" to ChromaDB. With mem0, this bifurcation needs rethinking.
-
-**Recommendation: Let mem0 handle ALL memory storage. Stop writing to user.md automatically.**
-
-Rationale:
-- mem0's contradiction resolution handles updates natively. The current user.md append-only model accumulates contradictions.
-- user.md becomes a manually curated file (edited by user or goose via developer MCP), not an auto-append target.
-- mem0 can store identity-type memories with metadata tags (e.g., `metadata={"category": "identity"}`) for filtering.
-- Searching mem0 for identity facts is faster and more reliable than parsing a markdown file.
-
-If user.md must remain as a read source for identity context, goose can read it via developer MCP. But writing should go through mem0.
-
-## Railway Deployment Architecture
-
-### Multi-Service Setup
-
-Railway supports multiple services within one project. Each service gets its own container. Services communicate over a private network using `<service>.railway.internal` DNS.
-
-**Service 1: GooseClaw (existing)**
-- Dockerfile: existing, add mem0ai to requirements.txt
-- Volume: /data (existing Railway volume)
-- Env vars: add `MEM0_PGVECTOR_HOST`, `MEM0_PGVECTOR_PORT`, `MEM0_PGVECTOR_PASSWORD`, `MEM0_NEO4J_URI`, `MEM0_NEO4J_PASSWORD`
-- References pgvector and neo4j via Railway service reference variables
-
-**Service 2: pgvector**
-- Image: `ankane/pgvector:v0.5.1` (or Railway's pgvector template, updated March 2026)
-- Volume: Railway-managed postgres data
-- Exposed internally: `pgvector.railway.internal:5432`
-- Healthcheck: `pg_isready`
-- Init: `CREATE EXTENSION IF NOT EXISTS vector;` (auto via image)
-
-**Service 3: Neo4j (Phase 2)**
-- Image: `neo4j:5.26.4`
-- Volume: Railway-managed neo4j data
-- Exposed internally: `neo4j.railway.internal:7687` (bolt)
-- Env: `NEO4J_AUTH=neo4j/<password>`, `NEO4J_PLUGINS=["apoc"]`
-- Memory: Neo4j needs ~512MB minimum. Railway VMs support this on paid tier.
-- WARNING: Cannot run on Railway trial accounts (VMs too small for Neo4j)
-
-### Environment Variable Wiring
-
-```yaml
-# GooseClaw service references (in Railway dashboard):
-MEM0_PGVECTOR_HOST: ${{pgvector.PGHOST}}
-MEM0_PGVECTOR_PORT: ${{pgvector.PGPORT}}
-MEM0_PGVECTOR_USER: ${{pgvector.PGUSER}}
-MEM0_PGVECTOR_PASSWORD: ${{pgvector.POSTGRES_PASSWORD}}
-MEM0_PGVECTOR_DB: ${{pgvector.PGDATABASE}}
-
-# Phase 2:
-MEM0_NEO4J_URI: bolt://${{neo4j.RAILWAY_PRIVATE_DOMAIN}}:7687
-MEM0_NEO4J_PASSWORD: <configured password>
+```
+Browser                    gateway.py                    Gemini Live API
+   |                          |                              |
+   |                          |  <- {toolCall: {             |
+   |                          |       functionCalls: [{      |
+   |                          |         id: "call_123",      |
+   |                          |         name: "search_email",|
+   |                          |         args: {q: "meeting"} |
+   |                          |       }]}}                   |
+   |                          |                              |
+   |  <- {type: "tool_call",  |                              |
+   |      name: "search_email"|  (notify browser for UI)     |
+   |      status: "executing"}|                              |
+   |                          |                              |
+   |                          |  Execute tool via goosed:    |
+   |                          |  POST /agent/reply           |
+   |                          |  session_id, tool prompt     |
+   |                          |  (or direct MCP dispatch)    |
+   |                          |                              |
+   |                          |  tool result: {...}          |
+   |                          |                              |
+   |                          |  Send to Gemini:             |
+   |                          |  {toolResponse: {            |
+   |                          |    functionResponses: [{     |
+   |                          |      id: "call_123",         |
+   |                          |      name: "search_email",   |
+   |                          |      response: {result: ...} |
+   |                          |    }]}}                       |
+   |                          |-------------------------->   |
+   |                          |                              |
+   |  <- {type: "tool_call",  |                              |
+   |      name: "search_email"|                              |
+   |      status: "complete"} |                              |
+   |                          |                              |
+   |                          |  <- {serverContent: ...}     |
+   |                          |  (Gemini speaks the result)  |
+   |  <- audio response       |                              |
 ```
 
-### mem0 Config Generation (shared module)
+### Flow 4: Session Cleanup
+
+```
+Browser                    gateway.py                    Gemini Live API
+   |                          |                              |
+   |  WS close frame          |                              |
+   |------------------------->|                              |
+   |                          |  WS close frame              |
+   |                          |-------------------------->   |
+   |                          |                              |
+   |                          |  Cleanup:                    |
+   |                          |  - Close Gemini socket       |
+   |                          |  - Remove session from map   |
+   |                          |  - Log session stats         |
+   |                          |  (thread exits naturally)    |
+```
+
+## WebSocket Implementation in Python Stdlib
+
+**This is the hardest part of the build.** Python's `http.server` module has no WebSocket support. The WebSocket protocol (RFC 6455) must be implemented from scratch using stdlib modules.
+
+### Required stdlib Modules
+
+| Module | Purpose |
+|--------|---------|
+| `socket` | Raw TCP for outbound Gemini connection |
+| `ssl` | TLS wrapping for wss:// to Gemini |
+| `hashlib` | SHA-1 for WebSocket handshake accept key |
+| `base64` | Base64 for handshake + audio data |
+| `struct` | Binary frame packing/unpacking |
+| `threading` | Thread-per-connection (consistent with ThreadingHTTPServer) |
+| `json` | Message serialization (Gemini protocol is JSON over WebSocket text frames) |
+
+### WebSocket Server Handshake (Browser -> Gateway)
 
 ```python
-# docker/mem0_config.py
-# Builds mem0 config dict from environment variables at boot time.
-# Shared between gateway.py (embedded) and mem0_mcp/server.py (MCP).
+# In GatewayHandler.do_GET, detect WebSocket upgrade:
+def do_GET(self):
+    if (self.headers.get("Upgrade", "").lower() == "websocket" and
+        path == "/ws/voice"):
+        self._handle_voice_websocket()
+        return
+    # ... existing routing ...
 
-import os
+def _handle_voice_websocket(self):
+    """Upgrade HTTP connection to WebSocket, then proxy to Gemini."""
+    # 1. Validate auth (cookie or query param token)
+    if not check_auth(self):
+        self.send_error(401)
+        return
 
-# Maps GOOSE_PROVIDER values to mem0 LLM provider names
-GOOSE_TO_MEM0_PROVIDER = {
-    "anthropic": "anthropic",
-    "openai": "openai",
-    "google": "google",
-    "groq": "groq",
-    "openrouter": "litellm",    # mem0 doesn't support openrouter natively
-    "ollama": "ollama",
-    "azure-openai": "azure_openai",
-    "deepseek": "deepseek",
-}
+    # 2. Check Gemini API key exists in vault
+    gemini_key = _get_gemini_api_key()
+    if not gemini_key:
+        self.send_error(503, "Gemini API key not configured")
+        return
 
-def build_mem0_config():
-    """Build mem0 config dict from environment variables."""
-    # detect LLM provider from goose config
-    goose_provider = os.environ.get("GOOSE_PROVIDER", "anthropic")
-    mem0_provider = GOOSE_TO_MEM0_PROVIDER.get(goose_provider, "openai")
+    # 3. Perform WebSocket handshake
+    ws_key = self.headers.get("Sec-WebSocket-Key", "")
+    MAGIC = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+    accept = base64.b64encode(
+        hashlib.sha1((ws_key + MAGIC).encode()).digest()
+    ).decode()
 
-    config = {
-        "llm": {
-            "provider": mem0_provider,
-            "config": {
-                "model": os.environ.get("MEM0_LLM_MODEL", _default_model(mem0_provider)),
-                "temperature": 0.1,
-                "max_tokens": 2000,
-            }
-        },
-        "embedder": {
-            "provider": "openai",
-            "config": {
-                "model": "text-embedding-3-small",
-            }
-        },
-        "vector_store": {
-            "provider": "pgvector",
-            "config": {
-                "host": os.environ.get("MEM0_PGVECTOR_HOST", "localhost"),
-                "port": int(os.environ.get("MEM0_PGVECTOR_PORT", "5432")),
-                "user": os.environ.get("MEM0_PGVECTOR_USER", "postgres"),
-                "password": os.environ.get("MEM0_PGVECTOR_PASSWORD", ""),
-                "dbname": os.environ.get("MEM0_PGVECTOR_DB", "postgres"),
-            }
-        },
-    }
+    self.send_response(101, "Switching Protocols")
+    self.send_header("Upgrade", "websocket")
+    self.send_header("Connection", "Upgrade")
+    self.send_header("Sec-WebSocket-Accept", accept)
+    self.end_headers()
 
-    # optional neo4j graph store (Phase 2)
-    neo4j_uri = os.environ.get("MEM0_NEO4J_URI")
-    if neo4j_uri:
-        config["graph_store"] = {
-            "provider": "neo4j",
-            "config": {
-                "url": neo4j_uri,
-                "username": "neo4j",
-                "password": os.environ.get("MEM0_NEO4J_PASSWORD", ""),
-            }
+    # 4. Connection is now WebSocket. Take over the socket.
+    browser_sock = self.request  # the raw socket
+    browser_sock.settimeout(None)  # no timeout for long-lived WS
+
+    # 5. Open outbound WebSocket to Gemini
+    gemini_sock = _connect_gemini_ws(gemini_key)
+
+    # 6. Send Gemini setup config
+    _ws_send_text(gemini_sock, json.dumps({
+        "setup": {
+            "model": "models/gemini-2.0-flash-live-001",
+            "generationConfig": {
+                "responseModalities": ["AUDIO"],
+                "speechConfig": {
+                    "voiceConfig": {
+                        "prebuiltVoiceConfig": {"voiceName": "Kore"}
+                    }
+                }
+            },
+            "systemInstruction": {
+                "parts": [{"text": _build_system_prompt()}]
+            },
+            "tools": _build_tool_declarations()
         }
+    }))
 
-    return config
+    # 7. Wait for setupComplete from Gemini
+    setup_resp = _ws_recv(gemini_sock)
+    _ws_send_text(browser_sock, json.dumps({"type": "ready"}))
 
-
-def _default_model(provider):
-    """Sensible default extraction model per provider."""
-    defaults = {
-        "anthropic": "claude-sonnet-4-20250514",
-        "openai": "gpt-4.1-nano-2025-04-14",
-        "groq": "llama-3.3-70b-versatile",
-        "ollama": "llama3.2",
-    }
-    return defaults.get(provider, "gpt-4.1-nano-2025-04-14")
+    # 8. Start bidirectional relay
+    _voice_relay_loop(browser_sock, gemini_sock)
 ```
 
-## Recommended Project Structure
-
-```
-docker/
-+-- gateway.py                    # MODIFIED: memory writer uses mem0.add()
-+-- knowledge/
-|   +-- server.py                 # KEPT: system docs only, ChromaDB
-+-- mem0_mcp/
-|   +-- server.py                 # NEW: MCP server wrapping mem0 for goose
-|   +-- migrate_from_chromadb.py  # NEW: one-time migration script
-+-- mem0_config.py                # NEW: shared mem0 config builder
-+-- requirements.txt              # MODIFIED: add mem0ai, psycopg[binary]
-+-- entrypoint.sh                 # MODIFIED: pgvector readiness check
-```
-
-### Structure Rationale
-
-- **mem0_mcp/server.py** follows the same pattern as knowledge/server.py. FastMCP, stdio transport, self-contained.
-- **mem0_config.py** is shared between gateway.py and mem0_mcp/server.py to keep config DRY. Both import it.
-- **knowledge/server.py** stays untouched. ChromaDB handles system docs, mem0 handles user memories. Clean separation.
-
-### mem0 MCP Server (docker/mem0_mcp/server.py)
+### WebSocket Frame Reading/Writing (Core Protocol)
 
 ```python
-"""MCP server wrapping mem0 for goose tool access.
+# ~100 lines of code for the core WebSocket frame protocol.
+# This is well-understood, stable protocol code (RFC 6455).
 
-Provides: memory_search, memory_add, memory_get_all, memory_delete
-Transport: stdio (standard GooseClaw MCP pattern)
-"""
-import os
-import sys
-import json
-import logging
-from mcp.server.fastmcp import FastMCP
-from mem0 import Memory
+OPCODE_TEXT = 0x1
+OPCODE_BINARY = 0x2
+OPCODE_CLOSE = 0x8
+OPCODE_PING = 0x9
+OPCODE_PONG = 0xA
 
-logging.basicConfig(stream=sys.stderr, level=logging.INFO)
-logger = logging.getLogger("mem0-mcp")
+def _ws_recv_frame(sock):
+    """Read one WebSocket frame. Returns (opcode, payload_bytes, fin)."""
+    header = _recv_exact(sock, 2)
+    fin = (header[0] >> 7) & 1
+    opcode = header[0] & 0x0F
+    masked = (header[1] >> 7) & 1
+    length = header[1] & 0x7F
 
-# import shared config builder
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from mem0_config import build_mem0_config
+    if length == 126:
+        length = struct.unpack(">H", _recv_exact(sock, 2))[0]
+    elif length == 127:
+        length = struct.unpack(">Q", _recv_exact(sock, 8))[0]
 
-config = build_mem0_config()
-memory = Memory.from_config(config)
+    if masked:
+        mask = _recv_exact(sock, 4)
+        payload = bytearray(_recv_exact(sock, length))
+        for i in range(length):
+            payload[i] ^= mask[i % 4]
+    else:
+        payload = _recv_exact(sock, length)
 
-DEFAULT_USER_ID = os.environ.get("MEM0_USER_ID", "haseeb")
+    return opcode, bytes(payload), fin
 
-mcp = FastMCP("mem0-memory")
+def _ws_send_text(sock, text, masked=False):
+    """Send a text WebSocket frame."""
+    payload = text.encode("utf-8")
+    _ws_send_frame(sock, OPCODE_TEXT, payload, masked)
 
+def _ws_send_frame(sock, opcode, payload, masked=False):
+    """Send a WebSocket frame with proper length encoding."""
+    header = bytearray()
+    header.append(0x80 | opcode)  # FIN + opcode
 
-@mcp.tool()
-def memory_search(query: str, limit: int = 5) -> str:
-    """Search memories semantically. Returns relevant stored memories.
-
-    Args:
-        query: Natural language search query
-        limit: Max results (default 5)
-    """
-    results = memory.search(query=query, user_id=DEFAULT_USER_ID, limit=limit)
-    if not results:
-        return "No matching memories found."
-    lines = []
-    for r in results:
-        score = r.get("score", "?")
-        text = r.get("memory", r.get("text", ""))
-        mid = r.get("id", "?")
-        lines.append(f"[{score}] {text} (id: {mid})")
-    return "\n".join(lines)
-
-
-@mcp.tool()
-def memory_add(text: str) -> str:
-    """Store a new memory. Use for facts, preferences, project details.
-
-    Args:
-        text: The memory to store
-    """
-    result = memory.add(
-        messages=[{"role": "user", "content": text}],
-        user_id=DEFAULT_USER_ID,
-    )
-    return json.dumps(result, default=str)
-
-
-@mcp.tool()
-def memory_get_all(limit: int = 20) -> str:
-    """List all stored memories, newest first.
-
-    Args:
-        limit: Max results (default 20)
-    """
-    results = memory.get_all(user_id=DEFAULT_USER_ID)
-    if not results:
-        return "No memories stored yet."
-    lines = []
-    for r in results[:limit]:
-        text = r.get("memory", r.get("text", ""))
-        mid = r.get("id", "?")
-        lines.append(f"- {text} (id: {mid})")
-    return "\n".join(lines)
-
-
-@mcp.tool()
-def memory_delete(memory_id: str) -> str:
-    """Delete a specific memory by ID.
-
-    Args:
-        memory_id: The ID of the memory to delete
-    """
-    memory.delete(memory_id=memory_id)
-    return f"Deleted memory: {memory_id}"
-
-
-if __name__ == "__main__":
-    mcp.run(transport="stdio")
+    length = len(payload)
+    if masked:
+        if length <= 125:
+            header.append(0x80 | length)
+        elif length <= 65535:
+            header.append(0x80 | 126)
+            header.extend(struct.pack(">H", length))
+        else:
+            header.append(0x80 | 127)
+            header.extend(struct.pack(">Q", length))
+        mask = os.urandom(4)
+        header.extend(mask)
+        masked_payload = bytearray(payload)
+        for i in range(length):
+            masked_payload[i] ^= mask[i % 4]
+        sock.sendall(header + masked_payload)
+    else:
+        if length <= 125:
+            header.append(length)
+        elif length <= 65535:
+            header.append(126)
+            header.extend(struct.pack(">H", length))
+        else:
+            header.append(127)
+            header.extend(struct.pack(">Q", length))
+        sock.sendall(header + payload)
 ```
 
-### Config Extension Registration (in entrypoint.sh default extensions)
+### Outbound WebSocket Client (Gateway -> Gemini)
+
+```python
+def _connect_gemini_ws(api_key):
+    """Open a WebSocket connection to Gemini Live API using stdlib."""
+    import socket as _socket
+
+    host = "generativelanguage.googleapis.com"
+    path = ("/ws/google.ai.generativelanguage.v1beta."
+            "GenerativeService.BidiGenerateContent"
+            f"?key={api_key}")
+
+    # TCP + TLS
+    raw = _socket.create_connection((host, 443), timeout=10)
+    ctx = ssl.create_default_context()
+    sock = ctx.wrap_socket(raw, server_hostname=host)
+
+    # WebSocket upgrade handshake (client side)
+    ws_key = base64.b64encode(os.urandom(16)).decode()
+    handshake = (
+        f"GET {path} HTTP/1.1\r\n"
+        f"Host: {host}\r\n"
+        f"Upgrade: websocket\r\n"
+        f"Connection: Upgrade\r\n"
+        f"Sec-WebSocket-Key: {ws_key}\r\n"
+        f"Sec-WebSocket-Version: 13\r\n"
+        f"\r\n"
+    )
+    sock.sendall(handshake.encode())
+
+    # Read HTTP response (101 expected)
+    response = b""
+    while b"\r\n\r\n" not in response:
+        response += sock.recv(4096)
+
+    if b"101" not in response.split(b"\r\n")[0]:
+        raise ConnectionError(f"Gemini WS handshake failed: {response[:200]}")
+
+    return sock
+```
+
+### Bidirectional Relay Loop
+
+**Key design: two threads per voice session. One reads browser frames, one reads Gemini frames. Shared shutdown event.**
+
+```python
+def _voice_relay_loop(browser_sock, gemini_sock):
+    """Bidirectional WebSocket relay between browser and Gemini."""
+    shutdown = threading.Event()
+
+    def _browser_to_gemini():
+        """Read frames from browser, forward to Gemini."""
+        try:
+            while not shutdown.is_set():
+                opcode, payload, fin = _ws_recv_frame(browser_sock)
+                if opcode == OPCODE_CLOSE:
+                    shutdown.set()
+                    break
+                if opcode == OPCODE_PING:
+                    _ws_send_frame(browser_sock, OPCODE_PONG, payload)
+                    continue
+                if opcode in (OPCODE_TEXT, OPCODE_BINARY):
+                    # Forward to Gemini (client frames must be masked)
+                    _ws_send_frame(gemini_sock, opcode, payload, masked=True)
+        except Exception:
+            shutdown.set()
+
+    def _gemini_to_browser():
+        """Read frames from Gemini, forward to browser (with tool interception)."""
+        try:
+            while not shutdown.is_set():
+                opcode, payload, fin = _ws_recv_frame(gemini_sock)
+                if opcode == OPCODE_CLOSE:
+                    shutdown.set()
+                    break
+                if opcode == OPCODE_TEXT:
+                    msg = json.loads(payload)
+                    if "toolCall" in msg:
+                        # Intercept: execute tool, send result back to Gemini
+                        _handle_tool_call(msg["toolCall"], gemini_sock, browser_sock)
+                    else:
+                        # Forward to browser (server frames unmasked)
+                        _ws_send_frame(browser_sock, opcode, payload)
+                elif opcode == OPCODE_BINARY:
+                    _ws_send_frame(browser_sock, opcode, payload)
+        except Exception:
+            shutdown.set()
+
+    t1 = threading.Thread(target=_browser_to_gemini, daemon=True)
+    t2 = threading.Thread(target=_gemini_to_browser, daemon=True)
+    t1.start()
+    t2.start()
+
+    # Wait for either thread to finish (connection closed or error)
+    shutdown.wait()
+
+    # Cleanup
+    try:
+        _ws_send_frame(browser_sock, OPCODE_CLOSE, b"", masked=False)
+    except Exception:
+        pass
+    try:
+        _ws_send_frame(gemini_sock, OPCODE_CLOSE, b"", masked=True)
+    except Exception:
+        pass
+    try:
+        gemini_sock.close()
+    except Exception:
+        pass
+```
+
+## Threading Model
+
+**gateway.py uses `ThreadingHTTPServer`, which spawns one thread per HTTP request.** This is important: the voice WebSocket connection hijacks the HTTP request thread and keeps it alive for the duration of the voice session (up to 15 minutes).
+
+### Thread Budget
+
+| Thread | Lifetime | Count |
+|--------|----------|-------|
+| HTTP request handler (normal) | ~50ms | Comes and goes |
+| SSE proxy (goose web streaming) | Seconds to minutes | 0-2 concurrent |
+| Voice session (main) | Up to 15 min | 1 per voice user |
+| Voice browser->Gemini relay | Same as session | 1 per voice user |
+| Voice Gemini->browser relay | Same as session | 1 per voice user |
+| Tool execution | Seconds | 0-1 per voice session |
+
+**Total for one voice session: 3 threads (handler + 2 relay threads).**
+
+For a single-user personal agent, this is fine. ThreadingHTTPServer creates threads on demand. There is no thread pool exhaustion risk with one user.
+
+### Why Threading (Not asyncio)
+
+gateway.py is 10,700 lines of synchronous, threading-based code. Converting to asyncio would be a rewrite. The threading model works because:
+
+1. All I/O is blocking socket reads/writes, which threads handle naturally
+2. Thread-per-connection is the standard WebSocket server model (see python-websocket-server library, ~550 lines)
+3. The relay loop is I/O-bound (waiting for frames), not CPU-bound
+4. Python's GIL is not a bottleneck for I/O-bound work
+5. Single user means 1-3 concurrent voice sessions max
+
+## Tool Execution Architecture
+
+### Tool Declaration to Gemini
+
+Tools are declared in the WebSocket setup message. These map to goosed MCP tools that the user has configured.
+
+```python
+def _build_tool_declarations():
+    """Build Gemini-format tool declarations from available goosed tools."""
+    # Option A: Static list of known tools
+    # Option B: Query goosed for available tools dynamically
+    return [
+        {
+            "functionDeclarations": [
+                {
+                    "name": "search_memory",
+                    "description": "Search user's long-term memory",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "description": "Search query"}
+                        },
+                        "required": ["query"]
+                    }
+                },
+                {
+                    "name": "search_knowledge",
+                    "description": "Search knowledge base documents",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "description": "Search query"}
+                        },
+                        "required": ["query"]
+                    }
+                },
+                # ... more tools
+            ]
+        }
+    ]
+```
+
+### Tool Execution Flow
+
+When Gemini sends a `toolCall`, the gateway intercepts it and executes the function. Two approaches:
+
+**Approach A: Direct MCP Tool Dispatch (Recommended)**
+- Gateway creates a goosed session
+- Sends the tool call as a natural language prompt: "Call the memory_search tool with query='meeting tomorrow'"
+- goosed's MCP tools execute and return the result
+- Gateway extracts the result and sends `toolResponse` to Gemini
+
+**Approach B: Direct Tool Implementation in gateway.py**
+- For simple tools (memory search, knowledge search), call the underlying service directly
+- Skip goosed entirely for these calls
+- Faster, but duplicates tool logic
+
+**Recommendation: Start with Approach A (goosed relay).** It reuses the existing MCP tool infrastructure. If latency is too high (goosed session creation + LLM reasoning overhead), optimize specific tools with Approach B later.
+
+### Important: Gemini 2.0 Flash Live - Sequential Tool Calling Only
+
+Per Google's docs: "Function calling is sequential only. The model will not start responding until you've sent the tool response."
+
+This means:
+- Gemini pauses audio generation while waiting for tool results
+- The browser will experience silence during tool execution
+- The browser UI should show a "thinking" or "searching" indicator
+- Tool execution latency directly impacts user experience
+- Keep tool implementations fast (sub-2-second target)
+
+## Audio Pipeline Details
+
+### Browser Side (voice.html)
+
+```
+Microphone (MediaStream API)
+    |
+    v
+AudioWorklet / ScriptProcessorNode
+    |
+    v
+Resample to 16kHz mono (if needed)
+    |
+    v
+Convert to Int16 PCM
+    |
+    v
+Base64 encode
+    |
+    v
+WebSocket send: {realtimeInput: {audio: {data: "...", mimeType: "audio/pcm;rate=16000"}}}
+
+---
+
+WebSocket receive: {serverContent: {modelTurn: {parts: [{inlineData: {data: "...", mimeType: "audio/pcm;rate=24000"}}]}}}
+    |
+    v
+Base64 decode
+    |
+    v
+PCM Int16 at 24kHz
+    |
+    v
+AudioContext.decodeAudioData / AudioWorklet playback
+    |
+    v
+Speaker
+```
+
+### Audio Format Summary
+
+| Direction | Format | Sample Rate | Encoding | Wire Format |
+|-----------|--------|-------------|----------|-------------|
+| Browser -> Gateway -> Gemini | Raw PCM 16-bit LE | 16 kHz | Base64 in JSON | WebSocket text frames |
+| Gemini -> Gateway -> Browser | Raw PCM 16-bit LE | 24 kHz | Base64 in JSON | WebSocket text frames |
+
+### Key Audio Considerations
+
+1. **Sample rate mismatch**: Input is 16kHz, output is 24kHz. Browser must handle both.
+2. **No transcoding needed on gateway**: Audio passes through as-is (base64 JSON). Gateway doesn't touch audio data.
+3. **Chunk size**: Browser should send audio in ~100ms chunks (1600 samples at 16kHz = 3200 bytes = ~4400 base64 chars).
+4. **Interruption handling**: When user speaks while Gemini is speaking, Gemini auto-interrupts. Browser must stop playback and clear audio queue on interrupt signal.
+
+## Session Management
+
+### Voice Session State
+
+```python
+# In-memory session tracking (gateway.py)
+_voice_sessions = {}        # session_id -> {browser_sock, gemini_sock, created, thread}
+_voice_sessions_lock = threading.Lock()
+
+# Session lifecycle:
+# 1. Created on WebSocket upgrade (/ws/voice)
+# 2. Active during voice conversation (up to 15 min)
+# 3. Destroyed on: browser disconnect, Gemini disconnect, timeout, error
+```
+
+### Session Limits
+
+| Limit | Value | Source |
+|-------|-------|--------|
+| Max session duration (audio only) | 15 minutes | Gemini API limit |
+| Max session duration (audio + video) | 2 minutes | Gemini API limit |
+| Context window | 128k tokens (native audio) | Gemini API limit |
+| Concurrent sessions per API key | Unknown, likely low | Needs testing |
+| Reconnection within session | Possible via session resumption | Gemini supports `sessionResumption` handle |
+
+### Session Timeout Strategy
+
+```
+- Browser sends periodic ping frames (every 30s)
+- Gateway forwards pings as-is (Gemini handles keep-alive)
+- If no frames received from browser for 60s, close session
+- If Gemini sends close frame, notify browser and cleanup
+- At 14 min mark, send warning to browser: {type: "session_expiring", remaining_seconds: 60}
+```
+
+## Voice Dashboard HTML (voice.html)
+
+**Self-contained single-file HTML/CSS/JS, consistent with setup.html and admin.html pattern.**
+
+### Page Serving
+
+```python
+VOICE_HTML = os.path.join(APP_DIR, "docker", "voice.html")
+
+# In do_GET routing:
+elif path.rstrip("/") == "/voice":
+    self.handle_voice_page()
+
+def handle_voice_page(self):
+    """Serve voice dashboard. Requires auth + Gemini key."""
+    if not check_auth(self):
+        self.send_response(302)
+        self.send_header("Location", "/login")
+        self.end_headers()
+        return
+    # Gate on Gemini key presence
+    if not _get_gemini_api_key():
+        self.send_response(302)
+        self.send_header("Location", "/setup")
+        self.end_headers()
+        return
+    # Serve file (same pattern as handle_setup_page / handle_admin_page)
+    with open(VOICE_HTML, "rb") as f:
+        content = f.read()
+    # ... ETag, CSP headers, etc.
+```
+
+### CSP Adjustments for Voice
+
+```python
+# voice.html needs additional CSP permissions:
+csp = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+    "font-src https://fonts.gstatic.com; "
+    "img-src 'self' data:; "
+    "connect-src 'self' wss:; "           # WebSocket connections
+    "media-src 'self' blob:; "            # Audio playback from blobs
+    "worker-src 'self' blob:; "           # AudioWorklet
+    "frame-ancestors 'none'"
+)
+```
+
+## Integration Points with Existing Gateway
+
+### Gemini API Key in Vault
 
 ```yaml
-mem0-memory:
-  enabled: true
-  type: stdio
-  name: mem0-memory
-  description: Long-term memory with semantic search and contradiction resolution
-  cmd: python3
-  args:
-    - /app/docker/mem0_mcp/server.py
-  envs:
-    MEM0_USER_ID: haseeb
-  env_keys: []
-  timeout: 300
-  bundled: null
-  available_tools: []
+# /data/secrets/vault.yaml (existing format)
+# New nested key for Gemini:
+google:
+  GEMINI_API_KEY: "AIza..."
 ```
 
-## Architectural Patterns
+Or as a flat key (consistent with how other provider keys are stored):
+```yaml
+GEMINI_API_KEY: "AIza..."
+```
 
-### Pattern 1: Shared Config, Separate Processes
+**Recommendation: Flat key.** Simpler vault read. `_get_gemini_api_key()` just reads from vault.yaml. The setup wizard already handles API key validation and storage.
 
-**What:** Both gateway.py and mem0 MCP server instantiate their own `Memory` object from the same config, pointing to the same pgvector/neo4j backends.
-**When to use:** When two processes need the same data but run in separate Python processes (gateway.py thread vs. goosed subprocess).
-**Trade-offs:** Simple, no inter-process communication needed. Slightly higher memory usage (two mem0 instances). pgvector handles concurrent connections natively via connection pooling.
+### Setup Wizard Integration
 
-### Pattern 2: Phased Graph Integration
-
-**What:** Deploy pgvector first (Phase 1), add Neo4j later (Phase 2). mem0 config simply omits `graph_store` in Phase 1.
-**When to use:** When one dependency is heavy (Neo4j: 512MB+ RAM, APOC plugin, separate Railway service) and the core value (vector search + contradiction resolution) works without it.
-**Trade-offs:** Phase 1 gets 80% of the value (semantic memory search, LLM extraction, contradiction resolution). Phase 2 adds entity relationships (20% incremental value, high setup cost).
-
-### Pattern 3: LLM Provider Reuse
-
-**What:** mem0's LLM for fact extraction reuses the same provider/API key the user already configured for goose. No additional API key required.
-**When to use:** Always. GooseClaw users already have an LLM provider configured.
-**Trade-offs:** Extraction uses the user's LLM tokens. Could add a "use smaller model for extraction" option later. Must handle provider mapping (GOOSE_PROVIDER to mem0 provider name).
-
-### Pattern 4: Embedder Strategy
-
-**What:** mem0 needs an embedder for vector storage. Default is OpenAI text-embedding-3-small (1536 dims).
-
-| Option | Pros | Cons |
-|--------|------|------|
-| OpenAI text-embedding-3-small | Best quality, 1536 dims, industry standard | Requires OpenAI API key even if user uses Anthropic |
-| ChromaDB default (ONNX) | No API key, free, already in container | Lower quality, 384 dims, incompatible with pgvector setup |
-| Provider-matched embedder | No extra key needed | Quality varies, not all providers offer embedders |
-
-**Recommendation:** Default to OpenAI embeddings if OPENAI_API_KEY is available (from vault or env). Fall back to the provider's own embedder if available. Last resort: require an OpenAI key for embeddings (document this clearly in setup).
-
-Critical constraint: embedding dimensions MUST match across all memory operations. Changing the embedder after initial setup requires re-embedding all memories. Pin the embedder in config and warn loudly if it changes.
-
-## Migration Plan: ChromaDB Runtime to mem0
-
-### What Moves
-
-| Data | From | To | Migration |
-|------|------|----|-----------|
-| User memories (runtime collection) | ChromaDB /data/knowledge/chroma | pgvector via mem0 | One-time migration script |
-| System docs (system collection) | ChromaDB | ChromaDB (stays) | No change |
-| Identity traits | user.md (auto-appended) | mem0 pgvector (with metadata) | Optional, user.md stays as manual file |
-
-### Migration Script Approach
+The setup wizard (setup.html) already handles 23+ providers. Gemini key is added as an optional, separate entry since it serves a different purpose (voice, not text LLM):
 
 ```python
-# docker/mem0_mcp/migrate_from_chromadb.py
-# Run once on first boot after mem0 is deployed.
-#
-# 1. Check sentinel: /data/knowledge/.mem0_migrated
-# 2. Read all runtime collection entries from ChromaDB
-# 3. For each entry, call mem0.add() with the content text
-# 4. mem0 handles re-embedding and storage in pgvector
-# 5. Touch sentinel file
-#
-# Safe to re-run (sentinel prevents double migration).
-# ChromaDB runtime collection kept as read-only backup.
+# New API endpoint
+# POST /api/setup/validate with provider="gemini-voice"
+# Validates key by attempting a quick Gemini API call
+
+# Gemini key stored separately from GOOSE_PROVIDER
+# It's not a goose provider, it's specifically for voice
 ```
 
-### Backwards Compatibility
+### Auth Flow
 
-- Knowledge MCP server continues to serve system docs from ChromaDB. No change.
-- Runtime collection in ChromaDB becomes read-only after migration (kept as backup).
-- ChromaDB remains installed (knowledge MCP needs it for system docs).
-- The builtin "memory" goose extension can be disabled in config.yaml once mem0 MCP is proven stable.
+Voice dashboard reuses existing auth:
+- Same cookie-based session auth as admin.html
+- `check_auth(self)` works identically
+- WebSocket auth: pass session cookie in initial upgrade request
+- Browser WebSocket API automatically sends cookies for same-origin connections
 
-## Scaling Considerations
+## Patterns to Follow
 
-| Concern | Current (single user) | Notes |
-|---------|----------------------|-------|
-| pgvector connections | 2-3 concurrent (MCP + gateway writer) | Fine. PostgreSQL handles hundreds. |
-| Embedding cost | ~$0.0001/memory (text-embedding-3-small) | Negligible for personal use. |
-| LLM extraction cost | ~$0.001/conversation (small model) | One call per idle session. |
-| Neo4j memory | 512MB+ for single user | Fine on Railway paid tier. |
-| pgvector storage | ~1KB/memory * 10K memories = 10MB | Grows linearly. Fine for years. |
+### Pattern 1: Self-Contained HTML Pages
 
-This is a personal agent. Single user, single instance. Scaling concerns are minimal. The architecture handles tens of thousands of memories without breaking a sweat.
+**What:** voice.html follows the same pattern as setup.html and admin.html. Single file, no build step, inline CSS/JS.
+**Why:** Maintains architectural consistency. No new tooling needed.
+**Example:** setup.html is ~12K lines of HTML/CSS/JS serving a complex multi-step wizard with API calls.
 
-### First Bottleneck: Embedding API Latency
+### Pattern 2: Thread-Per-Connection WebSocket
 
-mem0.add() calls the embedding API for each extracted fact. If a conversation yields 10 facts, that is 10 embedding API calls. With OpenAI, each takes ~100ms. Total: ~1s. Acceptable for background extraction. Would only matter if doing real-time add during conversation (and even then, user doesn't wait for it).
+**What:** Each voice session gets a dedicated thread (from ThreadingHTTPServer) plus 2 relay threads.
+**Why:** Consistent with gateway.py's threading model. Simple to reason about. Each session is isolated.
+**Caveat:** ThreadingHTTPServer may time out the initial request thread. After WebSocket upgrade, the handler method blocks until the session ends. This works because the thread is kept alive by the blocking relay loop.
 
-### Second Bottleneck: LLM Extraction Cost
+### Pattern 3: Message Passthrough with Selective Interception
 
-Each session extraction requires one LLM call to extract facts, then one more per fact for contradiction resolution. Using a cheap model (gpt-4.1-nano, claude-haiku) keeps cost under $0.01/session. If the user's primary model is expensive (gpt-4.1, opus), the config should default to a cheaper extraction model.
+**What:** Most messages between browser and Gemini pass through verbatim. Gateway only intercepts `toolCall` messages.
+**Why:** Minimizes gateway complexity. Audio frames don't need parsing. JSON messages are forwarded as-is except when tool execution is needed.
+**Benefit:** If Gemini adds new message types, they automatically work without gateway changes.
 
-## Anti-Patterns
+## Anti-Patterns to Avoid
 
-### Anti-Pattern 1: Running pgvector Inside the GooseClaw Container
+### Anti-Pattern 1: Decoding Audio on the Server
 
-**What people do:** Add postgres to the Dockerfile, run it alongside gateway.py in one container.
-**Why it's wrong:** Railway mounts one volume per service. Postgres needs its own data volume. Also violates one-process-per-container. If postgres crashes, gateway restarts too. If container rebuilds, postgres data gone unless separately volume-mounted.
-**Do this instead:** Deploy pgvector as a separate Railway service. Use Railway's private networking. One-click template available.
+**What:** Base64-decoding audio, resampling, or transcoding on the gateway.
+**Why bad:** Adds latency, CPU overhead, complexity. Audio is already in the right format (browser produces 16kHz PCM, Gemini expects 16kHz PCM).
+**Instead:** Pass audio frames through verbatim. The gateway is a relay, not a media processor.
 
-### Anti-Pattern 2: Using mem0's Hosted Platform API
+### Anti-Pattern 2: Using asyncio for WebSocket Only
 
-**What people do:** Use `MEM0_API_KEY` to hit mem0.ai's cloud API instead of self-hosting.
-**Why it's wrong:** GooseClaw is self-hosted by design. Sending user memories to a third-party cloud service defeats the purpose. Also adds latency and ongoing cost.
-**Do this instead:** Use mem0ai Python library in embedded mode pointing to your own pgvector.
+**What:** Adding asyncio event loop inside the threading-based gateway for just the WebSocket feature.
+**Why bad:** Mixing async and sync in the same process creates complexity. asyncio event loops don't play well inside threads. Risk of blocking the event loop from synchronous gateway code.
+**Instead:** Use pure threading with blocking socket I/O. It's simpler and consistent with the rest of gateway.py.
 
-### Anti-Pattern 3: Creating a Goosed Session for Memory Extraction
+### Anti-Pattern 3: Exposing Gemini API Key to Browser
 
-**What people do:** The current approach: create a goosed session, send MEMORY_EXTRACT_PROMPT, parse the JSON response, manually upsert to ChromaDB.
-**Why it's wrong:** Wasteful. Uses goosed session overhead, MCP tool loading, prompt formatting. mem0 does all of this internally with better contradiction resolution.
-**Do this instead:** Call `mem0.Memory.add(messages)` directly. One function call replaces ~100 lines of extraction logic in gateway.py.
+**What:** Sending the API key to the browser (via JS variable, API endpoint, etc.) and letting the browser connect directly to Gemini.
+**Why bad:** API key leaks. Anyone with browser devtools can steal the key.
+**Instead:** Server-side proxy. API key never leaves the server.
 
-### Anti-Pattern 4: Running Neo4j on Railway Trial Accounts
+### Anti-Pattern 4: Creating a New HTTP Server for WebSocket
 
-**What people do:** Deploy Neo4j on a trial Railway account.
-**Why it's wrong:** Neo4j needs ~512MB RAM minimum. Trial VMs are too small. The deployment will fail or OOM constantly.
-**Do this instead:** Make Neo4j optional (Phase 2). Vector-only mem0 works great without it. Gate Neo4j behind a config flag. Document that paid Railway plan is needed.
+**What:** Running a second server (e.g., on a different port) for WebSocket connections.
+**Why bad:** Railway exposes one PORT. Running two servers requires port multiplexing or a second Railway service. Adds deployment complexity.
+**Instead:** Handle WebSocket upgrade within the existing GatewayHandler.do_GET, same port, same server.
 
-### Anti-Pattern 5: Embedding Dimension Mismatch
+### Anti-Pattern 5: Persistent Gemini Connections (Connection Pooling)
 
-**What people do:** Change the embedding model without recreating the pgvector table.
-**Why it's wrong:** text-embedding-3-small produces 1536 dims. If you switch to a model producing 768 dims, pgvector throws `DataException: expected 1536 dimensions, not 768` on every insert.
-**Do this instead:** Pin the embedding model in mem0 config. If you must change it, provide a migration path that re-embeds all memories. Or, more practically, just wipe and rebuild.
+**What:** Keeping Gemini WebSocket connections open between voice sessions for reuse.
+**Why bad:** Gemini sessions are stateful. Each session has its own context. Reusing a session means inheriting previous conversation context. Sessions timeout after 15 min anyway.
+**Instead:** One Gemini connection per voice session. Clean setup, clean teardown.
 
-## Integration Points
+## Suggested Build Order
 
-### External Services
+Dependencies flow top-down. Each phase builds on the previous one.
 
-| Service | Integration Pattern | Notes |
-|---------|---------------------|-------|
-| pgvector | TCP via Railway private network | `pgvector.railway.internal:5432`, psycopg driver |
-| Neo4j | Bolt via Railway private network | `neo4j.railway.internal:7687`, neo4j Python driver |
-| LLM API | HTTPS to provider | Reuses existing GOOSE_PROVIDER API key from vault |
-| Embedding API | HTTPS to OpenAI (or provider) | May need separate OPENAI_API_KEY for embeddings |
+### Phase 1: WebSocket Protocol Layer (~200 lines)
 
-### Internal Boundaries
+Build the core WebSocket frame reader/writer. This is the foundation everything else needs.
 
-| Boundary | Communication | Notes |
-|----------|---------------|-------|
-| gateway.py to mem0 lib | In-process Python import | Same process, no IPC overhead |
-| goosed to mem0 MCP | stdio (MCP protocol) | Standard GooseClaw extension pattern |
-| mem0 lib to pgvector | TCP (psycopg) | Private Railway network, sub-ms latency |
-| mem0 lib to Neo4j | Bolt protocol (TCP) | Private Railway network, Phase 2 |
-| knowledge MCP to ChromaDB | In-process (chromadb lib) | Unchanged, system docs only |
+- `_ws_recv_frame(sock)` - read one WebSocket frame
+- `_ws_send_frame(sock, opcode, payload, masked)` - write one WebSocket frame
+- `_ws_send_text(sock, text)` - convenience for text frames
+- `_recv_exact(sock, n)` - read exactly n bytes
+- WebSocket handshake (server side for browser, client side for Gemini)
+- Unit testable in isolation
 
-## Build Order (Suggested Phases)
+**Dependency:** None. Pure protocol code.
 
-### Phase 1: pgvector + mem0 Core (Highest Value)
+### Phase 2: Gemini WebSocket Client (~100 lines)
 
-1. Add mem0ai + psycopg[binary] to requirements.txt, rebuild Docker image
-2. Deploy pgvector as Railway service (one-click template)
-3. Wire Railway service reference variables to GooseClaw env
-4. Create docker/mem0_config.py (shared config builder from env vars)
-5. Create docker/mem0_mcp/server.py (MCP tools for goose)
-6. Register mem0-memory extension in entrypoint.sh default extensions
-7. Add pgvector readiness check to entrypoint.sh (wait for pg_isready before starting gateway)
-8. Test: goose can search/add memories via MCP tools
+Outbound connection to Gemini Live API.
 
-### Phase 2: Memory Writer Migration
+- `_connect_gemini_ws(api_key)` - TLS + WebSocket handshake
+- `_send_gemini_setup(sock, config)` - send initial config
+- Test with simple text prompt to verify connection works
 
-1. Modify gateway.py `_memory_writer_loop()` to use mem0.add() instead of manual extraction
-2. Remove MEMORY_EXTRACT_PROMPT, `_process_memory_extraction()`, `_extract_json_from_response()`, and related functions (~150 lines)
-3. Remove ChromaDB direct imports from gateway.py (`_get_knowledge_collection`, etc.)
-4. Create migration script: docker/mem0_mcp/migrate_from_chromadb.py
-5. Add migration to entrypoint.sh (run once, sentinel file)
-6. Test: end-of-session memories land in pgvector, searchable via MCP
+**Dependency:** Phase 1 (frame reader/writer)
 
-### Phase 3: Neo4j Graph (Entity Relationships)
+### Phase 3: Voice Route + Bidirectional Relay (~150 lines)
 
-1. Deploy Neo4j as Railway service (template)
-2. Add neo4j env vars to GooseClaw service
-3. Update mem0_config.py to include graph_store when MEM0_NEO4J_URI is set
-4. Test: entity extraction populates graph, search returns related entities
+The proxy core.
 
-### Phase 4: Polish and Cleanup
+- WebSocket upgrade detection in `do_GET`
+- `_handle_voice_websocket()` - orchestrates the session
+- `_voice_relay_loop()` - two-thread bidirectional relay
+- Session tracking (`_voice_sessions` dict)
+- Graceful close on either side disconnecting
 
-1. Add memory-related Telegram commands (/remember, /memories, /forget)
-2. Memory settings in setup wizard (idle minutes, enable/disable, embedding model)
-3. Disable builtin goose "memory" extension (redundant with mem0)
-4. Remove runtime collection writes from knowledge MCP (if still referenced anywhere)
-5. Documentation for Railway multi-service setup
+**Dependency:** Phase 1 + Phase 2
+
+### Phase 4: Voice Dashboard HTML (~2000 lines)
+
+The browser UI.
+
+- Microphone capture (MediaStream + AudioWorklet)
+- PCM resampling to 16kHz
+- WebSocket connection to /ws/voice
+- Audio playback (PCM 24kHz from Gemini responses)
+- Live transcript display
+- Mic toggle button + voice visualizer
+- Session timeout warnings
+- Mobile-friendly layout
+
+**Dependency:** Phase 3 (needs working WebSocket endpoint)
+
+### Phase 5: Tool Calling (~200 lines)
+
+Mid-conversation tool execution.
+
+- Tool declaration builder (Gemini format)
+- `_handle_tool_call()` - intercept, execute, respond
+- goosed session creation for tool execution
+- Browser notification of tool status
+- Timeout handling for slow tools
+
+**Dependency:** Phase 3 + Phase 4 (needs working relay + UI for testing)
+
+### Phase 6: Setup Wizard Integration (~100 lines)
+
+Gemini key management.
+
+- Add Gemini API key field to setup wizard
+- Key validation (test API call)
+- Vault storage
+- Voice dashboard gating on key presence
+- Link from admin dashboard to voice page
+
+**Dependency:** Phase 4 (needs dashboard to gate)
 
 ## Open Questions
 
-1. **Embedder API key**: If user only has Anthropic, do we require an OpenAI key for embeddings? Or can we use Anthropic's embedder (if mem0 supports it)? Fallback to local embeddings?
-2. **LLM model for extraction**: Use the same model as GOOSE_MODEL (potentially expensive) or force a smaller/cheaper model? Should this be configurable in the setup wizard?
-3. **user.md fate**: Stop auto-writing entirely, or keep as a secondary read-only identity reference that goose reads via .goosehints?
-4. **mem0 version pinning**: mem0ai hit v1.0.0 recently. Pin exactly (`mem0ai==1.0.0`) or allow patches (`mem0ai>=1.0.0,<2.0.0`)?
-5. **Connection health**: What happens when pgvector goes down? mem0 will throw. Does the MCP server crash (goosed restarts it) or does it return errors gracefully?
+1. **Which Gemini model?** `gemini-2.0-flash-live-001` is current, but `gemini-3.1-flash-live-preview` appears in recent docs. Need to verify which model is stable/recommended at build time.
+
+2. **Tool execution latency:** goosed session creation + MCP tool call + LLM reasoning could take 2-5 seconds. Is this acceptable during a voice conversation? May need to pre-create a goosed session at voice session start and reuse it.
+
+3. **Concurrent voice sessions:** What happens if the user opens /voice in two tabs? Need to decide: allow multiple sessions (each gets its own Gemini connection) or enforce single session (close previous on new connection).
+
+4. **Session resumption:** Gemini supports resuming sessions via `sessionResumption` handles. Worth implementing to handle brief network interruptions? Or just restart the session?
+
+5. **Ephemeral token fallback:** If Google documents the REST endpoint for ephemeral token creation in the future, switching to direct browser-to-Gemini (skipping the proxy) would reduce latency. Keep the architecture modular enough to support this later.
 
 ## Sources
 
-- [mem0 official docs: pgvector config](https://docs.mem0.ai/components/vectordbs/dbs/pgvector) - HIGH confidence
-- [mem0 official docs: Anthropic LLM](https://docs.mem0.ai/components/llms/models/anthropic) - HIGH confidence
-- [mem0 architecture deep wiki](https://deepwiki.com/mem0ai/mem0) - HIGH confidence
-- [mem0 memory configuration](https://deepwiki.com/mem0ai/mem0/3.1-memory-configuration) - HIGH confidence
-- [mem0 GitHub](https://github.com/mem0ai/mem0) - HIGH confidence
-- [mem0 official MCP server](https://github.com/mem0ai/mem0-mcp) - HIGH confidence
-- [Self-hosting mem0 Docker guide (dev.to)](https://dev.to/mem0/self-hosting-mem0-a-complete-docker-deployment-guide-154i) - MEDIUM confidence
-- [Railway pgvector template](https://railway.com/deploy/pgvector-latest) - HIGH confidence
-- [Railway PostgreSQL docs](https://docs.railway.com/databases/postgresql) - HIGH confidence
-- [Railway Neo4j template](https://railway.com/deploy/asEF1B) - HIGH confidence
-- [Railway private networking discussion](https://station.railway.com/questions/private-internal-vs-public-ur-ls-between-cbbbbea0) - MEDIUM confidence
+- [Gemini Live API WebSocket reference](https://ai.google.dev/api/live) - HIGH confidence
+- [Gemini Live API overview](https://ai.google.dev/gemini-api/docs/live-api) - HIGH confidence
+- [Gemini Live API get started (WebSocket)](https://ai.google.dev/gemini-api/docs/live-api/get-started-websocket) - HIGH confidence
+- [Gemini Live API capabilities](https://ai.google.dev/gemini-api/docs/live-api/capabilities) - HIGH confidence
+- [Gemini ephemeral tokens](https://ai.google.dev/gemini-api/docs/ephemeral-tokens) - HIGH confidence
+- [RFC 6455 WebSocket Protocol](https://www.rfc-editor.org/rfc/rfc6455.html) - HIGH confidence
+- [MDN: Writing WebSocket Servers](https://developer.mozilla.org/en-US/docs/Web/API/WebSockets_API/Writing_WebSocket_servers) - HIGH confidence
+- [python-websocket-server (stdlib-only reference)](https://github.com/Pithikos/python-websocket-server) - MEDIUM confidence
+- [google-gemini/live-api-web-console](https://github.com/google-gemini/live-api-web-console) - MEDIUM confidence
+- [google-gemini/gemini-live-api-examples](https://github.com/google-gemini/gemini-live-api-examples) - MEDIUM confidence
+- GooseClaw gateway.py source code analysis - HIGH confidence
 
 ---
-*Architecture research for: mem0 memory layer integration into GooseClaw v5.0*
-*Researched: 2026-03-19*
+*Architecture research for: GooseClaw v6.0 Voice Dashboard*
+*Researched: 2026-03-27*

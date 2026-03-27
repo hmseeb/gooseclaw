@@ -74,44 +74,44 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| VOICE-01 | — | Pending |
-| VOICE-02 | — | Pending |
-| VOICE-03 | — | Pending |
-| VOICE-04 | — | Pending |
-| VOICE-05 | — | Pending |
-| VOICE-06 | — | Pending |
-| VOICE-07 | — | Pending |
-| VOICE-08 | — | Pending |
-| VOICE-09 | — | Pending |
-| VOICE-10 | — | Pending |
-| VOICE-11 | — | Pending |
-| UI-01 | — | Pending |
-| UI-02 | — | Pending |
-| UI-03 | — | Pending |
-| UI-04 | — | Pending |
-| UI-05 | — | Pending |
-| UI-06 | — | Pending |
-| UI-07 | — | Pending |
-| TOOL-01 | — | Pending |
-| TOOL-02 | — | Pending |
-| TOOL-03 | — | Pending |
-| TOOL-04 | — | Pending |
-| TOOL-05 | — | Pending |
-| TOOL-06 | — | Pending |
-| INTEL-01 | — | Pending |
-| INTEL-02 | — | Pending |
-| INTEL-03 | — | Pending |
-| INTEL-04 | — | Pending |
-| SETUP-01 | — | Pending |
-| SETUP-02 | — | Pending |
-| SETUP-03 | — | Pending |
-| SETUP-04 | — | Pending |
+| VOICE-01 | Phase 30 | Pending |
+| VOICE-02 | Phase 28 | Pending |
+| VOICE-03 | Phase 30 | Pending |
+| VOICE-04 | Phase 30 | Pending |
+| VOICE-05 | Phase 30 | Pending |
+| VOICE-06 | Phase 30 | Pending |
+| VOICE-07 | Phase 30 | Pending |
+| VOICE-08 | Phase 30 | Pending |
+| VOICE-09 | Phase 30 | Pending |
+| VOICE-10 | Phase 27 | Pending |
+| VOICE-11 | Phase 28 | Pending |
+| UI-01 | Phase 30 | Pending |
+| UI-02 | Phase 30 | Pending |
+| UI-03 | Phase 31 | Pending |
+| UI-04 | Phase 31 | Pending |
+| UI-05 | Phase 31 | Pending |
+| UI-06 | Phase 31 | Pending |
+| UI-07 | Phase 29 | Pending |
+| TOOL-01 | Phase 32 | Pending |
+| TOOL-02 | Phase 32 | Pending |
+| TOOL-03 | Phase 32 | Pending |
+| TOOL-04 | Phase 32 | Pending |
+| TOOL-05 | Phase 32 | Pending |
+| TOOL-06 | Phase 32 | Pending |
+| INTEL-01 | Phase 33 | Pending |
+| INTEL-02 | Phase 33 | Pending |
+| INTEL-03 | Phase 33 | Pending |
+| INTEL-04 | Phase 33 | Pending |
+| SETUP-01 | Phase 29 | Pending |
+| SETUP-02 | Phase 29 | Pending |
+| SETUP-03 | Phase 28 | Pending |
+| SETUP-04 | Phase 29 | Pending |
 
 **Coverage:**
 - v6.0 requirements: 32 total
-- Mapped to phases: 0
-- Unmapped: 32
+- Mapped to phases: 32
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-27*
-*Last updated: 2026-03-27 after v6.0 milestone initialization*
+*Last updated: 2026-03-27 after roadmap creation*

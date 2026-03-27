@@ -6,7 +6,9 @@
 - [x] **v2.0 Multi-Channel & Multi-Bot** — Phases 6-10 (shipped 2026-03-13)
 - [x] **v3.0 Rich Media & Channel Flexibility** — Phases 11-17 (shipped 2026-03-15)
 - [x] **v4.0 Production Hardening** — Phases 18-21 (shipped 2026-03-16)
-- [ ] **v5.0 mem0 Memory Layer** — Phases 22-25 (in progress)
+- [x] **v5.0 mem0 Memory Layer** — Phases 22-25 (shipped 2026-03-20)
+- [x] **v5.1 Fallback Provider** — Phase 26 (shipped 2026-03-25)
+- [ ] **v6.0 Voice Dashboard** — Phases 27-33 (in progress)
 
 ## Phases
 
@@ -48,106 +50,128 @@
 <details>
 <summary>v4.0 Production Hardening (Phases 18-21) — SHIPPED 2026-03-16</summary>
 
-- [x] Phase 18: Security Foundations (4/4 plans) — shell injection, PBKDF2, secret leak, body limits, headers
-- [x] Phase 19: Test Infrastructure and Coverage (4/4 plans) — 103 tests, HTTP endpoints, scripts, e2e
-- [x] Phase 20: Infrastructure Hardening (3/3 plans) — logging, shutdown watchdog, dependency pinning
-- [x] Phase 21: End-to-End Validation (1/1 plan) — Docker container integration test
+- [x] Phase 18: Security Foundations (4/4 plans)
+- [x] Phase 19: Test Infrastructure and Coverage (4/4 plans)
+- [x] Phase 20: Infrastructure Hardening (3/3 plans)
+- [x] Phase 21: End-to-End Validation (1/1 plan)
 
 </details>
 
-### v5.0 mem0 Memory Layer (In Progress)
+<details>
+<summary>v5.0 mem0 Memory Layer (Phases 22-25) — SHIPPED 2026-03-20</summary>
 
-**Milestone Goal:** Replace flat chromadb vector search with mem0's vector + knowledge graph memory system as a self-hosted MCP extension. Zero new Railway services. Neo4j runs in-container.
+- [x] Phase 22: mem0 MCP Server + Config (2/2 plans)
+- [x] Phase 23: Gateway Memory Writer Migration (2/2 plans)
+- [x] Phase 24: ChromaDB Migration + Cleanup (2/2 plans)
+- [x] Phase 25: Neo4j Knowledge Graph (2/2 plans)
 
-- [x] **Phase 22: mem0 MCP Server + Config** - Standalone mem0 MCP extension with ChromaDB backend and shared config module (completed 2026-03-19)
-- [x] **Phase 23: Gateway Memory Writer Migration** - Replace manual extraction pipeline with mem0.add() and identity routing (completed 2026-03-19)
-- [x] **Phase 24: ChromaDB Migration + Cleanup** - Migrate existing memories to mem0, deprecate runtime collection (completed 2026-03-19)
-- [x] **Phase 25: Neo4j Knowledge Graph** - In-container Neo4j with graph-augmented memory search (completed 2026-03-19)
+</details>
+
+<details>
+<summary>v5.1 Fallback Provider (Phase 26) — SHIPPED 2026-03-25</summary>
+
+- [x] Phase 26: Fallback Provider System (3/3 plans)
+
+</details>
+
+### v6.0 Voice Dashboard (In Progress)
+
+**Milestone Goal:** Add a real-time voice channel to GooseClaw using Gemini 3.1 Flash Live API. Users talk to their AI agent via a web dashboard from phone or PC. Mid-conversation tool calling (the killer differentiator over ChatGPT voice) works through existing MCP extensions.
+
+- [ ] **Phase 27: WebSocket Infrastructure** - RFC 6455 frame parser, server + client handlers, ping/pong keepalive
+- [ ] **Phase 28: Gemini Live API Integration** - Outbound Gemini connection, bidirectional relay, session management, ephemeral auth
+- [ ] **Phase 29: Setup Wizard + Dashboard Gating** - Gemini API key in wizard, vault storage, auth reuse, dashboard access control
+- [ ] **Phase 30: Voice Dashboard** - voice.html with mic capture, push-to-talk, streaming playback, transcript, visualizer, state indicators
+- [ ] **Phase 31: Mobile + Keyboard UX** - Mobile-first responsive layout, keyboard shortcuts, text fallback, screen wake lock
+- [ ] **Phase 32: Tool Calling** - Dynamic MCP tool discovery, Gemini function declarations, mid-conversation execution, visual feedback
+- [ ] **Phase 33: Intelligence + History** - Voice transcripts to mem0, session history, voice selection
 
 ## Phase Details
 
-### Phase 22: mem0 MCP Server + Config
-**Goal**: Bot can store, search, and manage memories through MCP tools during conversations
-**Depends on**: Nothing (first phase of v5.0)
-**Requirements**: MEM-01, MEM-02, MEM-03, MEM-04, MEM-05, MEM-06, CFG-01, CFG-02, CFG-03, CFG-04
+### Phase 27: WebSocket Infrastructure
+**Goal**: Gateway can accept and maintain WebSocket connections from browsers and establish outbound WebSocket connections to external APIs, with protocol-level keepalive surviving Railway's proxy
+**Depends on**: Nothing (first phase of v6.0)
+**Requirements**: VOICE-10
 **Success Criteria** (what must be TRUE):
-  1. User can ask the bot "remember that I prefer TypeScript over JavaScript" and the bot stores it via memory_add tool
-  2. User can ask "what do you know about my coding preferences?" and the bot retrieves relevant memories via memory_search
-  3. User can ask the bot to forget something and it removes the memory via memory_delete
-  4. User can ask "what memories do you have about me?" and get a full list via memory_list
-  5. mem0 extraction uses a cheap model automatically (not the user's expensive main model) with zero additional API key setup
-**Plans**: 2 plans
+  1. A WebSocket client (browser or wscat) can connect to gateway.py via HTTP 101 upgrade and exchange text/binary frames
+  2. Gateway can open an outbound TLS WebSocket connection to an external server using stdlib ssl+socket
+  3. WebSocket connections stay alive beyond Railway's 10-minute proxy timeout via automatic ping/pong every 25 seconds
+  4. WebSocket close handshake completes cleanly from either side without orphaned threads or sockets
+**Plans**: TBD
 
-Plans:
-- [ ] 22-01-PLAN.md — Dependencies + shared config module (CFG-01 through CFG-04)
-- [ ] 22-02-PLAN.md — mem0 MCP server with 6 tools + extension registration (MEM-01 through MEM-06)
-
-### Phase 23: Gateway Memory Writer Migration
-**Goal**: Gateway automatically feeds conversation content to mem0 after each session, replacing the manual extraction pipeline
-**Depends on**: Phase 22
-**Requirements**: GW-01, GW-02, GW-03, GW-04
+### Phase 28: Gemini Live API Integration
+**Goal**: Gateway establishes a working audio pipeline to Gemini Live API with session management that handles connection limits gracefully
+**Depends on**: Phase 27
+**Requirements**: VOICE-02, VOICE-11, SETUP-03
 **Success Criteria** (what must be TRUE):
-  1. After a conversation ends, facts mentioned by the user are automatically extracted and stored in mem0 without user action
-  2. Memory extraction runs in the background and never blocks or slows the user's next message (timeout-protected)
-  3. Stable identity traits (name, role, preferences, communication style) route to user.md, not mem0. Knowledge (projects, facts, events) routes to mem0 only. No duplication.
-  4. Contradictions are resolved automatically. If user says "I switched to Rust" after previously storing "I prefer TypeScript", the old memory updates.
-**Plans**: 2 plans
+  1. Browser WebSocket connection proxies through gateway to Gemini Live API, with audio frames relayed bidirectionally in real-time
+  2. When Gemini sends a GoAway message at its 10-minute limit, the session auto-reconnects using a resumption handle without the user noticing
+  3. Context window compression is enabled so long conversations don't hit the 15-minute audio ceiling
+  4. Gateway generates session-scoped tokens for WebSocket auth so the Gemini API key never reaches the browser
+**Plans**: TBD
 
-Plans:
-- [ ] 23-01-PLAN.md — Test scaffold for mem0 gateway integration (refactor chromadb tests, add mem0/timeout/identity tests)
-- [ ] 23-02-PLAN.md — Replace manual extraction with mem0.add(), split identity/knowledge prompts, remove dead chromadb code
-
-### Phase 24: ChromaDB Migration + Cleanup
-**Goal**: Existing runtime memories migrate to mem0 and the old extraction pipeline is fully removed
-**Depends on**: Phase 23
-**Requirements**: MIG-01, MIG-02, MIG-03, MIG-04
+### Phase 29: Setup Wizard + Dashboard Gating
+**Goal**: Users can add their Gemini API key through the existing setup wizard, and the voice dashboard is only accessible when a valid key is configured
+**Depends on**: Phase 27
+**Requirements**: SETUP-01, SETUP-02, SETUP-04, UI-07
 **Success Criteria** (what must be TRUE):
-  1. After migration, all previously stored runtime memories are searchable through mem0 tools
-  2. Migration runs once and a sentinel file prevents accidental re-runs on container restart
-  3. The old chromadb runtime collection is no longer written to or read from (system docs collection untouched)
-  4. Migration inserts directly into mem0's store without re-extracting through LLM (no token burn on existing data)
-**Plans**: 2 plans
+  1. User sees "Gemini (Voice)" as an optional provider in the setup wizard with API key input and validation
+  2. Gemini API key is stored in the vault alongside other provider keys and survives container restarts
+  3. Voice dashboard page returns a "configure Gemini" link instead of the voice UI when no Gemini key is present
+  4. Voice dashboard reuses existing PBKDF2 cookie-based auth with no separate login flow
+**Plans**: TBD
 
-Plans:
-- [ ] 24-01-PLAN.md — Migration script (runtime -> mem0), sentinel guard, entrypoint integration (MIG-01, MIG-02, MIG-04)
-- [ ] 24-02-PLAN.md — System-only knowledge server cleanup, indexer cleanup, test updates (MIG-03)
-
-### Phase 25: Neo4j Knowledge Graph
-**Goal**: Bot understands entity relationships (not just flat facts) through graph-augmented memory search
-**Depends on**: Phase 24
-**Requirements**: GRAPH-01, GRAPH-02, GRAPH-03, GRAPH-04
+### Phase 30: Voice Dashboard
+**Goal**: Users can have a real-time voice conversation with their AI agent through a web browser, seeing live transcripts and a reactive visualizer
+**Depends on**: Phase 28, Phase 29
+**Requirements**: VOICE-01, VOICE-03, VOICE-04, VOICE-05, VOICE-06, VOICE-07, VOICE-08, VOICE-09, UI-01, UI-02
 **Success Criteria** (what must be TRUE):
-  1. Neo4j starts automatically inside the container via entrypoint, persists data on /data volume, requires zero user configuration
-  2. When user mentions relationships ("Alice is my manager", "Project X uses React"), entities and relationships are extracted and stored in the graph
-  3. Memory search results are augmented with graph context. Asking about "Alice" also surfaces her relationship to user's projects.
-  4. User can explore entity relationships through MCP tools (memory_entities, memory_relations)
-**Plans**: 2 plans
+  1. User opens voice.html in any modern browser, taps a push-to-talk button, speaks, and hears the AI respond with streaming audio (not buffered)
+  2. User can interrupt the AI mid-sentence (barge-in) and the AI immediately stops speaking and starts listening
+  3. Both user speech and AI responses appear as a scrolling live transcript in real-time
+  4. A reactive voice visualizer (orb/waveform) responds to audio input and output volume
+  5. User sees clear connection state (disconnected, connecting, listening, thinking, speaking) and gets actionable error messages for mic denied, WebSocket drops, and API errors
+**Plans**: TBD
 
-Plans:
-- [ ] 25-01-PLAN.md — Neo4j in-container install, entrypoint startup, mem0 graph_store config (GRAPH-01, GRAPH-02)
-- [ ] 25-02-PLAN.md — Graph-augmented search + memory_entities/memory_relations MCP tools (GRAPH-03, GRAPH-04)
-
-### Phase 26: Fallback Provider System
-**Goal**: When primary LLM provider fails (rate limit, timeout, 5xx), auto-switch to next provider in user-configured fallback chain for both main LLM and mem0 extraction
-**Depends on**: Phase 25
-**Requirements**: FB-01, FB-02, FB-03, FB-04, FB-05, FB-06, FB-07, FB-08, FB-09
+### Phase 31: Mobile + Keyboard UX
+**Goal**: Voice dashboard works great on phones with touch-friendly controls and on desktop with keyboard shortcuts, with text input as a fallback
+**Depends on**: Phase 30
+**Requirements**: UI-03, UI-04, UI-05, UI-06
 **Success Criteria** (what must be TRUE):
-  1. When the primary provider returns a retriable error (429, 5xx, timeout), the system automatically tries the next fallback provider
-  2. User can configure fallback provider chains for both main LLM and mem0 extraction in the setup wizard and dashboard
-  3. Fallback chains support drag-to-reorder for priority ordering
-  4. Primary provider is always tried first on each new message (fallback is transient, not sticky)
-  5. Only providers with saved API keys are available as fallback options
-**Plans**: 3 plans
+  1. On mobile, the dashboard layout is touch-friendly with large tap targets and the screen stays awake during active voice sessions
+  2. On desktop, user can hold Spacebar to talk and press Escape to disconnect
+  3. User can type a text message in the same interface when voice isn't convenient, and the AI responds via voice
+**Plans**: TBD
 
-Plans:
-- [x] 26-01-PLAN.md — Test scaffold + error classification + validation + config persistence (FB-01, FB-04, FB-05, FB-09)
-- [x] 26-02-PLAN.md — Setup wizard + dashboard UI + entrypoint rehydration (FB-06, FB-07, FB-08)
-- [x] 26-03-PLAN.md — Main LLM fallback wiring + mem0 fallback wiring + verification (FB-02, FB-03, FB-09)
+### Phase 32: Tool Calling
+**Goal**: Users can ask the AI to perform actions mid-conversation (check calendar, search memory, send email) and see tool execution happening in real-time
+**Depends on**: Phase 30
+**Requirements**: TOOL-01, TOOL-02, TOOL-03, TOOL-04, TOOL-05, TOOL-06
+**Success Criteria** (what must be TRUE):
+  1. When user says "check my calendar" or "search my memories", gateway discovers the correct MCP tool and executes it, feeding the result back to Gemini
+  2. All MCP tools/extensions available to text channels are automatically available to voice (no hardcoded tool list)
+  3. Tool discovery refreshes on each session start so newly installed extensions work immediately
+  4. User sees visual feedback in the transcript during tool execution (tool name, spinner, result summary)
+  5. Gemini speaks naturally about tool results without double-speech (SILENT scheduling prevents echo)
+**Plans**: TBD
+
+### Phase 33: Intelligence + History
+**Goal**: Voice conversations feed into the memory system and users can review past sessions and customize their voice experience
+**Depends on**: Phase 32
+**Requirements**: INTEL-01, INTEL-02, INTEL-03, INTEL-04
+**Success Criteria** (what must be TRUE):
+  1. After a voice session ends, the transcript is automatically fed into the mem0 memory pipeline (same as text channel conversations)
+  2. User can view a list of past voice sessions with timestamps and transcript previews
+  3. User can tap a past session to read the full transcript
+  4. User can select from available Gemini voices in voice dashboard settings
+**Plans**: TBD
 
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 22 → 23 → 24 → 25 → 26
+Phases execute in numeric order: 27 -> 28 -> 29 -> 30 -> 31 -> 32 -> 33
+
+Note: Phases 28 and 29 can execute in parallel (both depend only on 27). Phase 30 requires both 28 and 29.
 
 | Milestone | Phases | Plans | Status | Shipped |
 |-----------|--------|-------|--------|---------|
@@ -157,5 +181,16 @@ Phases execute in numeric order: 22 → 23 → 24 → 25 → 26
 | v4.0 Hardening | 18-21 | 12 | Complete | 2026-03-16 |
 | v5.0 mem0 Memory | 22-25 | 8 | Complete | 2026-03-20 |
 | v5.1 Fallback | 26 | 3 | Complete | 2026-03-25 |
+| v6.0 Voice Dashboard | 27-33 | TBD | Not started | - |
 
-**Total: 26 phases, 63 plans shipped across 6 milestones.**
+| Phase | Plans Complete | Status | Completed |
+|-------|----------------|--------|-----------|
+| 27. WebSocket Infrastructure | 0/TBD | Not started | - |
+| 28. Gemini Live API Integration | 0/TBD | Not started | - |
+| 29. Setup Wizard + Dashboard Gating | 0/TBD | Not started | - |
+| 30. Voice Dashboard | 0/TBD | Not started | - |
+| 31. Mobile + Keyboard UX | 0/TBD | Not started | - |
+| 32. Tool Calling | 0/TBD | Not started | - |
+| 33. Intelligence + History | 0/TBD | Not started | - |
+
+**Total: 33 phases, 63+ plans across 7 milestones.**

@@ -531,7 +531,14 @@ extensions:
       MEM0_KUZU_PATH: /data/knowledge/kuzu
       MEM0_CHROMA_PATH: /data/mem0/chroma
       CONFIG_DIR: /data/config
-    env_keys: []
+      DATA_DIR: /data
+    env_keys:
+      - GROQ_API_KEY
+      - OPENAI_API_KEY
+      - ANTHROPIC_API_KEY
+      - OPENROUTER_API_KEY
+      - DEEPSEEK_API_KEY
+      - TOGETHER_API_KEY
     timeout: 300
     bundled: null
     available_tools: []
@@ -553,8 +560,8 @@ try:
             'enabled': True, 'type': 'stdio', 'name': 'mem0-memory',
             'description': 'Long-term memory with semantic search and contradiction resolution',
             'cmd': 'python3', 'args': ['/app/docker/memory/server.py'],
-            'envs': {'MEM0_USER_ID': 'default', 'MEM0_TELEMETRY': 'false', 'OPENBLAS_NUM_THREADS': '1', 'HF_HUB_OFFLINE': '0', 'HF_HOME': '/data/hf_cache', 'TOKENIZERS_PARALLELISM': 'false', 'MEM0_ENABLE_GRAPH': 'true', 'MEM0_KUZU_PATH': '/data/knowledge/kuzu', 'MEM0_CHROMA_PATH': '/data/mem0/chroma', 'CONFIG_DIR': '/data/config'},
-            'env_keys': [],
+            'envs': {'MEM0_USER_ID': 'default', 'MEM0_TELEMETRY': 'false', 'OPENBLAS_NUM_THREADS': '1', 'HF_HUB_OFFLINE': '0', 'HF_HOME': '/data/hf_cache', 'TOKENIZERS_PARALLELISM': 'false', 'MEM0_ENABLE_GRAPH': 'true', 'MEM0_KUZU_PATH': '/data/knowledge/kuzu', 'MEM0_CHROMA_PATH': '/data/mem0/chroma', 'CONFIG_DIR': '/data/config', 'DATA_DIR': '/data'},
+            'env_keys': ['GROQ_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY', 'DEEPSEEK_API_KEY', 'TOGETHER_API_KEY'],
             'timeout': 300, 'bundled': None, 'available_tools': [],
         },
     }

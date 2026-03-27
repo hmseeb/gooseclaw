@@ -30,6 +30,13 @@ from gateway import (
     _discover_voice_tools,
     _voice_execute_tool,
     _voice_build_tool_response,
+    _voice_save_session,
+    _voice_build_preview,
+    _get_voice_preference,
+    _set_voice_preference,
+    GEMINI_VOICES,
+    _VOICE_SESSIONS_DIR,
+    _VOICE_PREFS_FILE,
 )
 
 
@@ -892,3 +899,202 @@ class TestToolRelay:
         assert "toolResponse" in response_msg
         fr = response_msg["toolResponse"]["functionResponses"][0]
         assert fr["response"] == {"error": "connection refused"}
+
+
+class TestVoiceSaveSession:
+    """Test _voice_save_session and _voice_build_preview helpers."""
+
+    def test_voice_save_session(self, tmp_path, gateway_module):
+        """Save session JSON atomically."""
+        import json as _json
+        gateway_module._VOICE_SESSIONS_DIR = str(tmp_path / "voice_sessions")
+        session_data = {
+            "id": "test123",
+            "started_at": "2026-03-27T14:30:00Z",
+            "ended_at": "2026-03-27T14:35:22Z",
+            "duration_seconds": 322,
+            "voice_name": "Aoede",
+            "transcript": [
+                {"speaker": "user", "text": "Hello", "ts": 1711545000.0},
+                {"speaker": "ai", "text": "Hi there", "ts": 1711545002.5},
+            ],
+            "memory_extracted": False,
+            "preview": "Hello / Hi there",
+        }
+        gateway_module._voice_save_session(session_data)
+        fpath = tmp_path / "voice_sessions" / "test123.json"
+        assert fpath.exists()
+        saved = _json.loads(fpath.read_text())
+        assert saved["id"] == "test123"
+        assert saved["voice_name"] == "Aoede"
+        assert len(saved["transcript"]) == 2
+
+    def test_voice_build_preview(self):
+        """Build preview from transcript entries."""
+        transcripts = [
+            {"speaker": "user", "text": "What's the weather?"},
+            {"speaker": "ai", "text": "It's sunny and 72 degrees."},
+        ]
+        preview = _voice_build_preview(transcripts)
+        assert "What's the weather?" in preview
+        assert "sunny" in preview
+
+    def test_voice_build_preview_truncation(self):
+        """Preview truncates at max_len."""
+        transcripts = [
+            {"speaker": "user", "text": "A" * 200},
+        ]
+        preview = _voice_build_preview(transcripts, max_len=50)
+        assert len(preview) <= 53  # 50 + "..."
+        assert preview.endswith("...")
+
+    def test_voice_build_preview_skips_tools(self):
+        """Preview skips tool entries."""
+        transcripts = [
+            {"speaker": "tool", "name": "calendar", "status": "done"},
+            {"speaker": "user", "text": "Hello"},
+            {"speaker": "ai", "text": "Hi"},
+        ]
+        preview = _voice_build_preview(transcripts)
+        assert "calendar" not in preview
+        assert "Hello" in preview
+
+
+class TestVoicePreference:
+    """Test voice preference get/set."""
+
+    def test_get_default_preference(self, tmp_path, gateway_module):
+        """Default voice is Aoede when no prefs file exists."""
+        gateway_module._VOICE_PREFS_FILE = str(tmp_path / "nonexistent.json")
+        assert gateway_module._get_voice_preference() == "Aoede"
+
+    def test_set_and_get_preference(self, tmp_path, gateway_module):
+        """Set voice preference and read it back."""
+        gateway_module._VOICE_PREFS_FILE = str(tmp_path / "voice_prefs.json")
+        gateway_module._set_voice_preference("Puck")
+        assert gateway_module._get_voice_preference() == "Puck"
+
+    def test_gemini_voices_list(self):
+        """GEMINI_VOICES has 30 entries with name and style."""
+        assert len(GEMINI_VOICES) == 30
+        for v in GEMINI_VOICES:
+            assert "name" in v
+            assert "style" in v
+
+
+class TestVoiceSessionsAPI:
+    """Test voice session list and detail API endpoints."""
+
+    def test_sessions_list_empty(self, live_gateway, auth_session, gateway_module, tmp_path):
+        """Session list returns empty when no sessions exist."""
+        import requests
+        gateway_module._VOICE_SESSIONS_DIR = str(tmp_path / "voice_sessions")
+        # Also patch DATA_DIR so the handler reads from the right place
+        original_data_dir = gateway_module.DATA_DIR
+        gateway_module.DATA_DIR = str(tmp_path)
+        try:
+            resp = requests.get(f"{live_gateway}/api/voice/sessions", headers=auth_session)
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["sessions"] == []
+        finally:
+            gateway_module.DATA_DIR = original_data_dir
+
+    def test_sessions_list_with_data(self, live_gateway, auth_session, gateway_module, tmp_path):
+        """Session list returns sessions sorted newest first."""
+        import requests
+        import json as _json
+        sdir = tmp_path / "voice_sessions"
+        sdir.mkdir()
+        s1 = {"id": "aaa", "started_at": "2026-03-27T10:00:00Z", "ended_at": "2026-03-27T10:05:00Z",
+               "duration_seconds": 300, "voice_name": "Aoede", "transcript": [], "memory_extracted": False, "preview": "Hello"}
+        s2 = {"id": "bbb", "started_at": "2026-03-27T11:00:00Z", "ended_at": "2026-03-27T11:05:00Z",
+               "duration_seconds": 300, "voice_name": "Puck", "transcript": [], "memory_extracted": True, "preview": "World"}
+        (sdir / "aaa.json").write_text(_json.dumps(s1))
+        (sdir / "bbb.json").write_text(_json.dumps(s2))
+        original_data_dir = gateway_module.DATA_DIR
+        gateway_module.DATA_DIR = str(tmp_path)
+        try:
+            resp = requests.get(f"{live_gateway}/api/voice/sessions", headers=auth_session)
+            assert resp.status_code == 200
+            sessions = resp.json()["sessions"]
+            assert len(sessions) == 2
+            assert sessions[0]["id"] == "bbb"  # newest first
+            assert sessions[1]["id"] == "aaa"
+        finally:
+            gateway_module.DATA_DIR = original_data_dir
+
+    def test_session_detail(self, live_gateway, auth_session, gateway_module, tmp_path):
+        """Session detail returns full transcript."""
+        import requests
+        import json as _json
+        sdir = tmp_path / "voice_sessions"
+        sdir.mkdir()
+        session = {"id": "abc123", "started_at": "2026-03-27T10:00:00Z",
+                   "transcript": [{"speaker": "user", "text": "Hi", "ts": 1.0}]}
+        (sdir / "abc123.json").write_text(_json.dumps(session))
+        original_data_dir = gateway_module.DATA_DIR
+        gateway_module.DATA_DIR = str(tmp_path)
+        try:
+            resp = requests.get(f"{live_gateway}/api/voice/sessions/abc123", headers=auth_session)
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["id"] == "abc123"
+            assert len(data["transcript"]) == 1
+        finally:
+            gateway_module.DATA_DIR = original_data_dir
+
+    def test_session_detail_not_found(self, live_gateway, auth_session, gateway_module, tmp_path):
+        """Session detail returns 404 for missing session."""
+        import requests
+        original_data_dir = gateway_module.DATA_DIR
+        gateway_module.DATA_DIR = str(tmp_path)
+        try:
+            resp = requests.get(f"{live_gateway}/api/voice/sessions/nonexistent", headers=auth_session)
+            assert resp.status_code == 404
+        finally:
+            gateway_module.DATA_DIR = original_data_dir
+
+    def test_sessions_requires_auth(self, live_gateway):
+        """Session endpoints require authentication."""
+        import requests
+        try:
+            resp = requests.get(f"{live_gateway}/api/voice/sessions")
+            # If we get a response, it should be an auth error
+            assert resp.status_code in (401, 302, 403)
+        except requests.exceptions.ConnectionError:
+            # Connection closed without response = auth rejected (check_auth returns False)
+            pass
+
+
+class TestVoicePreferenceAPI:
+    """Test voice preference GET/POST API endpoints."""
+
+    def test_get_preference(self, live_gateway, auth_session, gateway_module, tmp_path):
+        """GET /api/voice/preference returns current voice and voice list."""
+        import requests
+        gateway_module._VOICE_PREFS_FILE = str(tmp_path / "voice_prefs.json")
+        resp = requests.get(f"{live_gateway}/api/voice/preference", headers=auth_session)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["voice_name"] == "Aoede"
+        assert len(data["voices"]) == 30
+
+    def test_set_preference(self, live_gateway, auth_session, gateway_module, tmp_path):
+        """POST /api/voice/preference saves voice preference."""
+        import requests
+        gateway_module._VOICE_PREFS_FILE = str(tmp_path / "voice_prefs.json")
+        resp = requests.post(f"{live_gateway}/api/voice/preference",
+                             json={"voice_name": "Puck"}, headers=auth_session)
+        assert resp.status_code == 200
+        assert resp.json()["voice_name"] == "Puck"
+        # verify it persisted
+        assert gateway_module._get_voice_preference() == "Puck"
+
+    def test_set_invalid_voice(self, live_gateway, auth_session, gateway_module, tmp_path):
+        """POST with unknown voice name returns 400."""
+        import requests
+        gateway_module._VOICE_PREFS_FILE = str(tmp_path / "voice_prefs.json")
+        resp = requests.post(f"{live_gateway}/api/voice/preference",
+                             json={"voice_name": "NotAVoice"}, headers=auth_session)
+        assert resp.status_code == 400

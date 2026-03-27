@@ -9132,14 +9132,125 @@ def _voice_build_tool_response(call_id, call_name, result):
     }
 
 
-def _gemini_connect(api_key, resumption_handle=None, tools=None):
+# ── Voice session persistence + preference ──────────────────────────────────
+
+_VOICE_SESSIONS_DIR = os.path.join(DATA_DIR, "voice_sessions")
+_VOICE_PREFS_FILE = os.path.join(DATA_DIR, "voice_prefs.json")
+
+GEMINI_VOICES = [
+    {"name": "Zephyr", "style": "Bright"},
+    {"name": "Puck", "style": "Upbeat"},
+    {"name": "Charon", "style": "Informative"},
+    {"name": "Kore", "style": "Firm"},
+    {"name": "Fenrir", "style": "Excitable"},
+    {"name": "Leda", "style": "Youthful"},
+    {"name": "Orus", "style": "Firm"},
+    {"name": "Aoede", "style": "Breezy"},
+    {"name": "Callirrhoe", "style": "Easy-going"},
+    {"name": "Autonoe", "style": "Bright"},
+    {"name": "Enceladus", "style": "Breathy"},
+    {"name": "Iapetus", "style": "Clear"},
+    {"name": "Umbriel", "style": "Easy-going"},
+    {"name": "Algieba", "style": "Smooth"},
+    {"name": "Despina", "style": "Smooth"},
+    {"name": "Erinome", "style": "Clear"},
+    {"name": "Algenib", "style": "Gravelly"},
+    {"name": "Rasalgethi", "style": "Informative"},
+    {"name": "Laomedeia", "style": "Upbeat"},
+    {"name": "Achernar", "style": "Soft"},
+    {"name": "Alnilam", "style": "Firm"},
+    {"name": "Schedar", "style": "Even"},
+    {"name": "Gacrux", "style": "Mature"},
+    {"name": "Pulcherrima", "style": "Forward"},
+    {"name": "Achird", "style": "Friendly"},
+    {"name": "Zubenelgenubi", "style": "Casual"},
+    {"name": "Vindemiatrix", "style": "Gentle"},
+    {"name": "Sadachbia", "style": "Lively"},
+    {"name": "Sadaltager", "style": "Knowledgeable"},
+    {"name": "Sulafat", "style": "Warm"},
+]
+
+
+def _get_voice_preference():
+    """Load saved voice preference, default to Aoede."""
+    try:
+        with open(_VOICE_PREFS_FILE) as f:
+            prefs = json.load(f)
+            return prefs.get("voice_name", "Aoede")
+    except (FileNotFoundError, json.JSONDecodeError):
+        return "Aoede"
+
+
+def _set_voice_preference(voice_name):
+    """Save voice preference."""
+    os.makedirs(os.path.dirname(_VOICE_PREFS_FILE) or ".", exist_ok=True)
+    with open(_VOICE_PREFS_FILE, "w") as f:
+        json.dump({"voice_name": voice_name}, f)
+
+
+def _voice_save_session(session_data):
+    """Save voice session JSON atomically."""
+    os.makedirs(_VOICE_SESSIONS_DIR, exist_ok=True)
+    fpath = os.path.join(_VOICE_SESSIONS_DIR, f"{session_data['id']}.json")
+    tmp = fpath + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(session_data, f, indent=2)
+    os.replace(tmp, fpath)
+
+
+def _voice_build_preview(transcripts, max_len=100):
+    """Build a short preview string from transcript entries."""
+    parts = []
+    for entry in transcripts:
+        if entry["speaker"] in ("user", "ai") and entry.get("text"):
+            parts.append(entry["text"])
+            if len(" / ".join(parts)) > max_len:
+                break
+    preview = " / ".join(parts)
+    return preview[:max_len] + "..." if len(preview) > max_len else preview
+
+
+def _voice_extract_memory(session_data):
+    """Feed voice transcript into mem0 via goosed session."""
+    try:
+        sid = _create_goose_session()
+        if not sid:
+            _voice_log.warning("Could not create session for voice memory extraction")
+            return
+
+        # Format transcript as conversation text
+        lines = []
+        for entry in session_data["transcript"]:
+            if entry["speaker"] == "tool":
+                continue
+            speaker = "User" if entry["speaker"] == "user" else "AI"
+            lines.append(f"{speaker}: {entry['text']}")
+
+        conversation = "\n".join(lines)
+        prompt = (
+            "Extract and remember important facts from this voice conversation. "
+            "Use memory_add for each important fact or preference.\n\n"
+            f"Voice conversation ({session_data['started_at']}):\n{conversation}"
+        )
+
+        _do_rest_relay(prompt, sid, timeout=30)
+
+        # Mark session as memory-extracted
+        session_data["memory_extracted"] = True
+        _voice_save_session(session_data)
+        _voice_log.info(f"Memory extracted for voice session {session_data['id']}")
+    except Exception as e:
+        _voice_log.error(f"Voice memory extraction failed: {e}")
+
+
+def _gemini_connect(api_key, resumption_handle=None, tools=None, voice_name="Aoede"):
     """Open WebSocket to Gemini Live API and send setup config. Returns socket."""
     sock = ws_client_connect(
         host=GEMINI_LIVE_HOST,
         path=GEMINI_LIVE_PATH,
         query_params={"key": api_key}
     )
-    config = _gemini_build_config(resumption_handle=resumption_handle, tools=tools)
+    config = _gemini_build_config(resumption_handle=resumption_handle, voice_name=voice_name, tools=tools)
     ws_send_frame(sock, WS_OP_TEXT, json.dumps(config).encode(), mask=True)
     return sock
 
@@ -9208,6 +9319,14 @@ def _voice_relay_gemini_to_browser(browser_sock, session_state, stop_event):
                 elif parsed["type"] == "transcript":
                     ws_send_frame(browser_sock, WS_OP_TEXT,
                         json.dumps(parsed).encode())
+                    # Collect transcript server-side (with deduplication for same-speaker updates)
+                    if parsed.get("text"):
+                        transcripts = session_state["transcripts"]
+                        entry = {"speaker": parsed["speaker"], "text": parsed["text"], "ts": time.time()}
+                        if transcripts and transcripts[-1]["speaker"] == parsed["speaker"]:
+                            transcripts[-1] = entry  # update in-place (incremental update from Gemini)
+                        else:
+                            transcripts.append(entry)
                 elif parsed["type"] == "tool_call":
                     tool_data = parsed["data"]
                     for fc in tool_data.get("functionCalls", []):
@@ -9218,6 +9337,9 @@ def _voice_relay_gemini_to_browser(browser_sock, session_state, stop_event):
                         # Notify browser: tool running
                         ws_send_frame(browser_sock, WS_OP_TEXT,
                             json.dumps({"type": "tool_status", "name": call_name, "status": "running"}).encode())
+                        session_state["transcripts"].append({
+                            "speaker": "tool", "name": original_name, "status": "running", "ts": time.time(),
+                        })
 
                         def _exec_tool(cid, cname, cargs, oname, sid):
                             try:
@@ -9233,6 +9355,9 @@ def _voice_relay_gemini_to_browser(browser_sock, session_state, stop_event):
                                 ws_send_frame(browser_sock, WS_OP_TEXT,
                                     json.dumps({"type": "tool_status", "name": cname,
                                                 "status": status, "result": summary}).encode())
+                                session_state["transcripts"].append({
+                                    "speaker": "tool", "name": oname, "status": status, "ts": time.time(),
+                                })
                             except Exception as e:
                                 _voice_log.error(f"Tool exec error: {e}")
                                 err_response = _voice_build_tool_response(cid, cname, {"error": str(e)})
@@ -9279,7 +9404,7 @@ def _voice_handle_goaway(session_state, stop_event):
         return
     _voice_log.info("GoAway received, reconnecting with resumption handle")
     try:
-        new_sock = _gemini_connect(api_key, resumption_handle=handle)
+        new_sock = _gemini_connect(api_key, resumption_handle=handle, voice_name=session_state.get("voice_name", "Aoede"))
         ws_start_ping_loop(new_sock, interval=25, mask=True)
         with session_state["_lock"]:
             old_sock = session_state["gemini_sock"]
@@ -9416,6 +9541,16 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.handle_list_channels()
         elif path == "/api/voice/token":
             self.handle_voice_token()
+        elif path == "/api/voice/sessions":
+            self.handle_voice_sessions_list()
+        elif path.startswith("/api/voice/sessions/"):
+            session_id = path[len("/api/voice/sessions/"):]
+            if session_id:
+                self.handle_voice_session_detail(session_id)
+            else:
+                self.send_json(400, {"error": "Missing session ID"})
+        elif path == "/api/voice/preference":
+            self.handle_voice_preference_get()
         elif path.rstrip("/") == "/voice":
             self.handle_voice_page()
         elif path.rstrip("/") == "/login":
@@ -9486,6 +9621,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.handle_watchers_batch_create()
         elif path == "/api/watchers":
             self.handle_create_watcher()
+        elif path == "/api/voice/preference":
+            self.handle_voice_preference_set()
         elif path.startswith("/api/webhooks/"):
             webhook_name = path[len("/api/webhooks/"):]
             if webhook_name:
@@ -9581,6 +9718,77 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         token = _voice_session_token_create(api_key)
         self.send_json(200, {"token": token})
 
+    def handle_voice_sessions_list(self):
+        """GET /api/voice/sessions - list past voice sessions."""
+        if not check_auth(self):
+            return
+        sessions_dir = os.path.join(DATA_DIR, "voice_sessions")
+        sessions = []
+        if os.path.isdir(sessions_dir):
+            for fname in os.listdir(sessions_dir):
+                if not fname.endswith(".json"):
+                    continue
+                fpath = os.path.join(sessions_dir, fname)
+                try:
+                    with open(fpath) as f:
+                        data = json.load(f)
+                    sessions.append({
+                        "id": data["id"],
+                        "started_at": data["started_at"],
+                        "ended_at": data.get("ended_at", ""),
+                        "duration_seconds": data.get("duration_seconds", 0),
+                        "voice_name": data.get("voice_name", "Aoede"),
+                        "preview": data.get("preview", ""),
+                        "memory_extracted": data.get("memory_extracted", False),
+                    })
+                except (json.JSONDecodeError, KeyError):
+                    continue
+        sessions.sort(key=lambda s: s["started_at"], reverse=True)
+        self.send_json(200, {"sessions": sessions})
+
+    def handle_voice_session_detail(self, session_id):
+        """GET /api/voice/sessions/<id> - get full transcript."""
+        if not check_auth(self):
+            return
+        fpath = os.path.join(DATA_DIR, "voice_sessions", f"{session_id}.json")
+        if not os.path.isfile(fpath):
+            self.send_json(404, {"error": "Session not found"})
+            return
+        try:
+            with open(fpath) as f:
+                data = json.load(f)
+            self.send_json(200, data)
+        except (json.JSONDecodeError, IOError) as e:
+            self.send_json(500, {"error": str(e)})
+
+    def handle_voice_preference_get(self):
+        """GET /api/voice/preference - get current voice preference."""
+        if not check_auth(self):
+            return
+        voice_name = _get_voice_preference()
+        self.send_json(200, {"voice_name": voice_name, "voices": GEMINI_VOICES})
+
+    def handle_voice_preference_set(self):
+        """POST /api/voice/preference - save voice preference."""
+        if not check_auth(self):
+            return
+        body = self._read_body()
+        if body is None:
+            return
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            self.send_json(400, {"error": "Invalid JSON"})
+            return
+        voice_name = data.get("voice_name", "").strip()
+        # validate against known voices
+        valid_names = [v["name"] for v in GEMINI_VOICES]
+        if voice_name not in valid_names:
+            self.send_json(400, {"error": f"Unknown voice: {voice_name}"})
+            return
+        _set_voice_preference(voice_name)
+        self.send_json(200, {"voice_name": voice_name})
+
     def handle_voice_ws(self):
         """Upgrade HTTP to WebSocket and relay audio to/from Gemini Live API."""
         # validate upgrade header
@@ -9605,6 +9813,9 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         if not api_key:
             self.send_error(403, "Invalid or expired voice session token")
             return
+
+        # read voice preference from query or saved preference
+        voice_name = query.get("voice", [None])[0] or _get_voice_preference()
 
         # origin check (warn but don't reject — Railway domain matching is complex)
         origin = self.headers.get("Origin", "")
@@ -9648,7 +9859,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         gemini_sock = None
         try:
             # connect to Gemini Live API
-            gemini_sock = _gemini_connect(api_key, tools=tools if tools else None)
+            gemini_sock = _gemini_connect(api_key, tools=tools if tools else None, voice_name=voice_name)
             ws_start_ping_loop(gemini_sock, interval=25, mask=True)
 
             # session state shared between relay threads
@@ -9659,6 +9870,10 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                 "tool_session_id": tool_session_id,
                 "tool_name_map": tool_name_map,
                 "_lock": threading.Lock(),
+                "transcripts": [],
+                "session_id": conn_id,
+                "session_start": time.time(),
+                "voice_name": voice_name,
             }
 
             stop_event = threading.Event()
@@ -9696,6 +9911,28 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                     gemini_sock.close()
                 except Exception:
                     pass
+            # Save session and trigger memory extraction
+            try:
+                transcripts = session_state.get("transcripts", []) if 'session_state' in dir() else []
+                if transcripts and len(transcripts) >= 2:
+                    session_data = {
+                        "id": conn_id,
+                        "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(session_state["session_start"])),
+                        "ended_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        "duration_seconds": int(time.time() - session_state["session_start"]),
+                        "voice_name": session_state.get("voice_name", "Aoede"),
+                        "transcript": transcripts,
+                        "memory_extracted": False,
+                        "preview": _voice_build_preview(transcripts),
+                    }
+                    _voice_save_session(session_data)
+                    threading.Thread(
+                        target=_voice_extract_memory,
+                        args=(session_data,),
+                        daemon=True,
+                    ).start()
+            except Exception as e:
+                _voice_log.error(f"Session save failed: {e}")
             _voice_log.info("Voice WebSocket closed", extra={"event": "voice_close", "conn_id": conn_id})
 
     def handle_health(self):

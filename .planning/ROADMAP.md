@@ -81,7 +81,7 @@
 - [x] **Phase 27: WebSocket Infrastructure** - RFC 6455 frame parser, server + client handlers, ping/pong keepalive (completed 2026-03-27)
 - [x] **Phase 28: Gemini Live API Integration** - Outbound Gemini connection, bidirectional relay, session management, ephemeral auth (completed 2026-03-27)
 - [x] **Phase 29: Setup Wizard + Dashboard Gating** - Gemini API key in wizard, vault storage, auth reuse, dashboard access control (completed 2026-03-27)
-- [ ] **Phase 30: Voice Dashboard** - voice.html with mic capture, push-to-talk, streaming playback, transcript, visualizer, state indicators
+- [x] **Phase 30: Voice Dashboard** - voice.html with mic capture, push-to-talk, streaming playback, transcript, visualizer, state indicators (completed 2026-03-27)
 - [ ] **Phase 31: Mobile + Keyboard UX** - Mobile-first responsive layout, keyboard shortcuts, text fallback, screen wake lock
 - [ ] **Phase 32: Tool Calling** - Dynamic MCP tool discovery, Gemini function declarations, mid-conversation execution, visual feedback
 - [ ] **Phase 33: Intelligence + History** - Voice transcripts to mem0, session history, voice selection
@@ -195,7 +195,7 @@ Note: Phases 28 and 29 can execute in parallel (both depend only on 27). Phase 3
 | 27. WebSocket Infrastructure | 2/2 | Complete    | 2026-03-27 |
 | 28. Gemini Live API Integration | 2/2 | Complete    | 2026-03-27 |
 | 29. Setup Wizard + Dashboard Gating | 3/3 | Complete    | 2026-03-27 |
-| 30. Voice Dashboard | 2/3 | In Progress|  |
+| 30. Voice Dashboard | 3/3 | Complete   | 2026-03-27 |
 | 31. Mobile + Keyboard UX | 0/TBD | Not started | - |
 | 32. Tool Calling | 0/TBD | Not started | - |
 | 33. Intelligence + History | 0/TBD | Not started | - |

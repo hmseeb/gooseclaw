@@ -13,7 +13,7 @@
 - [x] **VOICE-04**: User hears AI responses played back as streaming audio chunks (not buffered full response)
 - [x] **VOICE-05**: User can interrupt the AI mid-sentence (barge-in) and AI stops speaking and listens
 - [x] **VOICE-06**: Voice Activity Detection automatically detects when user stops speaking (Gemini built-in VAD)
-- [ ] **VOICE-07**: User sees live transcript of both their speech and AI responses as scrolling chat
+- [x] **VOICE-07**: User sees live transcript of both their speech and AI responses as scrolling chat
 - [x] **VOICE-08**: User sees clear connection state indicators (disconnected, connecting, listening, thinking, speaking)
 - [x] **VOICE-09**: User gets clear error messages for mic denied, WebSocket drop, API errors, quota exceeded
 - [ ] **VOICE-10**: WebSocket proxy sends ping/pong keepalives to survive Railway's 10-min timeout
@@ -22,7 +22,7 @@
 ### Dashboard UI
 
 - [x] **UI-01**: Voice dashboard is a single self-contained HTML file (voice.html) with no build tooling
-- [ ] **UI-02**: Voice visualizer (reactive orb/waveform) responds to audio input/output volume in real-time
+- [x] **UI-02**: Voice visualizer (reactive orb/waveform) responds to audio input/output volume in real-time
 - [ ] **UI-03**: Spacebar hold-to-talk, Escape to disconnect keyboard shortcuts work on desktop
 - [ ] **UI-04**: User can type messages in same interface when voice isn't convenient (text-to-voice switching)
 - [ ] **UI-05**: Dashboard layout is mobile-first, works great on phone browsers with touch-friendly controls
@@ -80,13 +80,13 @@
 | VOICE-04 | Phase 30 | Complete |
 | VOICE-05 | Phase 30 | Complete |
 | VOICE-06 | Phase 30 | Complete |
-| VOICE-07 | Phase 30 | Pending |
+| VOICE-07 | Phase 30 | Complete |
 | VOICE-08 | Phase 30 | Complete |
 | VOICE-09 | Phase 30 | Complete |
 | VOICE-10 | Phase 27 | Pending |
 | VOICE-11 | Phase 28 | Complete |
 | UI-01 | Phase 30 | Complete |
-| UI-02 | Phase 30 | Pending |
+| UI-02 | Phase 30 | Complete |
 | UI-03 | Phase 31 | Pending |
 | UI-04 | Phase 31 | Pending |
 | UI-05 | Phase 31 | Pending |

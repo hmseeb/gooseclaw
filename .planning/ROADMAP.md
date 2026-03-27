@@ -172,7 +172,9 @@
   2. User can view a list of past voice sessions with timestamps and transcript previews
   3. User can tap a past session to read the full transcript
   4. User can select from available Gemini voices in voice dashboard settings
-**Plans**: TBD
+**Plans**: 2 plans
+- [ ] 33-01-PLAN.md -- Backend: transcript collection, session save, memory extraction, API endpoints, voice preference
+- [ ] 33-02-PLAN.md -- Frontend: history panel, session detail view, voice picker
 
 ## Progress
 

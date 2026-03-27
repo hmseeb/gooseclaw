@@ -23,10 +23,10 @@
 
 - [x] **UI-01**: Voice dashboard is a single self-contained HTML file (voice.html) with no build tooling
 - [x] **UI-02**: Voice visualizer (reactive orb/waveform) responds to audio input/output volume in real-time
-- [ ] **UI-03**: Spacebar hold-to-talk, Escape to disconnect keyboard shortcuts work on desktop
-- [ ] **UI-04**: User can type messages in same interface when voice isn't convenient (text-to-voice switching)
-- [ ] **UI-05**: Dashboard layout is mobile-first, works great on phone browsers with touch-friendly controls
-- [ ] **UI-06**: Screen stays awake during active voice session on mobile (Screen Wake Lock API)
+- [x] **UI-03**: Spacebar hold-to-talk, Escape to disconnect keyboard shortcuts work on desktop
+- [x] **UI-04**: User can type messages in same interface when voice isn't convenient (text-to-voice switching)
+- [x] **UI-05**: Dashboard layout is mobile-first, works great on phone browsers with touch-friendly controls
+- [x] **UI-06**: Screen stays awake during active voice session on mobile (Screen Wake Lock API)
 - [x] **UI-07**: Dashboard is only accessible when Gemini API key is configured, shows setup link otherwise
 
 ### Tool Calling
@@ -87,10 +87,10 @@
 | VOICE-11 | Phase 28 | Complete |
 | UI-01 | Phase 30 | Complete |
 | UI-02 | Phase 30 | Complete |
-| UI-03 | Phase 31 | Pending |
-| UI-04 | Phase 31 | Pending |
-| UI-05 | Phase 31 | Pending |
-| UI-06 | Phase 31 | Pending |
+| UI-03 | Phase 31 | Complete |
+| UI-04 | Phase 31 | Complete |
+| UI-05 | Phase 31 | Complete |
+| UI-06 | Phase 31 | Complete |
 | UI-07 | Phase 29 | Complete |
 | TOOL-01 | Phase 32 | Pending |
 | TOOL-02 | Phase 32 | Pending |

@@ -27,6 +27,9 @@ from gateway import (
     _voice_parse_server_message,
     GEMINI_LIVE_HOST,
     GEMINI_LIVE_PATH,
+    _discover_voice_tools,
+    _voice_execute_tool,
+    _voice_build_tool_response,
 )
 
 
@@ -105,6 +108,16 @@ class TestGeminiBuildConfig:
         assert isinstance(parts, list)
         assert len(parts) >= 1
         assert "text" in parts[0]
+
+    def test_config_includes_tools_when_provided(self):
+        tools = [{"name": "test", "description": "test tool", "parameters": {"type": "OBJECT", "properties": {}}}]
+        cfg = _gemini_build_config(tools=tools)
+        assert "tools" in cfg["config"]
+        assert cfg["config"]["tools"] == [{"functionDeclarations": tools}]
+
+    def test_config_no_tools_when_none(self):
+        cfg = _gemini_build_config()
+        assert "tools" not in cfg["config"]
 
 
 class TestAudioTranscoding:
@@ -651,3 +664,171 @@ class TestWakeLock:
         content = self._read_voice()
         assert re.search(r"['\"]wakeLock['\"]\s*in\s*navigator|wakeLock.*in.*navigator", content), \
             "voice.html must feature-detect wake lock support"
+
+
+# ── Tool calling unit tests (Phase 32-01 RED) ────────────────────────────────
+
+
+class TestToolDiscovery:
+    """Tests for _discover_voice_tools() — queries goosed /config for MCP tools."""
+
+    def test_returns_declarations_for_enabled_extensions(self):
+        """Mock goosed /config with 2 enabled extensions, expect 2 declarations."""
+        config_resp = json.dumps({
+            "config": {
+                "extensions": {
+                    "google-calendar": {"type": "builtin", "enabled": True},
+                    "mem0": {"type": "builtin", "enabled": True},
+                }
+            }
+        }).encode()
+        mock_conn = unittest.mock.MagicMock()
+        mock_resp = unittest.mock.MagicMock()
+        mock_resp.status = 200
+        mock_resp.read.return_value = config_resp
+        mock_conn.getresponse.return_value = mock_resp
+        with unittest.mock.patch("gateway._goosed_conn", return_value=mock_conn):
+            with unittest.mock.patch("gateway._INTERNAL_GOOSE_TOKEN", "fake-token"):
+                declarations, name_map = _discover_voice_tools()
+        assert len(declarations) == 2
+        for decl in declarations:
+            assert "name" in decl
+            assert "description" in decl
+            assert "parameters" in decl
+            assert "request" in decl["parameters"]["properties"]
+
+    def test_sanitizes_extension_names(self):
+        """Extension 'google-calendar' should become 'google_calendar'."""
+        config_resp = json.dumps({
+            "config": {
+                "extensions": {
+                    "google-calendar": {"type": "builtin", "enabled": True},
+                }
+            }
+        }).encode()
+        mock_conn = unittest.mock.MagicMock()
+        mock_resp = unittest.mock.MagicMock()
+        mock_resp.status = 200
+        mock_resp.read.return_value = config_resp
+        mock_conn.getresponse.return_value = mock_resp
+        with unittest.mock.patch("gateway._goosed_conn", return_value=mock_conn):
+            with unittest.mock.patch("gateway._INTERNAL_GOOSE_TOKEN", "fake-token"):
+                declarations, name_map = _discover_voice_tools()
+        assert declarations[0]["name"] == "google_calendar"
+
+    def test_returns_name_mapping(self):
+        """name_map should map sanitized -> original name."""
+        config_resp = json.dumps({
+            "config": {
+                "extensions": {
+                    "google-calendar": {"type": "builtin", "enabled": True},
+                }
+            }
+        }).encode()
+        mock_conn = unittest.mock.MagicMock()
+        mock_resp = unittest.mock.MagicMock()
+        mock_resp.status = 200
+        mock_resp.read.return_value = config_resp
+        mock_conn.getresponse.return_value = mock_resp
+        with unittest.mock.patch("gateway._goosed_conn", return_value=mock_conn):
+            with unittest.mock.patch("gateway._INTERNAL_GOOSE_TOKEN", "fake-token"):
+                declarations, name_map = _discover_voice_tools()
+        assert name_map["google_calendar"] == "google-calendar"
+
+    def test_skips_disabled_extensions(self):
+        """Disabled extensions should not appear in declarations."""
+        config_resp = json.dumps({
+            "config": {
+                "extensions": {
+                    "google-calendar": {"type": "builtin", "enabled": True},
+                    "slack": {"type": "builtin", "enabled": False},
+                }
+            }
+        }).encode()
+        mock_conn = unittest.mock.MagicMock()
+        mock_resp = unittest.mock.MagicMock()
+        mock_resp.status = 200
+        mock_resp.read.return_value = config_resp
+        mock_conn.getresponse.return_value = mock_resp
+        with unittest.mock.patch("gateway._goosed_conn", return_value=mock_conn):
+            with unittest.mock.patch("gateway._INTERNAL_GOOSE_TOKEN", "fake-token"):
+                declarations, name_map = _discover_voice_tools()
+        assert len(declarations) == 1
+        assert declarations[0]["name"] == "google_calendar"
+
+    def test_returns_empty_on_goosed_error(self):
+        """ConnectionError from goosed should return ([], {})."""
+        with unittest.mock.patch("gateway._goosed_conn", side_effect=ConnectionError("refused")):
+            with unittest.mock.patch("gateway._INTERNAL_GOOSE_TOKEN", "fake-token"):
+                declarations, name_map = _discover_voice_tools()
+        assert declarations == []
+        assert name_map == {}
+
+    def test_returns_empty_on_non_200(self):
+        """Non-200 from goosed /config should return ([], {})."""
+        mock_conn = unittest.mock.MagicMock()
+        mock_resp = unittest.mock.MagicMock()
+        mock_resp.status = 500
+        mock_resp.read.return_value = b"error"
+        mock_conn.getresponse.return_value = mock_resp
+        with unittest.mock.patch("gateway._goosed_conn", return_value=mock_conn):
+            with unittest.mock.patch("gateway._INTERNAL_GOOSE_TOKEN", "fake-token"):
+                declarations, name_map = _discover_voice_tools()
+        assert declarations == []
+        assert name_map == {}
+
+
+class TestToolExecution:
+    """Tests for _voice_execute_tool() — relays tool requests through goosed."""
+
+    def test_executes_via_do_rest_relay(self):
+        """Successful relay returns result dict."""
+        with unittest.mock.patch("gateway._do_rest_relay", return_value=("Calendar event found", "", [])):
+            result = _voice_execute_tool("google_calendar", {"request": "check my schedule"}, "session-123", "google-calendar")
+        assert result == {"result": "Calendar event found"}
+
+    def test_truncates_long_results(self):
+        """Results longer than 2000 chars should be truncated."""
+        long_text = "x" * 5000
+        with unittest.mock.patch("gateway._do_rest_relay", return_value=(long_text, "", [])):
+            result = _voice_execute_tool("google_calendar", {"request": "check"}, "session-123", "google-calendar")
+        assert len(result["result"]) <= 2000
+
+    def test_returns_error_on_relay_failure(self):
+        """Relay error string should be returned as error dict."""
+        with unittest.mock.patch("gateway._do_rest_relay", return_value=("", "goosed timeout", [])):
+            result = _voice_execute_tool("google_calendar", {"request": "check"}, "session-123", "google-calendar")
+        assert result == {"error": "goosed timeout"}
+
+    def test_returns_error_on_exception(self):
+        """Exception during relay should return error dict."""
+        with unittest.mock.patch("gateway._do_rest_relay", side_effect=Exception("boom")):
+            result = _voice_execute_tool("google_calendar", {"request": "check"}, "session-123", "google-calendar")
+        assert "error" in result
+
+
+class TestToolResponse:
+    """Tests for _voice_build_tool_response() — builds Gemini toolResponse JSON."""
+
+    def test_builds_correct_json_structure(self):
+        """Response must have toolResponse.functionResponses[0] with id, name, response."""
+        resp = _voice_build_tool_response("call-123", "google_calendar", {"result": "Event at 3pm"})
+        assert "toolResponse" in resp
+        assert "functionResponses" in resp["toolResponse"]
+        fr = resp["toolResponse"]["functionResponses"][0]
+        assert "id" in fr
+        assert "name" in fr
+        assert "response" in fr
+
+    def test_response_has_correct_fields(self):
+        """Verify exact field values."""
+        resp = _voice_build_tool_response("call-123", "google_calendar", {"result": "Event at 3pm"})
+        fr = resp["toolResponse"]["functionResponses"][0]
+        assert fr["id"] == "call-123"
+        assert fr["name"] == "google_calendar"
+        assert fr["response"] == {"result": "Event at 3pm"}
+
+    def test_response_has_silent_scheduling(self):
+        """SILENT scheduling prevents Gemini from double-speaking raw tool results."""
+        resp = _voice_build_tool_response("call-123", "google_calendar", {"result": "Event at 3pm"})
+        assert resp.get("scheduling") == "SILENT"

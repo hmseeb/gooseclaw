@@ -683,11 +683,11 @@ fi
 # Re-indexes system namespace on every boot (system.md, onboarding.md, schemas/).
 # Runtime namespace (user facts, integrations) is never wiped.
 
-# one-time nuke of corrupted mem0 chroma (compactor backfill error)
-if [ -d /data/mem0/chroma ] && [ ! -f /data/mem0/.chroma_reset_v1 ]; then
-    echo "[mem0] resetting corrupted chroma store..."
-    rm -rf /data/mem0/chroma
-    touch /data/mem0/.chroma_reset_v1
+# one-time nuke of ALL chroma stores (compactor + format corruption)
+if [ ! -f /data/.chroma_reset_v2 ]; then
+    echo "[chroma] resetting all chroma stores for clean 1.5.5 init..."
+    rm -rf /data/mem0/chroma /data/knowledge/chroma
+    touch /data/.chroma_reset_v2
 fi
 
 # kuzu needs a directory for persistent storage, chroma cache avoids 79MB re-download

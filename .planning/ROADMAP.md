@@ -135,7 +135,10 @@
   3. Both user speech and AI responses appear as a scrolling live transcript in real-time
   4. A reactive voice visualizer (orb/waveform) responds to audio input and output volume
   5. User sees clear connection state (disconnected, connecting, listening, thinking, speaking) and gets actionable error messages for mic denied, WebSocket drops, and API errors
-**Plans**: TBD
+**Plans**: 3 plans
+- [ ] 30-01-PLAN.md -- CSP fix + voice.html scaffold with state machine, WebSocket connection, error handling
+- [ ] 30-02-PLAN.md -- AudioWorklet capture, streaming PCM playback, push-to-talk, barge-in
+- [ ] 30-03-PLAN.md -- Live transcript display, reactive audio visualizer (orb)
 
 ### Phase 31: Mobile + Keyboard UX
 **Goal**: Voice dashboard works great on phones with touch-friendly controls and on desktop with keyboard shortcuts, with text input as a fallback
@@ -192,7 +195,7 @@ Note: Phases 28 and 29 can execute in parallel (both depend only on 27). Phase 3
 | 27. WebSocket Infrastructure | 2/2 | Complete    | 2026-03-27 |
 | 28. Gemini Live API Integration | 2/2 | Complete    | 2026-03-27 |
 | 29. Setup Wizard + Dashboard Gating | 3/3 | Complete    | 2026-03-27 |
-| 30. Voice Dashboard | 0/TBD | Not started | - |
+| 30. Voice Dashboard | 0/3 | Not started | - |
 | 31. Mobile + Keyboard UX | 0/TBD | Not started | - |
 | 32. Tool Calling | 0/TBD | Not started | - |
 | 33. Intelligence + History | 0/TBD | Not started | - |

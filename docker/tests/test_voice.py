@@ -515,3 +515,139 @@ class TestVoiceDashboardFile:
             content = f.read()
         assert "getUserMedia" in content or "getusermedia" in content.lower(), \
             "voice.html must reference getUserMedia"
+
+
+# ── Keyboard, text input, mobile, and wake lock tests (Phase 31-01) ──────────
+
+import re
+
+
+class TestKeyboardShortcuts:
+    """Static analysis tests for keyboard shortcuts (UI-03)."""
+
+    def _read_voice(self):
+        voice_path = os.path.join(os.path.dirname(__file__), "..", "voice.html")
+        with open(voice_path) as f:
+            return f.read()
+
+    def test_has_keydown_listener(self):
+        content = self._read_voice()
+        assert re.search(r"addEventListener.*keydown|onkeydown", content), \
+            "voice.html must have a keydown event listener"
+
+    def test_has_keyup_listener(self):
+        content = self._read_voice()
+        assert re.search(r"addEventListener.*keyup|onkeyup", content), \
+            "voice.html must have a keyup event listener"
+
+    def test_has_space_code_check(self):
+        content = self._read_voice()
+        assert re.search(r"e\.code\s*===?\s*['\"]Space['\"]|code.*Space", content), \
+            "voice.html must check for Space key code"
+
+    def test_has_escape_code_check(self):
+        content = self._read_voice()
+        assert re.search(r"e\.code\s*===?\s*['\"]Escape['\"]|code.*Escape", content), \
+            "voice.html must check for Escape key code"
+
+    def test_has_repeat_guard(self):
+        content = self._read_voice()
+        assert re.search(r"e\.repeat|\.repeat", content), \
+            "voice.html must guard against key repeat"
+
+    def test_has_focus_guard(self):
+        content = self._read_voice()
+        assert re.search(r"INPUT|TEXTAREA|tagName|isContentEditable", content), \
+            "voice.html must skip shortcuts when typing in input/textarea"
+
+
+class TestTextInput:
+    """Static analysis tests for text input bar (UI-04)."""
+
+    def _read_voice(self):
+        voice_path = os.path.join(os.path.dirname(__file__), "..", "voice.html")
+        with open(voice_path) as f:
+            return f.read()
+
+    def test_has_text_input_element(self):
+        content = self._read_voice()
+        assert re.search(r'id=["\']text-input["\']', content), \
+            "voice.html must have an element with id='text-input'"
+
+    def test_has_text_input_bar(self):
+        content = self._read_voice()
+        assert "text-input-bar" in content, \
+            "voice.html must have text-input-bar"
+
+    def test_has_send_text_function(self):
+        content = self._read_voice()
+        assert "sendTextMessage" in content, \
+            "voice.html must have sendTextMessage function"
+
+    def test_has_realtime_input_text(self):
+        content = self._read_voice()
+        assert "realtimeInput" in content and "text" in content, \
+            "voice.html must use realtimeInput text format for Gemini"
+
+    def test_has_enter_key_handler(self):
+        content = self._read_voice()
+        assert re.search(r"Enter", content), \
+            "voice.html must handle Enter key for text submit"
+
+
+class TestMobileLayout:
+    """Static analysis tests for mobile-first responsive CSS (UI-05)."""
+
+    def _read_voice(self):
+        voice_path = os.path.join(os.path.dirname(__file__), "..", "voice.html")
+        with open(voice_path) as f:
+            return f.read()
+
+    def test_has_safe_area_inset(self):
+        content = self._read_voice()
+        assert "safe-area-inset" in content, \
+            "voice.html must use safe-area-inset for notched phones"
+
+    def test_has_min_tap_target_size(self):
+        content = self._read_voice()
+        assert re.search(r"44px|48px", content), \
+            "voice.html must have minimum 44px tap targets"
+
+    def test_has_font_size_16px_input(self):
+        content = self._read_voice()
+        assert re.search(r"font-size:\s*16px|font-size:16px", content), \
+            "voice.html must use 16px font-size on inputs to prevent iOS zoom"
+
+    def test_has_viewport_fit_cover(self):
+        content = self._read_voice()
+        assert "viewport-fit=cover" in content, \
+            "voice.html must have viewport-fit=cover in viewport meta tag"
+
+
+class TestWakeLock:
+    """Static analysis tests for Screen Wake Lock API (UI-06)."""
+
+    def _read_voice(self):
+        voice_path = os.path.join(os.path.dirname(__file__), "..", "voice.html")
+        with open(voice_path) as f:
+            return f.read()
+
+    def test_has_wake_lock_request(self):
+        content = self._read_voice()
+        assert "wakeLock" in content and "request" in content, \
+            "voice.html must request wake lock"
+
+    def test_has_wake_lock_release(self):
+        content = self._read_voice()
+        assert "wakeLock" in content and "release" in content, \
+            "voice.html must release wake lock"
+
+    def test_has_visibility_change_listener(self):
+        content = self._read_voice()
+        assert "visibilitychange" in content, \
+            "voice.html must listen for visibilitychange events"
+
+    def test_has_wake_lock_feature_detection(self):
+        content = self._read_voice()
+        assert re.search(r"['\"]wakeLock['\"]\s*in\s*navigator|wakeLock.*in.*navigator", content), \
+            "voice.html must feature-detect wake lock support"

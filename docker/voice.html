@@ -370,7 +370,18 @@
         ws.close(1000);
       }
       ws = null;
-      // Audio cleanup (Plan 02 expands this)
+      // Audio cleanup
+      if (isCapturing) {
+        stopCapture();
+      }
+      if (playback) {
+        playback.clearQueue();
+        playback = null;
+      }
+      if (audioContext) {
+        audioContext.close();
+        audioContext = null;
+      }
       setState(STATE.DISCONNECTED);
     }
 
@@ -381,6 +392,10 @@
           break;
         case 'transcript':
           addTranscript(msg.speaker, msg.text);
+          // AI transcript while user is speaking -> THINKING
+          if (msg.speaker === 'ai' && currentState === STATE.LISTENING) {
+            setState(STATE.THINKING);
+          }
           break;
         case 'interrupted':
           handleInterruption();
@@ -390,19 +405,231 @@
       }
     }
 
-    // ── Stub Functions (implemented in Plans 02 and 03) ────────────────────────
-    // Plan 02 adds: getUserMedia for mic capture, AudioWorklet for PCM encoding
+    // ── AudioWorklet Processor Code ───────────────────────────────────────────
+
+    var WORKLET_CODE = [
+      'class PCMCaptureProcessor extends AudioWorkletProcessor {',
+      '  constructor() {',
+      '    super();',
+      '    this.buffer = new Int16Array(2048);',
+      '    this.writeIndex = 0;',
+      '  }',
+      '  process(inputs) {',
+      '    var input = inputs[0];',
+      '    if (!input || !input[0]) return true;',
+      '    var samples = input[0];',
+      '    for (var i = 0; i < samples.length; i++) {',
+      '      var s = Math.max(-1, Math.min(1, samples[i]));',
+      '      this.buffer[this.writeIndex++] = s * 0x7FFF;',
+      '      if (this.writeIndex >= this.buffer.length) {',
+      '        this.port.postMessage(this.buffer.buffer.slice(0));',
+      '        this.writeIndex = 0;',
+      '      }',
+      '    }',
+      '    return true;',
+      '  }',
+      '}',
+      "registerProcessor('pcm-capture', PCMCaptureProcessor);"
+    ].join('\n');
+
+    // ── Audio State ────────────────────────────────────────────────────────────
+
+    var audioContext = null;
+    var captureStream = null;
+    var captureNode = null;
+    var captureSource = null;
+    var isCapturing = false;
+    var playback = null;
+
+    // ── AudioPlayback Class ────────────────────────────────────────────────────
+
+    function AudioPlayback(ctx) {
+      this.ctx = ctx;
+      this.queue = [];
+      this.scheduledTime = 0;
+      this.playing = false;
+      this.scheduledSources = [];
+      this.SCHEDULE_AHEAD = 0.2;
+      this.INITIAL_BUFFER = 0.1;
+      this._rafId = null;
+      this.analyserNode = null;
+    }
+
+    AudioPlayback.prototype.addPCM16 = function(chunk) {
+      var float32 = new Float32Array(chunk.length / 2);
+      var view = new DataView(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+      for (var i = 0; i < float32.length; i++) {
+        float32[i] = view.getInt16(i * 2, true) / 32768;
+      }
+      this.queue.push(float32);
+      if (!this.playing) {
+        this.playing = true;
+        this.scheduledTime = this.ctx.currentTime + this.INITIAL_BUFFER;
+        this._scheduleNext();
+      }
+    };
+
+    AudioPlayback.prototype._scheduleNext = function() {
+      var self = this;
+      while (this.queue.length > 0 &&
+             this.scheduledTime < this.ctx.currentTime + this.SCHEDULE_AHEAD) {
+        var samples = this.queue.shift();
+        var buffer = this.ctx.createBuffer(1, samples.length, 24000);
+        buffer.getChannelData(0).set(samples);
+        var source = this.ctx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(this.analyserNode || this.ctx.destination);
+        source.onended = (function(src) {
+          return function() {
+            var idx = self.scheduledSources.indexOf(src);
+            if (idx !== -1) self.scheduledSources.splice(idx, 1);
+            if (self.queue.length === 0 && self.scheduledSources.length === 0 && self.playing) {
+              self.playing = false;
+              if (currentState === STATE.SPEAKING) {
+                setState(STATE.READY);
+              }
+            }
+          };
+        })(source);
+        source.start(this.scheduledTime);
+        this.scheduledSources.push(source);
+        this.scheduledTime += samples.length / 24000;
+      }
+      if (this.queue.length > 0 || this.scheduledSources.length > 0) {
+        this._rafId = requestAnimationFrame(function() { self._scheduleNext(); });
+      }
+    };
+
+    AudioPlayback.prototype.clearQueue = function() {
+      this.queue = [];
+      for (var i = 0; i < this.scheduledSources.length; i++) {
+        try { this.scheduledSources[i].stop(); } catch(e) { /* may already be stopped */ }
+      }
+      this.scheduledSources = [];
+      this.playing = false;
+      this.scheduledTime = 0;
+      if (this._rafId) {
+        cancelAnimationFrame(this._rafId);
+        this._rafId = null;
+      }
+    };
+
+    AudioPlayback.prototype.setAnalyser = function(node) {
+      this.analyserNode = node;
+    };
+
+    // ── Audio Capture ──────────────────────────────────────────────────────────
+
+    async function startCapture() {
+      // Create AudioContext inside user gesture
+      if (!audioContext) {
+        audioContext = new AudioContext();
+      }
+      await audioContext.resume();
+      if (audioContext.state !== 'running') {
+        showError('Browser blocked audio. Tap mic again.');
+        return;
+      }
+
+      // Check AudioWorklet support
+      if (!audioContext.audioWorklet) {
+        showError("Your browser doesn't support AudioWorklet. Use Chrome or Edge.");
+        return;
+      }
+
+      // Request microphone via getUserMedia
+      try {
+        captureStream = await navigator.mediaDevices.getUserMedia({
+          audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }
+        });
+      } catch (err) {
+        if (err.name === 'NotAllowedError') {
+          showError('Microphone access denied. Allow mic access in browser settings and reload.');
+        } else if (err.name === 'NotFoundError') {
+          showError('No microphone found. Connect a mic and reload.');
+        } else {
+          showError('Microphone error: ' + err.message);
+        }
+        return;
+      }
+
+      // Load AudioWorklet via Blob URL
+      try {
+        var blob = new Blob([WORKLET_CODE], { type: 'application/javascript' });
+        var url = URL.createObjectURL(blob);
+        await audioContext.audioWorklet.addModule(url);
+        URL.revokeObjectURL(url);
+      } catch (err) {
+        console.warn('[voice] AudioWorklet load error, may already be registered:', err);
+      }
+
+      // Create capture chain
+      captureSource = audioContext.createMediaStreamSource(captureStream);
+      captureNode = new AudioWorkletNode(audioContext, 'pcm-capture');
+      captureNode.port.onmessage = function(e) {
+        if (ws && ws.readyState === WebSocket.OPEN && isCapturing) {
+          ws.send(new Uint8Array(e.data));
+        }
+      };
+      captureSource.connect(captureNode);
+      captureNode.connect(audioContext.destination);
+
+      // Create playback if needed
+      if (!playback) {
+        playback = new AudioPlayback(audioContext);
+      }
+
+      isCapturing = true;
+      setState(STATE.LISTENING);
+    }
+
+    function stopCapture() {
+      isCapturing = false;
+      if (captureNode) {
+        try { captureNode.disconnect(); } catch(e) {}
+        captureNode = null;
+      }
+      if (captureSource) {
+        try { captureSource.disconnect(); } catch(e) {}
+        captureSource = null;
+      }
+      if (captureStream) {
+        captureStream.getTracks().forEach(function(t) { t.stop(); });
+        captureStream = null;
+      }
+      setState(STATE.READY);
+    }
+
+    // ── Audio Data Handler ─────────────────────────────────────────────────────
 
     function handleAudioData(data) {
-      // Plan 02: route binary PCM to AudioPlayback
+      if (!audioContext || audioContext.state !== 'running') return;
+      if (!playback) {
+        playback = new AudioPlayback(audioContext);
+      }
+      playback.addPCM16(data);
+      if (currentState !== STATE.SPEAKING) {
+        setState(STATE.SPEAKING);
+      }
     }
+
+    // ── Transcript Stub (Plan 03) ──────────────────────────────────────────────
 
     function addTranscript(speaker, text) {
       // Plan 03: render transcript chat bubbles
     }
 
+    // ── Interruption (Barge-in) ────────────────────────────────────────────────
+
     function handleInterruption() {
-      // Plan 02: clear playback queue, transition state
+      if (playback) {
+        playback.clearQueue();
+      }
+      if (isCapturing) {
+        setState(STATE.LISTENING);
+      } else {
+        setState(STATE.READY);
+      }
     }
 
     // ── Error Handler ──────────────────────────────────────────────────────────
@@ -441,19 +668,18 @@
           // Already connecting, do nothing
           break;
         case STATE.READY:
-          // Plan 02: startCapture()
-          console.log('[voice] Audio capture not yet implemented');
+          startCapture();
           break;
         case STATE.LISTENING:
-          // Plan 02: stopCapture()
-          console.log('[voice] Stop capture not yet implemented');
+          stopCapture();
           break;
         case STATE.THINKING:
           // Do nothing while AI is thinking
           break;
         case STATE.SPEAKING:
-          // Plan 02: barge-in
-          console.log('[voice] Barge-in not yet implemented');
+          // Barge-in: stop playback and start capturing
+          handleInterruption();
+          startCapture();
           break;
       }
     }

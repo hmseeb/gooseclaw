@@ -3837,6 +3837,18 @@ def humanize_cron(expr):
                 dow_str = ",".join(mapped)
             return f"{dow_str} at {time_str}" if time_str else dow_str
 
+        # monthly: specific day of month, any month, any weekday
+        if dom != "*" and month == "*" and dow == "*":
+            suffix = "th"
+            d = int(dom)
+            if d in (1, 21, 31):
+                suffix = "st"
+            elif d in (2, 22):
+                suffix = "nd"
+            elif d in (3, 23):
+                suffix = "rd"
+            return f"{d}{suffix} of every month at {time_str}" if time_str else f"{d}{suffix} of every month"
+
         # daily at time
         if dom == "*" and month == "*" and dow == "*" and time_str:
             return f"daily at {time_str}"

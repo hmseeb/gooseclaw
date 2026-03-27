@@ -63,7 +63,18 @@ def _read_vault_secret(key):
         if os.path.exists(VAULT_PATH):
             with open(VAULT_PATH) as f:
                 vault = yaml.safe_load(f) or {}
-            return vault.get(key, "")
+            # flat key lookup (e.g. "groq_api_key")
+            val = vault.get(key, "")
+            if val and isinstance(val, str):
+                return val
+            # nested lookup (e.g. "groq_api_key" → vault["groq"]["api_key"])
+            key_lower = key.lower()
+            for service, values in vault.items():
+                if isinstance(values, dict):
+                    for subkey, subval in values.items():
+                        flat = f"{service}_{subkey}".lower()
+                        if flat == key_lower and subval:
+                            return str(subval)
     except Exception:
         pass
     return ""

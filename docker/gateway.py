@@ -2195,7 +2195,8 @@ def validate_setup_config(config):
 
     # string field max-length guard (prevent absurdly large values)
     for field in ("api_key", "claude_setup_token", "custom_key", "custom_url", "model",
-                  "lead_provider", "lead_model", "mem0_provider", "mem0_model"):
+                  "lead_provider", "lead_model", "mem0_provider", "mem0_model",
+                  "gemini_api_key"):
         val = config.get(field, "")
         if isinstance(val, str) and len(val) > 2000:
             errors.append(f"{field} exceeds maximum length (2000 chars)")
@@ -8519,6 +8520,48 @@ def _get_gemini_api_key():
         return None
 
 
+_VOICE_GATE_HTML = b"""<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice - GooseClaw</title>
+<style>
+  body { font-family: -apple-system, system-ui, sans-serif; background: #0a0a0a; color: #e0e0e0;
+         display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+  .gate { text-align: center; max-width: 400px; padding: 40px; }
+  .gate h1 { font-size: 24px; margin-bottom: 8px; }
+  .gate p { color: #888; margin-bottom: 24px; }
+  .gate a { color: #7c6aef; text-decoration: none; font-weight: 500; }
+  .gate a:hover { text-decoration: underline; }
+</style>
+</head><body>
+<div class="gate">
+  <h1>Voice Dashboard</h1>
+  <p>Voice requires a Gemini API key. Add one in setup to enable the voice dashboard.</p>
+  <a href="/setup">Configure Gemini</a>
+</div>
+</body></html>"""
+
+
+def _save_vault_key(key, value):
+    """Write a single key-value pair to vault.yaml. Atomic write via tmp+rename."""
+    import yaml
+    os.makedirs(os.path.dirname(VAULT_FILE), exist_ok=True)
+    data = {}
+    if os.path.exists(VAULT_FILE):
+        try:
+            with open(VAULT_FILE) as f:
+                data = yaml.safe_load(f) or {}
+        except Exception:
+            data = {}
+    data[key] = value
+    tmp_path = VAULT_FILE + ".tmp"
+    with open(tmp_path, "w") as f:
+        yaml.dump(data, f, default_flow_style=False)
+    os.chmod(tmp_path, 0o600)
+    os.replace(tmp_path, VAULT_FILE)  # atomic on same filesystem
+
+
 def start_goosed():
     global goosed_process, _INTERNAL_GOOSE_TOKEN
     _check_stale_pid("goosed")
@@ -9248,6 +9291,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.handle_list_channels()
         elif path == "/api/voice/token":
             self.handle_voice_token()
+        elif path.rstrip("/") == "/voice":
+            self.handle_voice_page()
         elif path.rstrip("/") == "/login":
             self.handle_login_page()
         elif path.rstrip("/") == "/admin":
@@ -9792,6 +9837,85 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         except FileNotFoundError:
             self.send_error(404, "Admin page not found")
 
+    def handle_voice_page(self):
+        """Serve voice dashboard. Gates on auth + Gemini key presence."""
+        if not check_auth(self):
+            self.send_response(302)
+            self.send_header("Location", "/login")
+            self.end_headers()
+            return
+        api_key = _get_gemini_api_key()
+        if not api_key:
+            # no Gemini key configured -- show gate page
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(_VOICE_GATE_HTML)))
+            for header, value in SECURITY_HEADERS.items():
+                self.send_header(header, value)
+            csp = (
+                "default-src 'self'; "
+                "style-src 'unsafe-inline'; "
+                "frame-ancestors 'none'"
+            )
+            self.send_header("Content-Security-Policy", csp)
+            self._inject_session_cookie()
+            self.end_headers()
+            self.wfile.write(_VOICE_GATE_HTML)
+            return
+        # Gemini key is configured -- try to serve voice.html
+        voice_html_path = os.path.join(os.environ.get("APP_DIR", "/app"), "voice.html")
+        try:
+            with open(voice_html_path, "rb") as f:
+                content = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(content)))
+            self.send_header("Cache-Control", "no-cache")
+            for header, value in SECURITY_HEADERS.items():
+                self.send_header(header, value)
+            csp = (
+                "default-src 'self'; "
+                "script-src 'self' 'unsafe-inline'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "connect-src 'self' wss:; "
+                "media-src 'self' blob:; "
+                "frame-ancestors 'none'"
+            )
+            self.send_header("Content-Security-Policy", csp)
+            if os.environ.get("RAILWAY_ENVIRONMENT"):
+                self.send_header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+            self._inject_session_cookie()
+            self.end_headers()
+            self.wfile.write(content)
+        except FileNotFoundError:
+            # voice.html doesn't exist yet (Phase 30 creates it)
+            # serve a "coming soon" message instead of 404
+            coming_soon = b"""<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice - GooseClaw</title>
+<style>
+  body { font-family: -apple-system, system-ui, sans-serif; background: #0a0a0a; color: #e0e0e0;
+         display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+  .msg { text-align: center; max-width: 400px; padding: 40px; }
+  .msg h1 { font-size: 24px; margin-bottom: 8px; }
+  .msg p { color: #888; }
+</style>
+</head><body>
+<div class="msg">
+  <h1>Voice Dashboard</h1>
+  <p>Gemini key is configured. Voice dashboard is being set up.</p>
+</div>
+</body></html>"""
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(coming_soon)))
+            for header, value in SECURITY_HEADERS.items():
+                self.send_header(header, value)
+            self._inject_session_cookie()
+            self.end_headers()
+            self.wfile.write(coming_soon)
+
     def handle_get_config(self):
         if load_setup() and not check_auth(self):
             self.send_response(401)
@@ -9821,6 +9945,9 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             # telegram_bot_token: only expose whether it is set, never the value
             tbt = safe.pop("telegram_bot_token", "")
             safe["telegram_bot_token_set"] = bool(tbt)
+
+            # gemini voice key: only expose whether it is set (lives in vault, not setup.json)
+            safe["gemini_api_key_set"] = bool(_get_gemini_api_key())
 
             # ── saved_keys_set indicators ────────────────────────────────────
             if "saved_keys" in safe and isinstance(safe["saved_keys"], dict):
@@ -9902,6 +10029,11 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                                 for k, v in val.items():
                                     if v == _REDACTED and k in existing_val:
                                         val[k] = existing_val[k]
+
+            # write Gemini API key to vault if provided (not stored in setup.json)
+            gemini_key = config.pop("gemini_api_key", None)
+            if gemini_key and gemini_key != _REDACTED:
+                _save_vault_key("GEMINI_API_KEY", gemini_key)
 
             save_setup(config)
             apply_config(config)

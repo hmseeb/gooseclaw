@@ -187,7 +187,7 @@ Note: Phases 28 and 29 can execute in parallel (both depend only on 27). Phase 3
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 27. WebSocket Infrastructure | 0/2 | Not started | - |
+| 27. WebSocket Infrastructure | 1/2 | In Progress|  |
 | 28. Gemini Live API Integration | 0/TBD | Not started | - |
 | 29. Setup Wizard + Dashboard Gating | 0/TBD | Not started | - |
 | 30. Voice Dashboard | 0/TBD | Not started | - |

@@ -106,7 +106,6 @@ _bot_mgr_log = logging.getLogger("bot-mgr")
 _watchers_log = logging.getLogger("watchers")
 _watcher_log = logging.getLogger("watcher")
 _cron_log = logging.getLogger("cron")
-_memory_log = logging.getLogger("memory-writer")
 
 
 # ── rate limiting ────────────────────────────────────────────────────────────
@@ -443,7 +442,6 @@ class BotInstance:
         Extracted from the poll loop to make the relay path unit-testable.
         inbound_msg: optional InboundMessage envelope (v2 contract, Phase 12+ uses media).
         """
-        _memory_touch(chat_id)
         # Change 5: wait for pending greeting before acquiring lock
         _pending_greet = self.state._greeting_events.get(str(chat_id))
         if _pending_greet:
@@ -2327,8 +2325,8 @@ def validate_setup_config(config):
                 if btoken and ":" not in btoken:
                     errors.append(f"bots[{i}] token must be in format digits:alphanumeric")
 
-    # fallback_providers / mem0_fallback_providers validation
-    for fb_field in ("fallback_providers", "mem0_fallback_providers"):
+    # fallback_providers validation
+    for fb_field in ("fallback_providers",):
         fb = config.get(fb_field)
         if fb is not None:
             if not isinstance(fb, list):
@@ -2370,8 +2368,6 @@ def migrate_config_models(config):
     }]
     config.setdefault("channel_routes", {})
     config.setdefault("channel_verbosity", {})
-    config.setdefault("memory_idle_minutes", 10)
-    config.setdefault("memory_writer_enabled", True)
     return config
 
 
@@ -3771,7 +3767,7 @@ def update_job(job_id, updates):
         for key, val in updates.items():
             if key in allowed:
                 job[key] = val
-        # re-enabling an escalated job resets auto-fix state and circuit breaker
+        # re-enabling an escalated job resets failure state
         if updates.get("enabled") is True and job.get("human_attention_required"):
             job["human_attention_required"] = False
             job["failure_count"] = 0
@@ -4210,12 +4206,9 @@ def get_schedule_context(hours=24):
             name = j.get("name", j.get("id", "?"))
             fc = j.get("failure_count", 0)
             tf = j.get("total_failures", 0)
-            fix_attempts = j.get("auto_fix_attempts", 0)
             last_out = j.get("last_output", "")[:200]
             status_str = "NEEDS HUMAN" if j.get("human_attention_required") else f"failing ({fc} consecutive, {tf} total)"
             line = f"  - {name}: {status_str}"
-            if fix_attempts > 0:
-                line += f", {fix_attempts} auto-fix attempt(s)"
             if last_out:
                 line += f"\n    last error: {last_out}"
             lines.append(line)
@@ -7017,441 +7010,6 @@ def _create_goose_session():
         return None
 
 
-# ── memory writer (end-of-session learning) ──────────────────────────────────
-# Tracks last message time per chat. After N minutes of idle, fetches the
-# conversation and sends it through goose for memory extraction.
-
-_memory_last_activity = {}        # chat_id (str) -> timestamp (float)
-_memory_last_activity_lock = threading.Lock()
-_memory_processed_sessions = set()  # session_ids already processed
-_memory_writer_running = False
-
-# ── mem0 integration (Phase 23) ──────────────────────────────────────────────
-
-MEM0_USER_ID = os.environ.get("MEM0_USER_ID", "default")
-
-_mem0_instance = None
-_mem0_init_lock = threading.Lock()
-
-
-def _get_mem0():
-    """Lazy-load mem0 Memory instance. Thread-safe via double-checked locking."""
-    global _mem0_instance
-    if _mem0_instance is not None:
-        return _mem0_instance
-    with _mem0_init_lock:
-        if _mem0_instance is not None:
-            return _mem0_instance
-        try:
-            os.environ["MEM0_TELEMETRY"] = "false"
-            from mem0 import Memory
-            from mem0_config import build_mem0_config
-            config = build_mem0_config()
-            _mem0_instance = Memory.from_config(config)
-            _memory_log.info("mem0 initialized")
-        except Exception as e:
-            _memory_log.error(f"mem0 init failed: {e}")
-        return _mem0_instance
-
-
-def _convert_to_mem0_messages(gateway_messages):
-    """Convert gateway message format to mem0 format.
-    Gateway: [{"role": "user", "text": "hello"}]
-    mem0:    [{"role": "user", "content": "hello"}]
-    """
-    mem0_messages = []
-    for msg in gateway_messages:
-        role = msg.get("role", "user")
-        text = msg.get("text", "")
-        if text.strip():
-            if role not in ("user", "assistant", "system"):
-                role = "user"
-            mem0_messages.append({"role": role, "content": text[:2000]})
-    return mem0_messages
-
-
-def _mem0_add_knowledge(messages, user_id="default"):
-    """Send conversation to mem0 for knowledge extraction. Blocking call."""
-    m = _get_mem0()
-    if m is None:
-        _memory_log.error("mem0 not available, skipping knowledge extraction")
-        return
-    mem0_messages = _convert_to_mem0_messages(messages)
-    if not mem0_messages:
-        return
-    result = m.add(messages=mem0_messages, user_id=user_id)
-    _memory_log.info(f"mem0.add result: {result}")
-    return result
-
-
-_mem0_executor = None
-
-
-def _get_mem0_executor():
-    global _mem0_executor
-    if _mem0_executor is None:
-        from concurrent.futures import ThreadPoolExecutor
-        _mem0_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mem0-add")
-    return _mem0_executor
-
-
-def _reinit_mem0_with_provider(provider, model):
-    """Reinitialize the mem0 singleton with a fallback provider. Thread-safe."""
-    global _mem0_instance
-    try:
-        from mem0 import Memory
-        from mem0_config import build_mem0_config_for_provider
-        config = build_mem0_config_for_provider(provider, model)
-        if config is None:
-            _memory_log.warning(f"mem0 fallback: no config for {provider}/{model}")
-            return False
-        with _mem0_init_lock:
-            _mem0_instance = Memory.from_config(config)
-        _memory_log.info(f"mem0 reinitialized with fallback {provider}/{model}")
-        return True
-    except Exception as e:
-        _memory_log.error(f"mem0 fallback reinit failed: {e}")
-        return False
-
-
-def _mem0_add_with_timeout(messages, user_id="default", timeout=60):
-    """Run mem0.add() in a thread pool with timeout, with fallback chain."""
-    from concurrent.futures import TimeoutError as FuturesTimeoutError
-    executor = _get_mem0_executor()
-
-    # Try primary
-    future = executor.submit(_mem0_add_knowledge, messages, user_id)
-    try:
-        result = future.result(timeout=timeout)
-        if result is not None:
-            return result
-    except FuturesTimeoutError:
-        _memory_log.error(f"mem0.add timed out after {timeout}s")
-    except Exception as e:
-        _memory_log.error(f"mem0.add failed: {e}")
-
-    # Primary failed, try fallback providers
-    setup = load_setup()
-    fallbacks = (setup or {}).get("mem0_fallback_providers", [])
-    if not fallbacks:
-        return None
-
-    for fb in fallbacks:
-        provider = fb.get("provider", "")
-        model = fb.get("model", "")
-        if not provider or not model:
-            continue
-
-        _memory_log.info(f"mem0 fallback: trying {provider}/{model}")
-        if not _reinit_mem0_with_provider(provider, model):
-            continue
-
-        future = executor.submit(_mem0_add_knowledge, messages, user_id)
-        try:
-            result = future.result(timeout=timeout)
-            if result is not None:
-                _memory_log.info(f"mem0 fallback succeeded with {provider}/{model}")
-                # Reset to primary on next call by clearing singleton
-                # (lazy reinit will rebuild with primary config)
-                with _mem0_init_lock:
-                    _mem0_instance = None
-                return result
-        except FuturesTimeoutError:
-            _memory_log.error(f"mem0 fallback {provider}/{model} timed out")
-        except Exception as e:
-            _memory_log.error(f"mem0 fallback {provider}/{model} failed: {e}")
-
-    # All fallbacks exhausted, reset to primary config
-    with _mem0_init_lock:
-        _mem0_instance = None
-    return None
-
-
-# ── memory extraction prompts ────────────────────────────────────────────────
-
-IDENTITY_EXTRACT_PROMPT = """You are analyzing a conversation to extract IDENTITY traits about the user.
-
-ONLY extract traits that are stable for 6+ months:
-- Name, role, relationships, people they mention regularly
-- Communication style, personality traits
-- Core preferences (tools, formats, habits)
-- How they think, what they care about
-
-DO NOT extract:
-- Projects, deadlines, current work (those go to long-term memory separately)
-- Integrations, services, technical facts
-- Anything temporal or likely to change within months
-
-Output a JSON object:
-{
-  "identity": ["trait1", "trait2"]
-}
-
-If there's nothing meaningful to extract, output: {"empty": true}
-
-CONVERSATION:
-"""
-
-def _memory_touch(chat_id):
-    """Record activity timestamp for a chat."""
-    with _memory_last_activity_lock:
-        _memory_last_activity[str(chat_id)] = time.time()
-
-
-def _memory_writer_loop():
-    """Background loop: check for idle sessions and extract memories."""
-    global _memory_writer_running
-    _memory_writer_running = True
-    _memory_log.info("started")
-
-    while True:
-        try:
-            time.sleep(60)  # check every minute
-
-            setup = load_setup()
-            if not setup:
-                continue
-            if not setup.get("memory_writer_enabled", True):
-                continue
-            idle_minutes = setup.get("memory_idle_minutes", 10)
-            idle_threshold = idle_minutes * 60
-
-            # find idle chats
-            now = time.time()
-            idle_chats = []
-            with _memory_last_activity_lock:
-                for chat_id, last_time in list(_memory_last_activity.items()):
-                    if now - last_time >= idle_threshold:
-                        idle_chats.append(chat_id)
-
-            for chat_id in idle_chats:
-                # get session for this chat
-                sid = _session_manager.get("telegram", chat_id)
-                if not sid or sid in _memory_processed_sessions:
-                    # already processed or no session, clear activity tracker
-                    with _memory_last_activity_lock:
-                        _memory_last_activity.pop(chat_id, None)
-                    continue
-
-                # mark as processed before starting (avoid duplicate runs)
-                _memory_processed_sessions.add(sid)
-                with _memory_last_activity_lock:
-                    _memory_last_activity.pop(chat_id, None)
-
-                # fetch conversation
-                messages = _fetch_session_messages(sid)
-                if not messages or len(messages) < 2:
-                    continue
-
-                _memory_log.info(f"extracting from session {sid} ({len(messages)} msgs)")
-
-                # ── knowledge extraction via mem0.add() (async with timeout) ──
-                _mem0_add_with_timeout(messages[-40:], user_id=MEM0_USER_ID, timeout=60)
-
-                # ── identity extraction via goosed (simplified prompt) ──
-                convo_text = ""
-                for msg in messages[-40:]:  # last 40 messages max
-                    role = msg.get("role", "unknown")
-                    text = msg.get("text", "")[:500]
-                    convo_text += f"[{role}]: {text}\n\n"
-
-                if len(convo_text.strip()) >= 50:
-                    try:
-                        extract_sid = _create_goose_session()
-                        if extract_sid:
-                            prompt = IDENTITY_EXTRACT_PROMPT + convo_text
-                            response, error, _media = _do_rest_relay(prompt, extract_sid)
-                            if not error:
-                                _process_identity_extraction(response)
-                    except Exception as e:
-                        _memory_log.error(f"identity extraction error: {e}")
-
-                _memory_log.info(f"done for session {sid}")
-
-        except Exception as e:
-            _memory_log.error(f"loop error: {e}")
-
-
-
-def _fact_already_exists(fact, file_content):
-    """Check if a fact already exists in file content (simple lowercase substring)."""
-    if not file_content:
-        return False
-    return fact.lower() in file_content.lower()
-
-
-def _append_to_section(content, section_header, additions, timestamp):
-    """Append additions text right after a section header in content."""
-    if section_header in content:
-        content = content.replace(
-            section_header,
-            f"{section_header}\n\n<!-- auto-extracted {timestamp} -->\n{additions}\n"
-        )
-    return content
-
-
-def _classify_identity_section(fact):
-    """Classify an identity trait into the correct user.md section.
-
-    Uses word-boundary matching against the user.schema.md section definitions.
-    Returns the section header string (e.g. "## People").
-    """
-    lower = fact.lower()
-
-    def _has_word(keywords):
-        for kw in keywords:
-            if re.search(r'\b' + re.escape(kw) + r'\b', lower):
-                return True
-        return False
-
-    # people/contacts/relationships
-    if _has_word(["cofounder", "co-founder", "manager", "colleague", "friend",
-                  "wife", "husband", "partner", "brother", "sister", "boss",
-                  "contact", "relationship", "mentor", "teammate"]):
-        return "## People"
-
-    # basics (name, role, timezone, pronouns)
-    if _has_word(["name is", "named", "goes by", "timezone", "pronouns",
-                  "lives in", "based in", "located in"]):
-        return "## Basics"
-
-    # communication preferences
-    if _has_word(["response style", "verbosity", "tone", "brief", "concise",
-                  "detailed", "format", "bullet", "numbered"]):
-        return "## Communication Preferences"
-
-    # interests & personal
-    if _has_word(["hobby", "hobbies", "interest", "interested", "personal",
-                  "side project", "passion", "curious"]):
-        return "## Interests & Context"
-
-    # observed preferences (tools, formats, domain-specific)
-    if _has_word(["prefer", "prefers", "like", "likes", "want", "wants",
-                  "always use", "always uses", "rather", "favorite", "favourite"]):
-        return "## Preferences (Observed)"
-
-    # patterns & habits
-    if _has_word(["usually", "tends to", "always", "habit", "pattern",
-                  "routine", "workflow"]):
-        return "## Patterns & Habits"
-
-    # default: Important Context (catch-all)
-    return "## Important Context"
-
-
-def _extract_json_from_response(text):
-    """Extract the first valid JSON object from LLM response text.
-
-    Tries progressively simpler strategies:
-    1. Find outermost braces and parse (handles nested objects)
-    2. Find simple non-nested JSON (fallback)
-
-    Returns parsed dict or None.
-    """
-    # strategy 1: find balanced braces from first { to matching }
-    start = text.find('{')
-    if start == -1:
-        return None
-
-    depth = 0
-    in_string = False
-    escape_next = False
-    for i in range(start, len(text)):
-        ch = text[i]
-        if escape_next:
-            escape_next = False
-            continue
-        if ch == '\\' and in_string:
-            escape_next = True
-            continue
-        if ch == '"' and not escape_next:
-            in_string = not in_string
-            continue
-        if in_string:
-            continue
-        if ch == '{':
-            depth += 1
-        elif ch == '}':
-            depth -= 1
-            if depth == 0:
-                candidate = text[start:i + 1]
-                try:
-                    return json.loads(candidate)
-                except (json.JSONDecodeError, ValueError):
-                    break
-
-    # strategy 2: greedy regex fallback (old behavior)
-    json_match = re.search(r'\{[^{}]*\}', text, re.DOTALL)
-    if json_match:
-        try:
-            return json.loads(json_match.group())
-        except (json.JSONDecodeError, ValueError):
-            pass
-
-    return None
-
-
-def _process_identity_extraction(response_text):
-    """Parse identity-only extraction response, route traits to user.md.
-
-    Only handles identity items. Knowledge extraction is handled by mem0.add() separately.
-    """
-    data = _extract_json_from_response(response_text)
-    if data is None:
-        _memory_log.info("no valid JSON found in identity response")
-        return
-
-    if data.get("empty"):
-        _memory_log.info("no identity traits to extract")
-        return
-
-    identity_dir = os.path.join(DATA_DIR, "identity")
-    timestamp = time.strftime("%Y-%m-%d %H:%M")
-
-    identity_items = data.get("identity", [])
-    if not identity_items:
-        return
-
-    user_file = os.path.join(identity_dir, "user.md")
-    if not os.path.exists(user_file):
-        _memory_log.info("user.md not found, skipping identity writes")
-        return
-
-    with open(user_file, "r") as f:
-        content = f.read()
-
-    by_section = {}
-    for item in identity_items:
-        if not isinstance(item, str) or not item.strip():
-            continue
-        if _fact_already_exists(item, content):
-            _memory_log.info(f"skipping duplicate identity: {item}")
-            continue
-        section = _classify_identity_section(item)
-        by_section.setdefault(section, []).append(item)
-
-    added = 0
-    for section_header, items in by_section.items():
-        additions = "\n".join(f"- {item}" for item in items)
-        if section_header in content:
-            content = _append_to_section(content, section_header, additions, timestamp)
-        else:
-            content += f"\n\n{section_header}\n\n<!-- auto-extracted {timestamp} -->\n{additions}\n"
-        added += len(items)
-
-    if added > 0:
-        with open(user_file, "w") as f:
-            f.write(content)
-        _memory_log.info(f"added {added} identity traits to user.md")
-
-
-def start_memory_writer():
-    """Start the memory writer background thread."""
-    global _memory_writer_running
-    if _memory_writer_running:
-        return
-    threading.Thread(target=_memory_writer_loop, daemon=True).start()
-
 
 # ── telegram bot API helpers ────────────────────────────────────────────────
 
@@ -8160,7 +7718,6 @@ def _flush_media_group(group_id, bot_token):
         return
 
     def _do_group_relay(_text=text, _chat_id=chat_id, _bt=bot_token, _refs=refs, _reply_text=_reply_text):
-        _memory_touch(_chat_id)
         _pending_greet = _legacy_greeting_events.get(str(_chat_id))
         if _pending_greet:
             _pending_greet.wait(timeout=30)
@@ -8356,7 +7913,6 @@ def _telegram_poll_loop(bot_token):
                     paired_ids = get_paired_chat_ids()
                     if chat_id in paired_ids:
                         def _do_media_relay(_text="", _chat_id=chat_id, _bt=bot_token, _refs=media_refs, _reply_text=_reply_to_text):
-                            _memory_touch(_chat_id)
                             # Change 5: wait for pending greeting before acquiring lock
                             _pending_greet = _legacy_greeting_events.get(str(_chat_id))
                             if _pending_greet:
@@ -8469,7 +8025,6 @@ def _telegram_poll_loop(bot_token):
                     # threaded so the poll loop stays responsive for /stop commands.
                     # per-chat lock prevents concurrent relays per user.
                     def _do_relay(_text=text, _chat_id=chat_id, _bt=bot_token, _media_refs=media_refs, _reply_text=_reply_to_text):
-                        _memory_touch(_chat_id)
                         # Change 5: wait for pending greeting before acquiring lock
                         _pending_greet = _legacy_greeting_events.get(str(_chat_id))
                         if _pending_greet:
@@ -9280,18 +8835,10 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                 self.handle_run_job(job_id)
             else:
                 self.proxy_to_goose()
-        elif path.startswith("/api/jobs/") and path.endswith("/diagnose"):
-            job_id = path[len("/api/jobs/"):-len("/diagnose")]
-            if job_id:
-                self.handle_diagnose_job(job_id)
-            else:
-                self.send_json(400, {"error": "missing job id"})
         elif path in ("/api/channels/reload", "/api/plugins/reload"):
             self.handle_reload_channels()
         elif path in ("/api/setup/channels/verbosity", "/api/setup/plugins/verbosity"):
             self.handle_set_verbosity()
-        elif path == "/api/setup/agent-config":
-            self.handle_agent_config()
         elif path == "/api/bots":
             self.handle_add_bot()
         elif path == "/api/watchers/batch":
@@ -9783,7 +9330,6 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                 start_session_watcher()
                 start_job_engine()
                 start_cron_scheduler()
-                start_memory_writer()
                 _load_watchers()
                 start_watcher_engine()
             threading.Thread(target=_restart, daemon=True).start()
@@ -9864,7 +9410,6 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             start_session_watcher()
             start_job_engine()
             start_cron_scheduler()
-            start_memory_writer()
             _load_watchers()
             start_watcher_engine()
         threading.Thread(target=_restart, daemon=True).start()
@@ -10107,41 +9652,6 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(200, {"success": True, "channel_verbosity": clean})
         except Exception as e:
             _gateway_log.error(f"(handle_set_verbosity): {e}")
-            self.send_json(500, {"error": "Internal server error."})
-
-    def handle_agent_config(self):
-        """POST /api/setup/agent-config — set memory idle minutes and other agent settings."""
-        if not self._check_rate_limit(auth_limiter):
-            return
-        if not check_auth(self):
-            self.send_response(401); self.end_headers(); return
-        body = self._read_body()
-        if body is None:
-            return  # 413 already sent
-        try:
-            data = json.loads(body)
-            setup = load_setup()
-            if not setup:
-                self.send_json(400, {"error": "not configured yet"}); return
-
-            changed = {}
-            if "memory_idle_minutes" in data:
-                val = int(data["memory_idle_minutes"])
-                if val < 1 or val > 120:
-                    self.send_json(400, {"error": "memory_idle_minutes must be 1-120"}); return
-                setup["memory_idle_minutes"] = val
-                changed["memory_idle_minutes"] = val
-            if "memory_writer_enabled" in data:
-                val = bool(data["memory_writer_enabled"])
-                setup["memory_writer_enabled"] = val
-                changed["memory_writer_enabled"] = val
-
-            save_setup(setup)
-            self.send_json(200, {"success": True, **changed})
-        except (ValueError, TypeError) as e:
-            self.send_json(400, {"error": str(e)})
-        except Exception as e:
-            _gateway_log.error(f"(handle_agent_config): {e}")
             self.send_json(500, {"error": "Internal server error."})
 
     # ── notify endpoints ──
@@ -10794,55 +10304,6 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
 
         self.send_json(202, {"started": True, "job_id": job_id})
 
-    def handle_diagnose_job(self, job_id):
-        """POST /api/jobs/<id>/diagnose — spawn goosed session to diagnose job failure."""
-        if not self._check_rate_limit(api_limiter):
-            return
-        if not self._check_local_or_auth():
-            return
-
-        with _jobs_lock:
-            job = next((j for j in _jobs if j["id"] == job_id), None)
-
-        if not job:
-            self.send_json(404, {"error": "job not found"})
-            return
-
-        # build diagnostic prompt
-        name = job.get("name", "unknown")
-        cmd = job.get("command", job.get("text", "unknown"))
-        status = job.get("last_status", "unknown")
-        output = job.get("last_output", "no output recorded")
-        last_run = job.get("last_run", "never")
-
-        prompt = (
-            f"A scheduled job failed. Diagnose the root cause and suggest a fix.\n\n"
-            f"Job: {name}\n"
-            f"Command: {cmd}\n"
-            f"Last status: {status}\n"
-            f"Last run: {last_run}\n"
-            f"Output/error:\n{output}\n\n"
-            f"Steps:\n"
-            f"1. Read the script/command if it's a file path\n"
-            f"2. Check for missing dependencies, bad paths, permission issues\n"
-            f"3. Identify the root cause\n"
-            f"4. Fix the issue if possible (edit the script, install missing package, etc)\n"
-            f"5. Summarize what was wrong and what you fixed in 2-3 sentences"
-        )
-
-        try:
-            sid = _create_goose_session()
-            if not sid:
-                self.send_json(500, {"error": "could not create goosed session"})
-                return
-            text, err, _media = _do_rest_relay(prompt, sid)
-            if err:
-                self.send_json(200, {"diagnosis": err, "job_id": job_id})
-            else:
-                self.send_json(200, {"diagnosis": text or "no diagnosis returned", "job_id": job_id})
-        except Exception as e:
-            self.send_json(500, {"error": f"diagnosis failed: {e}"})
-
     def handle_update_job(self, job_id):
         """PUT /api/jobs/<id> — update job fields."""
         if not self._check_rate_limit(api_limiter):
@@ -11260,9 +10721,6 @@ def main():
 
         # start cron scheduler (reads goose schedule.json, fires jobs via goosed)
         start_cron_scheduler()
-
-        # start memory writer (end-of-session learning)
-        start_memory_writer()
 
         # load watchers and start watcher engine
         _load_watchers()

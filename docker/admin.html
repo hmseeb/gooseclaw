@@ -478,60 +478,6 @@ tr:hover td { background: rgba(124, 58, 237, 0.02); }
 .confirm-actions .confirm-delete { background: var(--error-bg); color: var(--error); border-color: var(--error-border); }
 .confirm-actions .confirm-delete:hover { background: rgba(248,113,113,0.15); }
 
-/* autofix panel */
-.autofix-row td { padding: 0 !important; }
-.autofix-panel {
-  background: var(--bg-surface);
-  border-top: 1px solid var(--border-subtle);
-  padding: 14px 16px;
-}
-.autofix-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 10px;
-  font-size: 12px;
-  color: var(--text-tertiary);
-}
-.autofix-header .autofix-icon { color: var(--warning); }
-.autofix-output {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 11px;
-  line-height: 1.6;
-  color: var(--text-secondary);
-  background: var(--bg-deep);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  padding: 12px;
-  max-height: 200px;
-  overflow-y: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-.autofix-output.loading { color: var(--text-tertiary); }
-.autofix-output.loading::after {
-  content: '';
-  display: inline-block;
-  animation: dots 1.4s steps(3) infinite;
-}
-@keyframes dots {
-  0% { content: ''; }
-  33% { content: '.'; }
-  66% { content: '..'; }
-  100% { content: '...'; }
-}
-.autofix-elapsed {
-  font-size: 10px;
-  color: var(--text-tertiary);
-  margin-left: auto;
-  font-family: 'JetBrains Mono', monospace;
-}
-.action-btn.autofix { display: none; }
-.action-btn.autofix:hover {
-  border-color: var(--warning-border);
-  color: var(--warning);
-  background: var(--warning-bg);
-}
 
 .empty-state {
   padding: 36px;
@@ -1413,22 +1359,10 @@ function renderJobsTable(jobs, wrap) {
       + (tipHtml ? '<div class="status-tip">' + tipHtml + '</div>' : '')
       + '</span></td>'
       + '<td class="actions">'
-      + (isError ? '<button class="action-btn autofix" style="display:inline-block" onclick="autofixJob(\'' + j.id + '\')" title="diagnose and fix">autofix</button>' : '')
       + '<button class="action-btn" onclick="editJob(\'' + j.id + '\')" title="edit">edit</button>'
       + '<button class="action-btn trigger" onclick="triggerJob(\'' + j.id + '\')" title="run now">run</button>'
       + '<button class="action-btn danger" onclick="confirmDeleteJob(\'' + j.id + '\', \'' + escAttr(j.name) + '\')" title="delete">del</button>'
       + '</td></tr>';
-
-    // autofix panel (shown when diagnosing)
-    if (_autofixJobId === j.id) {
-      html += '<tr class="autofix-row"><td colspan="6"><div class="autofix-panel">'
-        + '<div class="autofix-header"><span class="autofix-icon">&#9889;</span> diagnosing <strong>' + escHtml(j.name) + '</strong>'
-        + (_autofixLoading ? '<span class="autofix-elapsed" id="autofix-timer"></span>' : '')
-        + '</div>'
-        + '<div class="autofix-output' + (_autofixLoading ? ' loading' : '') + '" id="autofix-output">'
-        + (_autofixLoading ? _autofixStatusMsg : escHtml(_autofixResult))
-        + '</div></div></td></tr>';
-    }
 
     // inline edit row (hidden by default, toggled by editJob)
     if (editingJobId === j.id) {
@@ -1529,56 +1463,6 @@ function confirmDeleteJob(id, name) {
 }
 function closeConfirm() {
   document.getElementById('confirm-overlay').classList.remove('open');
-}
-
-// ── autofix ──
-let _autofixJobId = null;
-let _autofixLoading = false;
-let _autofixResult = '';
-let _autofixStatusMsg = 'creating diagnostic session';
-let _autofixTimer = null;
-let _autofixStart = 0;
-
-async function autofixJob(id) {
-  if (_autofixJobId === id) {
-    _autofixJobId = null;
-    if (_autofixTimer) { clearInterval(_autofixTimer); _autofixTimer = null; }
-    refreshJobsUI();
-    return;
-  }
-  _autofixJobId = id;
-  _autofixLoading = true;
-  _autofixResult = '';
-  _autofixStatusMsg = 'creating diagnostic session';
-  _autofixStart = Date.now();
-  refreshJobsUI();
-
-  // progress timer
-  _autofixTimer = setInterval(() => {
-    const elapsed = Math.floor((Date.now() - _autofixStart) / 1000);
-    const el = document.getElementById('autofix-timer');
-    if (el) el.textContent = elapsed + 's';
-    // update status message based on elapsed time
-    const out = document.getElementById('autofix-output');
-    if (out && _autofixLoading) {
-      if (elapsed < 5) _autofixStatusMsg = 'creating diagnostic session';
-      else if (elapsed < 15) _autofixStatusMsg = 'loading MCP extensions';
-      else if (elapsed < 30) _autofixStatusMsg = 'reading script and analyzing error';
-      else if (elapsed < 60) _autofixStatusMsg = 'investigating root cause';
-      else _autofixStatusMsg = 'still working, LLM is generating fix';
-      out.textContent = _autofixStatusMsg;
-    }
-  }, 1000);
-
-  try {
-    const data = await api('/api/jobs/' + id + '/diagnose', { method: 'POST' });
-    _autofixResult = data.diagnosis || data.error || 'no response';
-  } catch (e) {
-    _autofixResult = 'request failed: ' + e.message;
-  }
-  _autofixLoading = false;
-  if (_autofixTimer) { clearInterval(_autofixTimer); _autofixTimer = null; }
-  refreshJobsUI();
 }
 
 async function triggerJob(id) {

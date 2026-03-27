@@ -4,11 +4,8 @@ Covers:
   - _edit_telegram_message: "not modified" error handling
   - _resolve_job_model: custom prefix, config lookup, fallback
   - _run_script: provider/model injection into goose commands
-  - _memory_touch: activity tracking
-  - _memory_writer_loop: idle detection, session dedup
   - create_job: model+provider fields, validation
   - migrate_config_models: defaults, ID generation
-  - _process_identity_extraction: JSON parsing, identity->user.md routing
 """
 
 import json
@@ -127,28 +124,11 @@ class TestMigrateConfigModels(unittest.TestCase):
         result = gateway.migrate_config_models(config)
         assert result["models"][0]["model"] == "gpt-4o"
 
-    def test_memory_defaults_added(self):
-        config = {"provider_type": "anthropic", "model": "test"}
-        result = gateway.migrate_config_models(config)
-        assert result["memory_idle_minutes"] == 10
-        assert result["memory_writer_enabled"] is False
-
     def test_channel_route_defaults_added(self):
         config = {"provider_type": "anthropic", "model": "test"}
         result = gateway.migrate_config_models(config)
         assert result["channel_routes"] == {}
         assert result["channel_verbosity"] == {}
-
-    def test_existing_memory_settings_not_overwritten(self):
-        config = {
-            "provider_type": "anthropic",
-            "model": "test",
-            "memory_idle_minutes": 30,
-            "memory_writer_enabled": False,
-        }
-        result = gateway.migrate_config_models(config)
-        assert result["memory_idle_minutes"] == 30
-        assert result["memory_writer_enabled"] is False
 
 
 # ── create_job ──────────────────────────────────────────────────────────────
@@ -438,677 +418,6 @@ class TestEditTelegramMessage(unittest.TestCase):
         result = gateway._edit_telegram_message("token", "123", "456", "hi")
         assert result is False
 
-
-# ── _memory_touch ───────────────────────────────────────────────────────────
-
-class TestMemoryTouch(unittest.TestCase):
-    """Tests for _memory_touch() activity tracking."""
-
-    def setUp(self):
-        with gateway._memory_last_activity_lock:
-            gateway._memory_last_activity.clear()
-
-    def tearDown(self):
-        with gateway._memory_last_activity_lock:
-            gateway._memory_last_activity.clear()
-
-    def test_records_timestamp(self):
-        before = time.time()
-        gateway._memory_touch("chat_123")
-        after = time.time()
-        ts = gateway._memory_last_activity["chat_123"]
-        assert before <= ts <= after
-
-    def test_converts_to_string(self):
-        gateway._memory_touch(12345)
-        assert "12345" in gateway._memory_last_activity
-
-    def test_updates_on_repeat(self):
-        gateway._memory_touch("chat_1")
-        first = gateway._memory_last_activity["chat_1"]
-        time.sleep(0.01)
-        gateway._memory_touch("chat_1")
-        second = gateway._memory_last_activity["chat_1"]
-        assert second > first
-
-    def test_thread_safety(self):
-        """Multiple threads can touch without errors."""
-        errors = []
-        def touch_many(prefix):
-            try:
-                for i in range(50):
-                    gateway._memory_touch(f"{prefix}_{i}")
-            except Exception as e:
-                errors.append(e)
-        threads = [threading.Thread(target=touch_many, args=(f"t{t}",)) for t in range(4)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-        assert len(errors) == 0
-        assert len(gateway._memory_last_activity) == 200
-
-
-# ── _extract_json_from_response ──────────────────────────────────────────────
-
-class TestExtractJsonFromResponse(unittest.TestCase):
-    """Tests for _extract_json_from_response() balanced brace parser."""
-
-    def test_simple_json(self):
-        result = gateway._extract_json_from_response('{"empty": true}')
-        assert result == {"empty": True}
-
-    def test_nested_json(self):
-        text = 'Here is the result: {"identity": ["a"], "knowledge": [{"key": "x", "content": "y"}]}'
-        result = gateway._extract_json_from_response(text)
-        assert result["identity"] == ["a"]
-        assert result["knowledge"][0]["key"] == "x"
-
-    def test_json_with_trailing_text(self):
-        text = '{"identity": ["a"]} some trailing text and {"other": "json"}'
-        result = gateway._extract_json_from_response(text)
-        assert result == {"identity": ["a"]}
-
-    def test_no_json(self):
-        assert gateway._extract_json_from_response("no json here") is None
-
-    def test_broken_json(self):
-        assert gateway._extract_json_from_response("{broken json!!!") is None
-
-    def test_json_with_escaped_quotes(self):
-        text = '{"identity": ["he said \\"hello\\""]}'
-        result = gateway._extract_json_from_response(text)
-        assert result is not None
-        assert 'hello' in result["identity"][0]
-
-    def test_json_surrounded_by_markdown(self):
-        text = "Here's what I found:\n```json\n{\"empty\": true}\n```\nDone."
-        result = gateway._extract_json_from_response(text)
-        assert result == {"empty": True}
-
-
-# ── _classify_identity_section ────────────────────────────────────────────
-
-class TestClassifyIdentitySection(unittest.TestCase):
-    """Tests for _classify_identity_section() routing to user.md sections."""
-
-    def test_people_keywords(self):
-        assert gateway._classify_identity_section("Sarah is his cofounder") == "## People"
-        assert gateway._classify_identity_section("his wife Amy handles finances") == "## People"
-        assert gateway._classify_identity_section("relationship with manager is tense") == "## People"
-
-    def test_basics_keywords(self):
-        assert gateway._classify_identity_section("name is Haseeb") == "## Basics"
-        assert gateway._classify_identity_section("based in Islamabad") == "## Basics"
-        assert gateway._classify_identity_section("timezone is PKT") == "## Basics"
-
-    def test_communication_keywords(self):
-        assert gateway._classify_identity_section("prefers concise response style") == "## Communication Preferences"
-        assert gateway._classify_identity_section("hates verbose format") == "## Communication Preferences"
-
-    def test_interests_keywords(self):
-        assert gateway._classify_identity_section("hobby is woodworking") == "## Interests & Context"
-        assert gateway._classify_identity_section("interested in machine learning") == "## Interests & Context"
-
-    def test_preferences_keywords(self):
-        assert gateway._classify_identity_section("prefers dark mode") == "## Preferences (Observed)"
-        assert gateway._classify_identity_section("likes using vim") == "## Preferences (Observed)"
-        assert gateway._classify_identity_section("always uses bun over npm") == "## Preferences (Observed)"
-
-    def test_patterns_keywords(self):
-        assert gateway._classify_identity_section("usually works late at night") == "## Patterns & Habits"
-        assert gateway._classify_identity_section("tends to ask short questions") == "## Patterns & Habits"
-
-    def test_default_fallback(self):
-        assert gateway._classify_identity_section("has a cat") == "## Important Context"
-        assert gateway._classify_identity_section("random trait") == "## Important Context"
-
-
-# ── _process_identity_extraction (formerly _process_memory_extraction) ────────
-
-class TestProcessMemoryExtraction(unittest.TestCase):
-    """Tests for _process_identity_extraction() JSON parsing and identity routing."""
-
-    def _make_user_md(self, tmpdir, content=None):
-        """Helper: create a user.md with standard sections."""
-        identity_dir = os.path.join(tmpdir, "identity")
-        os.makedirs(identity_dir, exist_ok=True)
-        user_file = os.path.join(identity_dir, "user.md")
-        if content is None:
-            content = (
-                "# User\n"
-                "## Basics\n\n"
-                "## Work Context\n\n"
-                "## Communication Preferences\n\n"
-                "## Interests & Context\n\n"
-                "## People\n\n"
-                "## Patterns & Habits\n\n"
-                "## Preferences (Observed)\n\n"
-                "## Important Context\n\n"
-            )
-        with open(user_file, "w") as f:
-            f.write(content)
-        return user_file
-
-    def test_no_json_in_response(self):
-        gateway._process_identity_extraction("no json here at all")
-
-    def test_empty_extraction(self):
-        gateway._process_identity_extraction('{"empty": true}')
-
-    def test_invalid_json(self):
-        gateway._process_identity_extraction("{broken json")
-
-    def test_identity_routes_to_correct_sections(self):
-        """Identity traits should route to their matching user.md sections."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            user_file = self._make_user_md(tmpdir)
-            with patch.object(gateway, "DATA_DIR", tmpdir):
-                response = json.dumps({
-                    "identity": [
-                        "name is Haseeb",           # -> Basics
-                        "Sarah is his cofounder",    # -> People
-                        "prefers dark mode",         # -> Preferences (Observed)
-                    ]
-                })
-                gateway._process_identity_extraction(response)
-
-            with open(user_file) as f:
-                content = f.read()
-
-            # verify each fact landed in the right section
-            basics_idx = content.index("## Basics")
-            work_idx = content.index("## Work Context")
-            people_idx = content.index("## People")
-            patterns_idx = content.index("## Patterns & Habits")
-            pref_idx = content.index("## Preferences (Observed)")
-            important_idx = content.index("## Important Context")
-
-            name_idx = content.index("name is Haseeb")
-            assert basics_idx < name_idx < work_idx, "name should be in Basics"
-
-            sarah_idx = content.index("Sarah is his cofounder")
-            assert people_idx < sarah_idx < patterns_idx, "people fact should be in People"
-
-            dark_idx = content.index("prefers dark mode")
-            assert pref_idx < dark_idx < important_idx, "preference should be in Preferences"
-
-    def test_identity_dedup_skips_existing(self):
-        """Identity traits already in user.md should not be duplicated."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            user_file = self._make_user_md(tmpdir, content=(
-                "# User\n"
-                "## Preferences (Observed)\n\n"
-                "- prefers dark mode\n\n"
-                "## Important Context\n\n"
-            ))
-            with patch.object(gateway, "DATA_DIR", tmpdir):
-                response = json.dumps({"identity": ["prefers dark mode"]})
-                gateway._process_identity_extraction(response)
-
-            with open(user_file) as f:
-                content = f.read()
-            count = content.lower().count("prefers dark mode")
-            assert count == 1, f"Expected 1 occurrence, found {count}"
-
-    def test_identity_skips_non_string_items(self):
-        """Non-string identity items should be silently skipped."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            user_file = self._make_user_md(tmpdir)
-            with patch.object(gateway, "DATA_DIR", tmpdir):
-                response = json.dumps({
-                    "identity": [42, None, "", "valid trait", {"not": "a string"}]
-                })
-                gateway._process_identity_extraction(response)
-
-            with open(user_file) as f:
-                content = f.read()
-            assert "valid trait" in content
-            assert "42" not in content
-
-    def test_identity_no_user_md_no_crash(self):
-        """If user.md doesn't exist, identity extraction should not crash."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            os.makedirs(os.path.join(tmpdir, "identity"))
-            # no user.md created
-            with patch.object(gateway, "DATA_DIR", tmpdir):
-                response = json.dumps({"identity": ["some trait"]})
-                gateway._process_identity_extraction(response)  # should not raise
-
-
-
-# ── mem0 integration tests (Phase 23) ──────────────────────────────────────
-
-class TestConvertToMem0Messages(unittest.TestCase):
-    """Tests for _convert_to_mem0_messages() format conversion."""
-
-    def test_basic_conversion(self):
-        """Gateway format [role/text] converts to mem0 format [role/content]."""
-        messages = [
-            {"role": "user", "text": "hello"},
-            {"role": "assistant", "text": "hi there"},
-        ]
-        result = gateway._convert_to_mem0_messages(messages)
-        assert len(result) == 2
-        assert result[0] == {"role": "user", "content": "hello"}
-        assert result[1] == {"role": "assistant", "content": "hi there"}
-
-    def test_empty_messages_filtered(self):
-        """Messages with empty or whitespace-only text are filtered out."""
-        messages = [
-            {"role": "user", "text": "hello"},
-            {"role": "assistant", "text": ""},
-            {"role": "user", "text": "   "},
-        ]
-        result = gateway._convert_to_mem0_messages(messages)
-        assert len(result) == 1
-        assert result[0]["content"] == "hello"
-
-    def test_unknown_roles_mapped_to_user(self):
-        """Roles not in (user, assistant, system) map to user."""
-        messages = [
-            {"role": "bot", "text": "something"},
-            {"role": "tool", "text": "result"},
-        ]
-        result = gateway._convert_to_mem0_messages(messages)
-        assert all(m["role"] == "user" for m in result)
-
-    def test_text_truncated_to_2000_chars(self):
-        """Message text is truncated to 2000 characters."""
-        messages = [{"role": "user", "text": "x" * 5000}]
-        result = gateway._convert_to_mem0_messages(messages)
-        assert len(result[0]["content"]) == 2000
-
-    def test_empty_list_returns_empty(self):
-        """Empty input returns empty output."""
-        result = gateway._convert_to_mem0_messages([])
-        assert result == []
-
-
-class TestGetMem0(unittest.TestCase):
-    """Tests for _get_mem0() lazy initialization."""
-
-    def test_lazy_init_creates_on_first_call(self):
-        """First call creates mem0 instance, second returns cached."""
-        mock_memory = MagicMock()
-        mock_config = {"version": "v1.1"}
-        with patch("gateway._mem0_instance", None), \
-             patch("gateway._mem0_init_lock", threading.Lock()), \
-             patch.dict("sys.modules", {"mem0": MagicMock()}), \
-             patch("gateway.os.environ", {}, create=True):
-            # Mock the imports inside _get_mem0
-            import importlib
-            mock_mem0_module = MagicMock()
-            mock_mem0_module.Memory.from_config.return_value = mock_memory
-            mock_config_module = MagicMock()
-            mock_config_module.build_mem0_config.return_value = mock_config
-            with patch.dict("sys.modules", {
-                "mem0": mock_mem0_module,
-                "mem0_config": mock_config_module,
-            }):
-                gateway._mem0_instance = None
-                result1 = gateway._get_mem0()
-                result2 = gateway._get_mem0()
-                assert result1 is result2
-                # from_config called only once (cached)
-                assert mock_mem0_module.Memory.from_config.call_count == 1
-        # cleanup
-        gateway._mem0_instance = None
-
-    def test_thread_safety(self):
-        """Concurrent calls don't create multiple instances."""
-        call_count = {"n": 0}
-        mock_memory = MagicMock()
-
-        original_get = gateway._get_mem0
-
-        def slow_init():
-            call_count["n"] += 1
-            time.sleep(0.05)
-            return mock_memory
-
-        gateway._mem0_instance = None
-        mock_mem0_module = MagicMock()
-        mock_mem0_module.Memory.from_config.side_effect = lambda c: slow_init()
-        mock_config_module = MagicMock()
-        mock_config_module.build_mem0_config.return_value = {}
-
-        with patch.dict("sys.modules", {
-            "mem0": mock_mem0_module,
-            "mem0_config": mock_config_module,
-        }):
-            threads = []
-            results = []
-            def call_get():
-                results.append(gateway._get_mem0())
-            for _ in range(4):
-                t = threading.Thread(target=call_get)
-                threads.append(t)
-                t.start()
-            for t in threads:
-                t.join()
-            # Only one instance created despite concurrent calls
-            assert mock_mem0_module.Memory.from_config.call_count == 1
-        gateway._mem0_instance = None
-
-    def test_telemetry_disabled(self):
-        """MEM0_TELEMETRY set to 'false' during init."""
-        gateway._mem0_instance = None
-        mock_mem0_module = MagicMock()
-        mock_mem0_module.Memory.from_config.return_value = MagicMock()
-        mock_config_module = MagicMock()
-        mock_config_module.build_mem0_config.return_value = {}
-
-        with patch.dict("sys.modules", {
-            "mem0": mock_mem0_module,
-            "mem0_config": mock_config_module,
-        }), patch.dict(os.environ, {}, clear=False):
-            gateway._get_mem0()
-            assert os.environ.get("MEM0_TELEMETRY") == "false"
-        gateway._mem0_instance = None
-
-    def test_init_failure_returns_none(self):
-        """Exception during init returns None and logs error."""
-        gateway._mem0_instance = None
-        mock_mem0_module = MagicMock()
-        mock_mem0_module.Memory.from_config.side_effect = RuntimeError("init boom")
-        mock_config_module = MagicMock()
-        mock_config_module.build_mem0_config.return_value = {}
-
-        with patch.dict("sys.modules", {
-            "mem0": mock_mem0_module,
-            "mem0_config": mock_config_module,
-        }):
-            result = gateway._get_mem0()
-            assert result is None
-        gateway._mem0_instance = None
-
-
-class TestMem0Knowledge(unittest.TestCase):
-    """Tests for _mem0_add_knowledge() mem0.add() integration."""
-
-    def test_calls_mem0_add_with_converted_messages(self):
-        """_mem0_add_knowledge calls m.add(messages=..., user_id=...)."""
-        mock_memory = MagicMock()
-        mock_memory.add.return_value = {"results": [{"id": "test", "event": "ADD"}]}
-        with patch.object(gateway, "_get_mem0", return_value=mock_memory):
-            messages = [
-                {"role": "user", "text": "hello world"},
-                {"role": "assistant", "text": "hi there"},
-            ]
-            gateway._mem0_add_knowledge(messages, user_id="test-user")
-
-        mock_memory.add.assert_called_once()
-        call_kwargs = mock_memory.add.call_args
-        assert call_kwargs[1]["user_id"] == "test-user"
-        # Messages should be in mem0 format (content, not text)
-        msgs = call_kwargs[1]["messages"]
-        assert msgs[0]["content"] == "hello world"
-        assert msgs[0]["role"] == "user"
-
-    def test_skips_when_mem0_unavailable(self):
-        """When _get_mem0() returns None, skips without error."""
-        with patch.object(gateway, "_get_mem0", return_value=None):
-            result = gateway._mem0_add_knowledge(
-                [{"role": "user", "text": "hello"}], user_id="test"
-            )
-            assert result is None
-
-    def test_skips_when_messages_empty(self):
-        """Empty messages list skips mem0.add() call."""
-        mock_memory = MagicMock()
-        with patch.object(gateway, "_get_mem0", return_value=mock_memory):
-            gateway._mem0_add_knowledge([], user_id="test")
-        mock_memory.add.assert_not_called()
-
-    def test_skips_when_all_messages_empty_text(self):
-        """Messages with only whitespace text result in no mem0.add() call."""
-        mock_memory = MagicMock()
-        with patch.object(gateway, "_get_mem0", return_value=mock_memory):
-            gateway._mem0_add_knowledge(
-                [{"role": "user", "text": ""}, {"role": "assistant", "text": "  "}],
-                user_id="test",
-            )
-        mock_memory.add.assert_not_called()
-
-
-class TestMem0AddWithTimeout(unittest.TestCase):
-    """Tests for _mem0_add_with_timeout() ThreadPoolExecutor wrapper."""
-
-    def test_successful_add_returns_result(self):
-        """Successful mem0.add() returns result within timeout."""
-        expected = {"results": [{"id": "abc", "event": "ADD"}]}
-        mock_memory = MagicMock()
-        mock_memory.add.return_value = expected
-        with patch.object(gateway, "_get_mem0", return_value=mock_memory):
-            result = gateway._mem0_add_with_timeout(
-                [{"role": "user", "text": "hello"}],
-                user_id="test",
-                timeout=5,
-            )
-        assert result == expected
-
-    def test_timeout_returns_none(self):
-        """TimeoutError after N seconds returns None and logs."""
-        mock_memory = MagicMock()
-        def slow_add(**kwargs):
-            time.sleep(5)
-            return {"results": []}
-        mock_memory.add.side_effect = slow_add
-        with patch.object(gateway, "_get_mem0", return_value=mock_memory):
-            result = gateway._mem0_add_with_timeout(
-                [{"role": "user", "text": "hello"}],
-                user_id="test",
-                timeout=0.1,
-            )
-        assert result is None
-
-    def test_exception_returns_none(self):
-        """Generic Exception returns None and logs."""
-        mock_memory = MagicMock()
-        mock_memory.add.side_effect = RuntimeError("mem0 exploded")
-        with patch.object(gateway, "_get_mem0", return_value=mock_memory):
-            result = gateway._mem0_add_with_timeout(
-                [{"role": "user", "text": "hello"}],
-                user_id="test",
-                timeout=5,
-            )
-        assert result is None
-
-
-class TestIdentityExtractPrompt(unittest.TestCase):
-    """Tests for IDENTITY_EXTRACT_PROMPT content validation."""
-
-    def test_prompt_mentions_identity(self):
-        """Prompt contains 'identity' (not just 'knowledge')."""
-        prompt = gateway.IDENTITY_EXTRACT_PROMPT
-        assert "identity" in prompt.lower() or "IDENTITY" in prompt
-
-    def test_prompt_mentions_stable_traits(self):
-        """Prompt mentions '6+ months' or 'stable' for trait duration."""
-        prompt = gateway.IDENTITY_EXTRACT_PROMPT
-        assert "6+ months" in prompt or "stable" in prompt.lower()
-
-    def test_prompt_excludes_temporal_items(self):
-        """DO NOT section excludes projects, deadlines, integrations."""
-        prompt = gateway.IDENTITY_EXTRACT_PROMPT
-        lower = prompt.lower()
-        assert "project" in lower  # mentioned in DO NOT section
-        assert "deadline" in lower or "current work" in lower
-
-    def test_prompt_requests_json_with_identity_key(self):
-        """Prompt requests JSON output with 'identity' key."""
-        prompt = gateway.IDENTITY_EXTRACT_PROMPT
-        assert '"identity"' in prompt
-
-
-class TestProcessIdentityExtraction(unittest.TestCase):
-    """Tests for _process_identity_extraction() identity-only routing."""
-
-    def _make_user_md(self, tmpdir, content=None):
-        """Helper: create a user.md with standard sections."""
-        identity_dir = os.path.join(tmpdir, "identity")
-        os.makedirs(identity_dir, exist_ok=True)
-        user_file = os.path.join(identity_dir, "user.md")
-        if content is None:
-            content = (
-                "# User\n"
-                "## Basics\n\n"
-                "## Work Context\n\n"
-                "## Communication Preferences\n\n"
-                "## Interests & Context\n\n"
-                "## People\n\n"
-                "## Patterns & Habits\n\n"
-                "## Preferences (Observed)\n\n"
-                "## Important Context\n\n"
-            )
-        with open(user_file, "w") as f:
-            f.write(content)
-        return user_file
-
-    def test_identity_routes_to_correct_sections(self):
-        """Identity traits route to matching user.md sections."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            user_file = self._make_user_md(tmpdir)
-            with patch.object(gateway, "DATA_DIR", tmpdir):
-                response = json.dumps({
-                    "identity": [
-                        "name is Haseeb",
-                        "Sarah is his cofounder",
-                        "prefers dark mode",
-                    ]
-                })
-                gateway._process_identity_extraction(response)
-
-            with open(user_file) as f:
-                content = f.read()
-            assert "name is Haseeb" in content
-            assert "Sarah is his cofounder" in content
-            assert "prefers dark mode" in content
-
-    def test_duplicate_identity_skipped(self):
-        """Duplicate identity items are skipped via _fact_already_exists."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            user_file = self._make_user_md(tmpdir, content=(
-                "# User\n"
-                "## Preferences (Observed)\n\n"
-                "- prefers dark mode\n\n"
-                "## Important Context\n\n"
-            ))
-            with patch.object(gateway, "DATA_DIR", tmpdir):
-                response = json.dumps({"identity": ["prefers dark mode"]})
-                gateway._process_identity_extraction(response)
-
-            with open(user_file) as f:
-                content = f.read()
-            count = content.lower().count("prefers dark mode")
-            assert count == 1
-
-    def test_empty_extraction_does_nothing(self):
-        """Empty extraction ({"empty": true}) does nothing."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            user_file = self._make_user_md(tmpdir)
-            with patch.object(gateway, "DATA_DIR", tmpdir):
-                gateway._process_identity_extraction('{"empty": true}')
-
-            with open(user_file) as f:
-                content = f.read()
-            # no auto-extracted comments added
-            assert "auto-extracted" not in content
-
-    def test_no_json_does_nothing(self):
-        """No valid JSON in response does nothing."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            user_file = self._make_user_md(tmpdir)
-            with patch.object(gateway, "DATA_DIR", tmpdir):
-                gateway._process_identity_extraction("no json here")
-
-    def test_knowledge_key_ignored(self):
-        """Identity extraction ignores 'knowledge' key in response."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            user_file = self._make_user_md(tmpdir)
-            with patch.object(gateway, "DATA_DIR", tmpdir):
-                response = json.dumps({
-                    "identity": ["name is Haseeb"],
-                    "knowledge": [{"key": "test", "content": "ignored"}],
-                })
-                gateway._process_identity_extraction(response)
-            with open(user_file) as f:
-                content = f.read()
-            assert "name is Haseeb" in content
-
-
-# ── _fact_already_exists ───────────────────────────────────────────────────
-
-class TestFactAlreadyExists(unittest.TestCase):
-    """Tests for _fact_already_exists() dedup check."""
-
-    def test_exact_match(self):
-        section = "- prefers dark mode\n- uses vim\n"
-        assert gateway._fact_already_exists("prefers dark mode", section) is True
-
-    def test_case_insensitive(self):
-        section = "- Prefers Dark Mode\n"
-        assert gateway._fact_already_exists("prefers dark mode", section) is True
-
-    def test_no_match(self):
-        section = "- likes coffee\n- uses vim\n"
-        assert gateway._fact_already_exists("prefers dark mode", section) is False
-
-    def test_empty_section(self):
-        assert gateway._fact_already_exists("anything", "") is False
-
-    def test_substring_match(self):
-        section = "- user prefers dark mode in all apps\n"
-        assert gateway._fact_already_exists("prefers dark mode", section) is True
-
-    def test_reverse_substring(self):
-        """Fact is longer but section contains the core."""
-        section = "- dark mode\n"
-        assert gateway._fact_already_exists("dark mode", section) is True
-
-
-# ── _memory_writer_loop idle detection ──────────────────────────────────────
-
-class TestMemoryWriterIdleDetection(unittest.TestCase):
-    """Tests for idle detection logic extracted from _memory_writer_loop."""
-
-    def test_idle_threshold_calculation(self):
-        """Verify idle threshold = minutes * 60."""
-        idle_minutes = 10
-        assert idle_minutes * 60 == 600
-
-        idle_minutes = 5
-        assert idle_minutes * 60 == 300
-
-    def test_idle_detection_logic(self):
-        """Simulate the idle detection from the loop."""
-        now = time.time()
-        idle_threshold = 600  # 10 minutes
-
-        activity = {
-            "idle_chat": now - 700,      # idle (700 > 600)
-            "active_chat": now - 100,    # still active
-            "exactly_idle": now - 600,   # exactly at threshold
-        }
-
-        idle_chats = [
-            cid for cid, last_time in activity.items()
-            if now - last_time >= idle_threshold
-        ]
-
-        assert "idle_chat" in idle_chats
-        assert "active_chat" not in idle_chats
-        assert "exactly_idle" in idle_chats  # >= threshold
-
-    def test_session_deduplication(self):
-        """Already processed sessions should be skipped."""
-        processed = {"session_abc"}
-        sid = "session_abc"
-        assert sid in processed  # would skip
-
-        sid2 = "session_xyz"
-        assert sid2 not in processed  # would process
 
 
 # ── regex injection patterns ────────────────────────────────────────────────
@@ -3123,8 +2432,7 @@ class TestBotPollLoop(unittest.TestCase):
              patch("gateway._relay_to_goosed", return_value=("hi", "", [])) as mock_relay, \
              patch("gateway.send_telegram_message") as mock_send, \
              patch("gateway._send_typing_action"), \
-             patch("gateway.load_setup", return_value=None), \
-             patch("gateway._memory_touch"):
+             patch("gateway.load_setup", return_value=None):
             bot._do_message_relay(chat_id="123", text="hello", bot_token="tok123")
             mock_get.assert_called_with("telegram:research", "123")
 
@@ -3137,8 +2445,7 @@ class TestBotPollLoop(unittest.TestCase):
              patch("gateway._relay_to_goosed", return_value=("ok", "", [])) as mock_relay, \
              patch("gateway.send_telegram_message"), \
              patch("gateway._send_typing_action"), \
-             patch("gateway.load_setup", return_value=None), \
-             patch("gateway._memory_touch"):
+             patch("gateway.load_setup", return_value=None):
             bot._do_message_relay(chat_id="123", text="hello", bot_token="tok123")
             mock_set.assert_called_once()
             mock_pop.assert_called_once()
@@ -3151,8 +2458,7 @@ class TestBotPollLoop(unittest.TestCase):
              patch("gateway._relay_to_goosed", return_value=("ok", "", [])) as mock_relay, \
              patch("gateway.send_telegram_message"), \
              patch("gateway._send_typing_action"), \
-             patch("gateway.load_setup", return_value=None), \
-             patch("gateway._memory_touch"):
+             patch("gateway.load_setup", return_value=None):
             bot._do_message_relay(chat_id="123", text="hello", bot_token="tok123")
             mock_lock.assert_called_with("123")
 
@@ -3172,7 +2478,6 @@ class TestBotPollLoop(unittest.TestCase):
              patch("gateway.send_telegram_message"), \
              patch("gateway._send_typing_action"), \
              patch("gateway.load_setup", return_value=setup), \
-             patch("gateway._memory_touch"), \
              patch("gateway.get_verbosity_for_channel", return_value="quiet") as mock_verb:
             bot._do_message_relay(chat_id="123", text="hello", bot_token="tok123")
             mock_verb.assert_called_with(setup, "telegram:research")
@@ -3988,10 +3293,9 @@ class TestUXPaperCuts(unittest.TestCase):
     @patch("gateway.start_session_watcher")
     @patch("gateway.start_job_engine")
     @patch("gateway.start_cron_scheduler")
-    @patch("gateway.start_memory_writer")
     @patch("gateway.validate_setup_config", return_value=(True, []))
     def test_save_response_includes_pairing_code_when_bot_configured(
-        self, _validate, _mem, _cron, _job, _sess, _goose, _apply, _save, _load, _auth, _boot
+        self, _validate, _cron, _job, _sess, _goose, _apply, _save, _load, _auth, _boot
     ):
         """When save includes telegram_bot_token, response should include pairing_code."""
         # set up a bot that has a pairing code
@@ -4019,10 +3323,9 @@ class TestUXPaperCuts(unittest.TestCase):
     @patch("gateway.start_session_watcher")
     @patch("gateway.start_job_engine")
     @patch("gateway.start_cron_scheduler")
-    @patch("gateway.start_memory_writer")
     @patch("gateway.validate_setup_config", return_value=(True, []))
     def test_save_response_no_pairing_code_without_telegram(
-        self, _validate, _mem, _cron, _job, _sess, _goose, _apply, _save, _load, _auth, _boot
+        self, _validate, _cron, _job, _sess, _goose, _apply, _save, _load, _auth, _boot
     ):
         """When save has no telegram_bot_token, response should not include pairing_code."""
         config = {"provider": "openai", "api_key": "sk-test"}
@@ -6133,9 +5436,8 @@ class TestBotMediaRouting(unittest.TestCase):
     @patch("gateway.send_telegram_message", return_value=(True, ""))
     @patch("gateway._send_typing_action")
     @patch("gateway.load_setup", return_value=None)
-    @patch("gateway._memory_touch")
     @patch.object(gateway._session_manager, "get", return_value="sess1")
-    def test_image_sent_after_text(self, _sm, _mem, _setup, _typing, mock_send,
+    def test_image_sent_after_text(self, _sm, _setup, _typing, mock_send,
                                     mock_relay, mock_adapter_cls, mock_route):
         """After text delivery, media blocks should be routed via TelegramOutboundAdapter."""
         media = [{"type": "image", "data": "aGVsbG8=", "mimeType": "image/png"}]
@@ -6151,9 +5453,8 @@ class TestBotMediaRouting(unittest.TestCase):
     @patch("gateway.send_telegram_message", return_value=(True, ""))
     @patch("gateway._send_typing_action")
     @patch("gateway.load_setup", return_value=None)
-    @patch("gateway._memory_touch")
     @patch.object(gateway._session_manager, "get", return_value="sess1")
-    def test_no_media_no_send(self, _sm, _mem, _setup, _typing, mock_send,
+    def test_no_media_no_send(self, _sm, _setup, _typing, mock_send,
                                mock_relay, mock_adapter_cls, mock_route):
         """No media blocks means _route_media_blocks is not called."""
         mock_relay.return_value = ("hello", "", [])
@@ -6168,9 +5469,8 @@ class TestBotMediaRouting(unittest.TestCase):
     @patch("gateway.send_telegram_message", return_value=(True, ""))
     @patch("gateway._send_typing_action")
     @patch("gateway.load_setup", return_value=None)
-    @patch("gateway._memory_touch")
     @patch.object(gateway._session_manager, "get", return_value="sess1")
-    def test_cancelled_skips_media(self, _sm, _mem, _setup, _typing, mock_send,
+    def test_cancelled_skips_media(self, _sm, _setup, _typing, mock_send,
                                     mock_relay, mock_adapter_cls, mock_route):
         """When the relay is cancelled, media should NOT be routed."""
         media = [{"type": "image", "data": "aGVsbG8=", "mimeType": "image/png"}]
@@ -6194,9 +5494,8 @@ class TestBotMediaRouting(unittest.TestCase):
     @patch("gateway.send_telegram_message", return_value=(True, ""))
     @patch("gateway._send_typing_action")
     @patch("gateway.load_setup", return_value=None)
-    @patch("gateway._memory_touch")
     @patch.object(gateway._session_manager, "get", return_value="sess1")
-    def test_media_error_logged_not_crash(self, _sm, _mem, _setup, _typing, mock_send,
+    def test_media_error_logged_not_crash(self, _sm, _setup, _typing, mock_send,
                                            mock_relay, mock_adapter_cls, mock_route):
         """Media routing errors should be caught and logged, not crash the relay."""
         media = [{"type": "image", "data": "aGVsbG8=", "mimeType": "image/png"}]
@@ -6213,9 +5512,8 @@ class TestBotMediaRouting(unittest.TestCase):
     @patch("gateway.send_telegram_message", return_value=(True, ""))
     @patch("gateway._send_typing_action")
     @patch("gateway.load_setup", return_value=None)
-    @patch("gateway._memory_touch")
     @patch.object(gateway._session_manager, "get", return_value="sess1")
-    def test_multiple_images_sent(self, _sm, _mem, _setup, _typing, mock_send,
+    def test_multiple_images_sent(self, _sm, _setup, _typing, mock_send,
                                    mock_relay, mock_adapter_cls, mock_route):
         """Multiple media blocks should all be passed to _route_media_blocks."""
         media = [
@@ -6916,7 +6214,6 @@ class TestPasswordAuth(unittest.TestCase):
         self.assertEqual(sent_json["status"], 400)
         self.assertIn("Password is required", sent_json["data"]["errors"])
 
-    @patch("gateway.start_memory_writer")
     @patch("gateway.start_cron_scheduler")
     @patch("gateway.start_job_engine")
     @patch("gateway.start_session_watcher")
@@ -6927,7 +6224,7 @@ class TestPasswordAuth(unittest.TestCase):
     @patch("gateway.load_setup")
     def test_save_with_password_hashes_and_stores(self, mock_load, mock_validate, mock_apply,
                                                    mock_save, mock_start, mock_session,
-                                                   mock_job, mock_cron, mock_mem):
+                                                   mock_job, mock_cron):
         """handle_save with password stores hash, no plaintext in saved config."""
         mock_load.return_value = None  # first boot
         mock_validate.return_value = (True, [])
@@ -7145,7 +6442,6 @@ class TestGetSafeSetup(unittest.TestCase):
         "telegram_bot_token": "123456:ABC-DEF",
         "litellm_host": "http://internal-llm:4000",
         "system_prompt": "You are helpful.",
-        "memory_idle_minutes": 10,
         "models": [
             {"id": "m1", "model": "claude-sonnet-4-20250514", "provider": "anthropic"}
         ],
@@ -7176,7 +6472,6 @@ class TestGetSafeSetup(unittest.TestCase):
         self.assertEqual(safe["provider_type"], "anthropic")
         self.assertEqual(safe["model"], "claude-sonnet-4-20250514")
         self.assertEqual(safe["system_prompt"], "You are helpful.")
-        self.assertEqual(safe["memory_idle_minutes"], 10)
         self.assertEqual(safe["models"],
                          [{"id": "m1", "model": "claude-sonnet-4-20250514", "provider": "anthropic"}])
 
@@ -8093,7 +7388,6 @@ class TestWatcherStartupWiring(unittest.TestCase):
 
     @patch("gateway.start_telegram_gateway")
     @patch("gateway._load_all_channels")
-    @patch("gateway.start_memory_writer")
     @patch("gateway.start_cron_scheduler")
     @patch("gateway.start_job_engine")
     @patch("gateway.start_session_watcher")
@@ -8106,7 +7400,7 @@ class TestWatcherStartupWiring(unittest.TestCase):
     @patch("gateway.apply_config")
     def test_startup_calls_load_watchers(self, _apply, _load_setup, _is_conf,
                                           mock_load_w, _start_we, _health,
-                                          _goose, _sess, _job, _cron, _mem,
+                                          _goose, _sess, _job, _cron,
                                           _channels, _tg):
         """main() should call _load_watchers during startup."""
         with patch("gateway.ThreadingHTTPServer"):
@@ -8119,7 +7413,6 @@ class TestWatcherStartupWiring(unittest.TestCase):
 
     @patch("gateway.start_telegram_gateway")
     @patch("gateway._load_all_channels")
-    @patch("gateway.start_memory_writer")
     @patch("gateway.start_cron_scheduler")
     @patch("gateway.start_job_engine")
     @patch("gateway.start_session_watcher")
@@ -8132,7 +7425,7 @@ class TestWatcherStartupWiring(unittest.TestCase):
     @patch("gateway.apply_config")
     def test_startup_calls_start_watcher_engine(self, _apply, _load_setup, _is_conf,
                                                  _load_w, mock_start_we, _health,
-                                                 _goose, _sess, _job, _cron, _mem,
+                                                 _goose, _sess, _job, _cron,
                                                  _channels, _tg):
         """main() should call start_watcher_engine during startup."""
         with patch("gateway.ThreadingHTTPServer"):
@@ -8649,7 +7942,6 @@ class TestBotInstanceMediaGroupBuffering(unittest.TestCase):
     @patch("gateway._send_typing_action")
     @patch("gateway.load_setup", return_value=None)
     @patch("gateway._get_session_id", return_value="sid1")
-    @patch("gateway._memory_touch")
     def test_media_group_buffers_multiple_photos(self, *mocks):
         """Messages with same media_group_id should be buffered together."""
         msg1 = {
@@ -8761,8 +8053,7 @@ class TestBotInstanceFlushMediaGroup(unittest.TestCase):
     @patch("gateway._send_typing_action")
     @patch("gateway.load_setup", return_value=None)
     @patch("gateway._get_session_id", return_value="sid1")
-    @patch("gateway._memory_touch")
-    def test_flush_downloads_and_relays(self, mock_mem, mock_sid, mock_setup,
+    def test_flush_downloads_and_relays(self, mock_sid, mock_setup,
                                         mock_typing, mock_send, mock_relay,
                                         mock_dl, mock_paired):
         """_flush_media_group_v2 should download files and relay to goosed."""
@@ -8860,8 +8151,7 @@ class TestOutboundAdapterTyping(unittest.TestCase):
              patch("gateway._relay_to_goosed", return_value=("ok", "", [])), \
              patch("gateway.send_telegram_message"), \
              patch("gateway._send_typing_action") as mock_raw_typing, \
-             patch("gateway.load_setup", return_value=None), \
-             patch("gateway._memory_touch"):
+             patch("gateway.load_setup", return_value=None):
             bot._do_message_relay(chat_id="123", text="hello", bot_token="tok:test")
             # _send_typing_action should NOT be called directly anymore
             # It should only be called indirectly via TelegramOutboundAdapter.send_typing

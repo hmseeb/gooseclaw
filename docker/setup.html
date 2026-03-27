@@ -4793,8 +4793,6 @@ function renderChannelRouting(config, hasTelegram) {
   const models = config.models || [];
   const routes = config.channel_routes || {};
   const verbosity = config.channel_verbosity || {};
-  const memoryIdleMinutes = config.memory_idle_minutes || 10;
-  const memoryEnabled = config.memory_writer_enabled !== false;
 
   const channels = [];
   if (hasTelegram) channels.push({id: 'telegram', label: 'Telegram', icon: '\u2708\uFE0F'});
@@ -4846,28 +4844,6 @@ function renderChannelRouting(config, hasTelegram) {
     <span class="channel-route-selects">${modelSelect('cron', cronRoute)}</span>
   </div>`;
 
-  /* memory writer */
-  const memRoute = routes['memory'] || '';
-  html += `<div class="channel-route-row" id="memory-row">
-    <span class="channel-route-label">
-      \uD83E\uDDE0 Memory
-      <span class="pill-toggle ${memoryEnabled ? 'on' : 'off'}" id="memory-pill" onclick="toggleMemoryPill()">${memoryEnabled ? 'on' : 'off'}</span>
-      <span class="info-icon">i
-        <span class="info-tooltip">
-          <strong>Memory Writer</strong><br>
-          Safety net for the built-in self-improvement loop. After your chat goes idle, it scans the full conversation and catches any preferences, corrections, or context that were missed in real-time.<br><br>
-          <strong>Idle timer:</strong> how long to wait after the last message before scanning.
-        </span>
-      </span>
-    </span>
-    <span class="channel-route-selects" id="memory-controls" style="${memoryEnabled ? '' : 'opacity:0.3;pointer-events:none;'}">
-      ${modelSelect('memory', memRoute)}
-      <span class="channel-idle-label" style="display:flex;align-items:center;gap:4px;white-space:nowrap;">
-        <input type="number" class="channel-idle-input" id="memory-idle-min" value="${memoryIdleMinutes}" min="1" max="120" onchange="updateMemoryIdle(this.value)"> min idle
-      </span>
-    </span>
-  </div>`;
-
   body.innerHTML = html;
 }
 
@@ -4884,52 +4860,6 @@ function onChannelModelChange(chId, sel) {
 function saveCustomModel(chId, modelName) {
   if (!modelName.trim()) return;
   updateChannelRoute(chId, 'custom:' + modelName.trim());
-}
-
-function toggleMemoryPill() {
-  const pill = document.getElementById('memory-pill');
-  const controls = document.getElementById('memory-controls');
-  const isOn = pill.classList.contains('on');
-  const newState = !isOn;
-  pill.textContent = newState ? 'on' : 'off';
-  pill.className = 'pill-toggle ' + (newState ? 'on' : 'off');
-  controls.style.opacity = newState ? '1' : '0.3';
-  controls.style.pointerEvents = newState ? 'auto' : 'none';
-  toggleMemoryWriter(newState);
-}
-
-async function toggleMemoryWriter(enabled) {
-  try {
-    const resp = await fetch('/api/setup/agent-config', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({memory_writer_enabled: enabled})
-    });
-    const data = await resp.json();
-    if (data.success) {
-      dashboardConfig.memory_writer_enabled = enabled;
-    }
-  } catch(e) {
-    alert('Could not save memory setting');
-  }
-}
-
-async function updateMemoryIdle(minutes) {
-  const val = parseInt(minutes, 10);
-  if (isNaN(val) || val < 1) return;
-  try {
-    const resp = await fetch('/api/setup/agent-config', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({memory_idle_minutes: val})
-    });
-    const data = await resp.json();
-    if (data.success) {
-      dashboardConfig.memory_idle_minutes = val;
-    }
-  } catch(e) {
-    alert('Could not save memory settings');
-  }
 }
 
 async function updateChannelRoute(channel, modelId) {

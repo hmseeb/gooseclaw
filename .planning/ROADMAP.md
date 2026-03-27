@@ -148,7 +148,8 @@
   1. On mobile, the dashboard layout is touch-friendly with large tap targets and the screen stays awake during active voice sessions
   2. On desktop, user can hold Spacebar to talk and press Escape to disconnect
   3. User can type a text message in the same interface when voice isn't convenient, and the AI responds via voice
-**Plans**: TBD
+**Plans**: 1 plan
+- [ ] 31-01-PLAN.md -- Static analysis tests + keyboard shortcuts, text input, mobile CSS, Wake Lock
 
 ### Phase 32: Tool Calling
 **Goal**: Users can ask the AI to perform actions mid-conversation (check calendar, search memory, send email) and see tool execution happening in real-time
@@ -196,7 +197,7 @@ Note: Phases 28 and 29 can execute in parallel (both depend only on 27). Phase 3
 | 28. Gemini Live API Integration | 2/2 | Complete    | 2026-03-27 |
 | 29. Setup Wizard + Dashboard Gating | 3/3 | Complete    | 2026-03-27 |
 | 30. Voice Dashboard | 3/3 | Complete    | 2026-03-27 |
-| 31. Mobile + Keyboard UX | 0/TBD | Not started | - |
+| 31. Mobile + Keyboard UX | 0/1 | Not started | - |
 | 32. Tool Calling | 0/TBD | Not started | - |
 | 33. Intelligence + History | 0/TBD | Not started | - |
 

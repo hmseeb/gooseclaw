@@ -741,9 +741,10 @@ export KNOWLEDGE_DB_PATH="/data/knowledge/chroma"
 export MEM0_CHROMA_PATH="/data/mem0/chroma"
 
 # ---- graph memory (Kuzu persistent mode) ----
-export MEM0_ENABLE_GRAPH=true
-export MEM0_KUZU_PATH="/data/knowledge/kuzu"
-echo "[graph] graph memory enabled (kuzu persistent @ $MEM0_KUZU_PATH)"
+# NOTE: MEM0_ENABLE_GRAPH is set ONLY in the MCP server envs (not exported here)
+# to prevent the gateway's mem0 instance from locking the kuzu db file.
+# kuzu only allows one process to hold the lock at a time.
+echo "[graph] graph memory enabled via MCP server (kuzu @ /data/knowledge/kuzu)"
 
 # ─── MOIM (critical rules injected every turn, slim ~100 lines) ────────────
 # Full session context (onboarding, procedures, docs) loads via .goosehints

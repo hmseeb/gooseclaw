@@ -97,7 +97,9 @@
   2. Gateway can open an outbound TLS WebSocket connection to an external server using stdlib ssl+socket
   3. WebSocket connections stay alive beyond Railway's 10-minute proxy timeout via automatic ping/pong every 25 seconds
   4. WebSocket close handshake completes cleanly from either side without orphaned threads or sockets
-**Plans**: TBD
+**Plans**: 2 plans
+- [ ] 27-01-PLAN.md -- TDD: WebSocket protocol functions (frame parser, accept key, ping/close)
+- [ ] 27-02-PLAN.md -- WebSocket server handler, outbound client, connection tracking, integration tests
 
 ### Phase 28: Gemini Live API Integration
 **Goal**: Gateway establishes a working audio pipeline to Gemini Live API with session management that handles connection limits gracefully
@@ -185,7 +187,7 @@ Note: Phases 28 and 29 can execute in parallel (both depend only on 27). Phase 3
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 27. WebSocket Infrastructure | 0/TBD | Not started | - |
+| 27. WebSocket Infrastructure | 0/2 | Not started | - |
 | 28. Gemini Live API Integration | 0/TBD | Not started | - |
 | 29. Setup Wizard + Dashboard Gating | 0/TBD | Not started | - |
 | 30. Voice Dashboard | 0/TBD | Not started | - |

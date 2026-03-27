@@ -84,7 +84,7 @@
 - [x] **Phase 30: Voice Dashboard** - voice.html with mic capture, push-to-talk, streaming playback, transcript, visualizer, state indicators (completed 2026-03-27)
 - [x] **Phase 31: Mobile + Keyboard UX** - Mobile-first responsive layout, keyboard shortcuts, text fallback, screen wake lock (completed 2026-03-27)
 - [x] **Phase 32: Tool Calling** - Dynamic MCP tool discovery, Gemini function declarations, mid-conversation execution, visual feedback (completed 2026-03-27)
-- [ ] **Phase 33: Intelligence + History** - Voice transcripts to mem0, session history, voice selection
+- [x] **Phase 33: Intelligence + History** - Voice transcripts to mem0, session history, voice selection (completed 2026-03-27)
 
 ## Phase Details
 
@@ -201,6 +201,6 @@ Note: Phases 28 and 29 can execute in parallel (both depend only on 27). Phase 3
 | 30. Voice Dashboard | 3/3 | Complete    | 2026-03-27 |
 | 31. Mobile + Keyboard UX | 1/1 | Complete    | 2026-03-27 |
 | 32. Tool Calling | 2/2 | Complete    | 2026-03-27 |
-| 33. Intelligence + History | 1/2 | In Progress|  |
+| 33. Intelligence + History | 2/2 | Complete   | 2026-03-27 |
 
 **Total: 33 phases, 63+ plans across 7 milestones.**

@@ -9,10 +9,10 @@
 
 - [x] **VOICE-01**: User can open voice dashboard (voice.html) in any modern browser on phone or desktop
 - [x] **VOICE-02**: Browser establishes WebSocket connection to gateway.py which proxies to Gemini Live API
-- [ ] **VOICE-03**: User can tap a push-to-talk button to start speaking, audio streams in real-time to Gemini
-- [ ] **VOICE-04**: User hears AI responses played back as streaming audio chunks (not buffered full response)
-- [ ] **VOICE-05**: User can interrupt the AI mid-sentence (barge-in) and AI stops speaking and listens
-- [ ] **VOICE-06**: Voice Activity Detection automatically detects when user stops speaking (Gemini built-in VAD)
+- [x] **VOICE-03**: User can tap a push-to-talk button to start speaking, audio streams in real-time to Gemini
+- [x] **VOICE-04**: User hears AI responses played back as streaming audio chunks (not buffered full response)
+- [x] **VOICE-05**: User can interrupt the AI mid-sentence (barge-in) and AI stops speaking and listens
+- [x] **VOICE-06**: Voice Activity Detection automatically detects when user stops speaking (Gemini built-in VAD)
 - [ ] **VOICE-07**: User sees live transcript of both their speech and AI responses as scrolling chat
 - [x] **VOICE-08**: User sees clear connection state indicators (disconnected, connecting, listening, thinking, speaking)
 - [x] **VOICE-09**: User gets clear error messages for mic denied, WebSocket drop, API errors, quota exceeded
@@ -76,10 +76,10 @@
 |-------------|-------|--------|
 | VOICE-01 | Phase 30 | Complete |
 | VOICE-02 | Phase 28 | Complete |
-| VOICE-03 | Phase 30 | Pending |
-| VOICE-04 | Phase 30 | Pending |
-| VOICE-05 | Phase 30 | Pending |
-| VOICE-06 | Phase 30 | Pending |
+| VOICE-03 | Phase 30 | Complete |
+| VOICE-04 | Phase 30 | Complete |
+| VOICE-05 | Phase 30 | Complete |
+| VOICE-06 | Phase 30 | Complete |
 | VOICE-07 | Phase 30 | Pending |
 | VOICE-08 | Phase 30 | Complete |
 | VOICE-09 | Phase 30 | Complete |

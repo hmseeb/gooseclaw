@@ -55,6 +55,131 @@
       color: #ef4444;
     }
 
+    #history-btn, #voice-pick-btn {
+      background: none;
+      border: 1px solid #333;
+      color: #999;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: border-color 0.2s, color 0.2s;
+    }
+
+    #history-btn:hover, #voice-pick-btn:hover {
+      border-color: #6366f1;
+      color: #a5b4fc;
+    }
+
+    /* History panel */
+    #history-panel {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: #0a0a0a;
+      z-index: 100;
+      overflow-y: auto;
+      padding: 1rem;
+    }
+    #history-panel.active { display: block; }
+
+    .history-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 1rem;
+      padding-bottom: 0.5rem;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+    .history-header h2 { margin: 0; font-size: 1.2rem; }
+    .history-close {
+      background: none;
+      border: none;
+      color: #e0e0e0;
+      font-size: 1.5rem;
+      cursor: pointer;
+      padding: 0.5rem;
+    }
+
+    .history-item {
+      padding: 0.75rem 1rem;
+      margin-bottom: 0.5rem;
+      background: rgba(255,255,255,0.05);
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .history-item:hover { background: rgba(255,255,255,0.1); }
+    .history-date { font-size: 0.8rem; color: rgba(255,255,255,0.5); margin-bottom: 0.25rem; }
+    .history-preview { font-size: 0.9rem; color: #e0e0e0; }
+    .history-meta { font-size: 0.75rem; color: rgba(255,255,255,0.4); margin-top: 0.25rem; }
+    .history-empty { text-align: center; color: rgba(255,255,255,0.4); padding: 2rem; }
+
+    /* Session detail view */
+    #session-detail { display: none; }
+    #session-detail.active { display: block; }
+    #history-list.hidden { display: none; }
+
+    .session-detail-header {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+    }
+    .session-back {
+      background: none;
+      border: none;
+      color: #e0e0e0;
+      font-size: 1.2rem;
+      cursor: pointer;
+      padding: 0.5rem;
+    }
+
+    .session-transcript { max-width: 600px; margin: 0 auto; }
+    .session-msg {
+      padding: 0.5rem 0.75rem;
+      margin-bottom: 0.5rem;
+      border-radius: 8px;
+      font-size: 0.9rem;
+    }
+    .session-msg.user { background: rgba(99,102,241,0.2); margin-left: 2rem; }
+    .session-msg.ai { background: rgba(255,255,255,0.05); margin-right: 2rem; }
+    .session-msg.tool { background: rgba(255,193,7,0.1); font-size: 0.8rem; color: rgba(255,255,255,0.5); text-align: center; }
+    .session-msg-speaker { font-size: 0.75rem; color: rgba(255,255,255,0.4); margin-bottom: 0.15rem; }
+
+    /* Voice picker */
+    #voice-picker {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: #0a0a0a;
+      z-index: 100;
+      overflow-y: auto;
+      padding: 1rem;
+    }
+    #voice-picker.active { display: block; }
+
+    .voice-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+      gap: 0.5rem;
+      max-width: 700px;
+      margin: 0 auto;
+    }
+    .voice-option {
+      padding: 0.75rem;
+      background: rgba(255,255,255,0.05);
+      border: 2px solid transparent;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s;
+      text-align: center;
+    }
+    .voice-option:hover { background: rgba(255,255,255,0.1); }
+    .voice-option.selected { border-color: rgba(99,102,241,0.8); background: rgba(99,102,241,0.15); }
+    .voice-option-name { font-size: 0.9rem; font-weight: 600; margin-bottom: 0.15rem; }
+    .voice-option-style { font-size: 0.75rem; color: rgba(255,255,255,0.5); }
+
     /* Error banner */
     #error-banner {
       display: none;
@@ -396,7 +521,11 @@
   <!-- Header -->
   <div id="header">
     <h1>GooseClaw Voice</h1>
-    <button id="disconnect-btn" onclick="disconnectVoice()">Disconnect</button>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <button id="history-btn" onclick="toggleHistory()" title="View past sessions">History</button>
+      <button id="voice-pick-btn" onclick="toggleVoicePicker()" title="Choose voice">Voice</button>
+      <button id="disconnect-btn" onclick="disconnectVoice()">Disconnect</button>
+    </div>
   </div>
 
   <!-- Visualizer -->
@@ -516,7 +645,7 @@
       // Open WebSocket
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
       try {
-        ws = new WebSocket(proto + '//' + location.host + '/ws/voice?token=' + token);
+        ws = new WebSocket(proto + '//' + location.host + '/ws/voice?token=' + token + '&voice=' + encodeURIComponent(selectedVoice));
         ws.binaryType = 'arraybuffer';
       } catch (err) {
         showError('WebSocket connection failed.');
@@ -1159,8 +1288,177 @@
       }
     });
 
+    // ── History Panel ──────────────────────────────────────────────────────
+
+    function toggleHistory() {
+      var panel = document.getElementById('history-panel');
+      if (panel.classList.contains('active')) {
+        panel.classList.remove('active');
+      } else {
+        panel.classList.add('active');
+        loadHistory();
+      }
+    }
+
+    async function loadHistory() {
+      var list = document.getElementById('history-list');
+      var detail = document.getElementById('session-detail');
+      list.classList.remove('hidden');
+      detail.classList.remove('active');
+      list.innerHTML = '<div class="history-empty">Loading...</div>';
+      try {
+        var resp = await fetch('/api/voice/sessions');
+        if (!resp.ok) throw new Error('Failed to load');
+        var data = await resp.json();
+        list.innerHTML = '';
+        if (!data.sessions || data.sessions.length === 0) {
+          list.innerHTML = '<div class="history-empty">No voice sessions yet</div>';
+          return;
+        }
+        data.sessions.forEach(function(s) {
+          var el = document.createElement('div');
+          el.className = 'history-item';
+          var d = new Date(s.started_at);
+          var dur = s.duration_seconds ? Math.round(s.duration_seconds / 60) + ' min' : '';
+          el.innerHTML = '<div class="history-date">' + d.toLocaleDateString() + ' ' + d.toLocaleTimeString() + '</div>' +
+                         '<div class="history-preview">' + escapeHtml(s.preview || 'No preview') + '</div>' +
+                         '<div class="history-meta">' + escapeHtml(s.voice_name || 'Aoede') + (dur ? ' \u00b7 ' + dur : '') +
+                         (s.memory_extracted ? ' \u00b7 memorized' : '') + '</div>';
+          el.onclick = function() { viewSession(s.id); };
+          list.appendChild(el);
+        });
+      } catch(e) {
+        list.innerHTML = '<div class="history-empty">Failed to load history</div>';
+      }
+    }
+
+    async function viewSession(id) {
+      var list = document.getElementById('history-list');
+      var detail = document.getElementById('session-detail');
+      var transcript = document.getElementById('session-transcript');
+      var title = document.getElementById('session-detail-title');
+      list.classList.add('hidden');
+      detail.classList.add('active');
+      transcript.innerHTML = '<div class="history-empty">Loading...</div>';
+      try {
+        var resp = await fetch('/api/voice/sessions/' + id);
+        if (!resp.ok) throw new Error('Not found');
+        var data = await resp.json();
+        var d = new Date(data.started_at);
+        title.textContent = d.toLocaleDateString() + ' ' + d.toLocaleTimeString();
+        transcript.innerHTML = '';
+        (data.transcript || []).forEach(function(entry) {
+          var el = document.createElement('div');
+          if (entry.speaker === 'tool') {
+            el.className = 'session-msg tool';
+            el.textContent = '\ud83d\udd27 ' + (entry.name || 'tool') + ' \u2014 ' + (entry.status || '');
+          } else {
+            el.className = 'session-msg ' + entry.speaker;
+            el.innerHTML = '<div class="session-msg-speaker">' + (entry.speaker === 'user' ? 'You' : 'AI') + '</div>' +
+                           escapeHtml(entry.text || '');
+          }
+          transcript.appendChild(el);
+        });
+        if (!data.transcript || data.transcript.length === 0) {
+          transcript.innerHTML = '<div class="history-empty">No transcript</div>';
+        }
+      } catch(e) {
+        transcript.innerHTML = '<div class="history-empty">Session not found</div>';
+      }
+    }
+
+    function backToHistory() {
+      document.getElementById('history-list').classList.remove('hidden');
+      document.getElementById('session-detail').classList.remove('active');
+    }
+
+    // ── Voice Picker ──────────────────────────────────────────────────────
+
+    var selectedVoice = 'Aoede';
+
+    function toggleVoicePicker() {
+      var picker = document.getElementById('voice-picker');
+      if (picker.classList.contains('active')) {
+        picker.classList.remove('active');
+      } else {
+        picker.classList.add('active');
+        loadVoices();
+      }
+    }
+
+    async function loadVoices() {
+      var grid = document.getElementById('voice-grid');
+      grid.innerHTML = '';
+      try {
+        var resp = await fetch('/api/voice/preference');
+        if (!resp.ok) throw new Error('Failed');
+        var data = await resp.json();
+        selectedVoice = data.voice_name || 'Aoede';
+        (data.voices || []).forEach(function(v) {
+          var el = document.createElement('div');
+          el.className = 'voice-option' + (v.name === selectedVoice ? ' selected' : '');
+          el.innerHTML = '<div class="voice-option-name">' + escapeHtml(v.name) + '</div>' +
+                         '<div class="voice-option-style">' + escapeHtml(v.style) + '</div>';
+          el.onclick = function() { selectVoice(v.name); };
+          grid.appendChild(el);
+        });
+      } catch(e) {
+        grid.innerHTML = '<div class="history-empty">Failed to load voices</div>';
+      }
+    }
+
+    async function selectVoice(name) {
+      try {
+        var resp = await fetch('/api/voice/preference', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({voice_name: name})
+        });
+        if (resp.ok) {
+          selectedVoice = name;
+          // Update UI selection
+          var options = document.querySelectorAll('.voice-option');
+          options.forEach(function(el) {
+            el.classList.toggle('selected', el.querySelector('.voice-option-name').textContent === name);
+          });
+        }
+      } catch(e) {
+        // silently fail
+      }
+    }
+
+    // Load voice preference on page load (fire-and-forget)
+    fetch('/api/voice/preference').then(function(r) { return r.json(); }).then(function(d) {
+      selectedVoice = d.voice_name || 'Aoede';
+    }).catch(function() {});
+
     // Start idle visualizer on load
     startVisualizer();
   </script>
+
+  <!-- History Panel -->
+  <div id="history-panel">
+    <div class="history-header">
+      <h2>Voice History</h2>
+      <button class="history-close" onclick="toggleHistory()">&times;</button>
+    </div>
+    <div id="history-list"></div>
+    <div id="session-detail">
+      <div class="session-detail-header">
+        <button class="session-back" onclick="backToHistory()">&larr;</button>
+        <span id="session-detail-title"></span>
+      </div>
+      <div id="session-transcript" class="session-transcript"></div>
+    </div>
+  </div>
+
+  <!-- Voice Picker -->
+  <div id="voice-picker">
+    <div class="history-header">
+      <h2>Choose Voice</h2>
+      <button class="history-close" onclick="toggleVoicePicker()">&times;</button>
+    </div>
+    <div id="voice-grid" class="voice-grid"></div>
+  </div>
 </body>
 </html>

@@ -190,3 +190,120 @@ class TestVoiceParseServerMessage:
     def test_unknown_message(self):
         result = _voice_parse_server_message({"somethingWeird": True})
         assert result is None
+
+
+# ── Integration tests (Phase 28-02) ────────────────────────────────────────
+
+import json
+import socket
+import threading
+import urllib.request
+
+from gateway import (
+    _get_gemini_api_key,
+    _voice_session_token_validate,
+    ws_accept_key,
+    ws_recv_frame,
+    ws_send_frame,
+    ws_send_close,
+    WS_OP_TEXT,
+    WS_OP_CLOSE,
+)
+
+
+def _ws_upgrade(sock, host, path="/ws/voice", token=None):
+    """Send HTTP upgrade request to WebSocket endpoint. Returns (key, response_bytes)."""
+    url = path
+    if token:
+        url = f"{path}?token={token}"
+    key = base64.b64encode(os.urandom(16)).decode()
+    request = (
+        f"GET {url} HTTP/1.1\r\n"
+        f"Host: {host}\r\n"
+        f"Upgrade: websocket\r\n"
+        f"Connection: Upgrade\r\n"
+        f"Sec-WebSocket-Key: {key}\r\n"
+        f"Sec-WebSocket-Version: 13\r\n"
+        f"\r\n"
+    ).encode()
+    sock.sendall(request)
+    response = b""
+    while b"\r\n\r\n" not in response:
+        chunk = sock.recv(4096)
+        if not chunk:
+            break
+        response += chunk
+    return key, response
+
+
+class TestVoiceTokenEndpoint:
+    """Integration tests for GET /api/voice/token."""
+
+    def test_token_endpoint_returns_token(self, live_gateway, gateway_module):
+        """With Gemini key in vault, GET /api/voice/token returns 200 with token."""
+        gw = gateway_module
+        with unittest.mock.patch.object(gw, "_get_gemini_api_key", return_value="test-gemini-key"):
+            # also need to patch module-level reference
+            with unittest.mock.patch("gateway._get_gemini_api_key", return_value="test-gemini-key"):
+                req = urllib.request.Request(f"{live_gateway}/api/voice/token")
+                resp = urllib.request.urlopen(req, timeout=5)
+                assert resp.status == 200
+                data = json.loads(resp.read())
+                assert "token" in data
+                assert len(data["token"]) > 0
+                # verify the token is actually valid
+                api_key = _voice_session_token_validate(data["token"])
+                assert api_key == "test-gemini-key"
+
+    def test_token_endpoint_no_gemini_key(self, live_gateway, gateway_module):
+        """Without Gemini key, GET /api/voice/token returns 503."""
+        gw = gateway_module
+        with unittest.mock.patch("gateway._get_gemini_api_key", return_value=None):
+            req = urllib.request.Request(f"{live_gateway}/api/voice/token")
+            try:
+                urllib.request.urlopen(req, timeout=5)
+                assert False, "expected HTTP error"
+            except urllib.error.HTTPError as e:
+                assert e.code == 503
+
+
+class TestWsVoiceAuth:
+    """Integration tests for WebSocket auth gating on /ws/voice."""
+
+    def test_ws_voice_no_token_rejected(self, live_gateway):
+        """Connect to /ws/voice without token, expect 403."""
+        port = int(live_gateway.split(":")[-1])
+        sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+        try:
+            key, response = _ws_upgrade(sock, f"127.0.0.1:{port}")
+            response_str = response.decode()
+            assert "403" in response_str.split("\r\n")[0]
+        finally:
+            sock.close()
+
+    def test_ws_voice_invalid_token_rejected(self, live_gateway):
+        """Connect to /ws/voice with bogus token, expect 403."""
+        port = int(live_gateway.split(":")[-1])
+        sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+        try:
+            key, response = _ws_upgrade(sock, f"127.0.0.1:{port}", token="bogus")
+            response_str = response.decode()
+            assert "403" in response_str.split("\r\n")[0]
+        finally:
+            sock.close()
+
+    def test_ws_voice_valid_token_accepted(self, live_gateway):
+        """Connect to /ws/voice with valid token, expect 101 upgrade."""
+        port = int(live_gateway.split(":")[-1])
+        token = _voice_session_token_create("fake-api-key")
+        sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+        try:
+            with unittest.mock.patch("gateway._gemini_connect", side_effect=ConnectionError("test")):
+                key, response = _ws_upgrade(sock, f"127.0.0.1:{port}", token=token)
+                response_str = response.decode()
+                # should get 101 Switching Protocols (token is valid)
+                assert "101" in response_str.split("\r\n")[0]
+                # connection will close shortly because _gemini_connect fails,
+                # but the 101 proves token auth works
+        finally:
+            sock.close()

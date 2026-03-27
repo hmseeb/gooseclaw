@@ -307,3 +307,134 @@ class TestWsVoiceAuth:
                 # but the 101 proves token auth works
         finally:
             sock.close()
+
+
+# ── Vault write + voice page gating tests (Phase 29-01 RED) ─────────────────
+
+import tempfile
+import yaml
+import requests
+
+# Attempt to import _save_vault_key; it won't exist until Plan 29-02 implements it.
+try:
+    from gateway import _save_vault_key
+except ImportError:
+    _save_vault_key = None
+
+
+class TestVaultWrite:
+    """Tests for _save_vault_key vault write helper (SETUP-04)."""
+
+    @pytest.fixture(autouse=True)
+    def _patch_vault(self, gateway_module, tmp_path):
+        """Patch gateway.VAULT_FILE to a temp path for each test."""
+        self.vault_path = str(tmp_path / "secrets" / "vault.yaml")
+        self._orig_vault = gateway_module.VAULT_FILE
+        gateway_module.VAULT_FILE = self.vault_path
+        yield
+        gateway_module.VAULT_FILE = self._orig_vault
+
+    def test_save_and_read_roundtrip(self, gateway_module):
+        """Save a key to vault and read it back."""
+        if _save_vault_key is None:
+            pytest.skip("_save_vault_key not implemented yet")
+        _save_vault_key("GEMINI_API_KEY", "test-key-123")
+        result = _get_gemini_api_key()
+        assert result == "test-key-123"
+
+    def test_save_overwrites_existing(self, gateway_module):
+        """Saving a key twice overwrites the old value."""
+        if _save_vault_key is None:
+            pytest.skip("_save_vault_key not implemented yet")
+        _save_vault_key("GEMINI_API_KEY", "old")
+        _save_vault_key("GEMINI_API_KEY", "new")
+        result = _get_gemini_api_key()
+        assert result == "new"
+
+    def test_save_preserves_other_keys(self, gateway_module):
+        """Writing one key preserves other existing keys in vault.yaml."""
+        if _save_vault_key is None:
+            pytest.skip("_save_vault_key not implemented yet")
+        # pre-create vault with another key
+        os.makedirs(os.path.dirname(self.vault_path), exist_ok=True)
+        with open(self.vault_path, "w") as f:
+            yaml.dump({"OTHER_KEY": "foo"}, f)
+        _save_vault_key("GEMINI_API_KEY", "bar")
+        with open(self.vault_path) as f:
+            data = yaml.safe_load(f)
+        assert data["OTHER_KEY"] == "foo"
+        assert data["GEMINI_API_KEY"] == "bar"
+
+    def test_save_creates_directory(self, gateway_module, tmp_path):
+        """_save_vault_key creates parent directories if they don't exist."""
+        if _save_vault_key is None:
+            pytest.skip("_save_vault_key not implemented yet")
+        deep_path = str(tmp_path / "deep" / "nested" / "vault.yaml")
+        gateway_module.VAULT_FILE = deep_path
+        _save_vault_key("GEMINI_API_KEY", "deep-key")
+        assert os.path.exists(deep_path)
+        with open(deep_path) as f:
+            data = yaml.safe_load(f)
+        assert data["GEMINI_API_KEY"] == "deep-key"
+
+
+class TestVoicePageGating:
+    """HTTP-level tests for /voice route gating (SETUP-02, UI-07)."""
+
+    @pytest.fixture(autouse=True)
+    def _patch_vault_file(self, gateway_module, live_gateway, tmp_path):
+        """Patch VAULT_FILE to test data secrets dir for HTTP tests."""
+        # The live_gateway fixture creates DATA_DIR but VAULT_FILE is computed
+        # at import time. Patch it to the test data's secrets/vault.yaml.
+        data_dir = gateway_module.DATA_DIR
+        self.vault_path = os.path.join(data_dir, "secrets", "vault.yaml")
+        self._orig_vault = gateway_module.VAULT_FILE
+        gateway_module.VAULT_FILE = self.vault_path
+        # Ensure secrets dir exists and vault is empty
+        os.makedirs(os.path.dirname(self.vault_path), exist_ok=True)
+        with open(self.vault_path, "w") as f:
+            f.write("")
+        yield
+        gateway_module.VAULT_FILE = self._orig_vault
+
+    def test_voice_requires_auth(self, live_gateway, gateway_module):
+        """GET /voice without auth cookie should redirect to /login."""
+        # Write setup so auth is required
+        gw = gateway_module
+        hashed = gw.hash_token("testpassword")
+        setup = {"web_auth_token_hash": hashed, "setup_complete": True, "provider_type": "openai"}
+        os.makedirs(os.path.dirname(gw.SETUP_FILE), exist_ok=True)
+        with open(gw.SETUP_FILE, "w") as f:
+            json.dump(setup, f)
+        resp = requests.get(f"{live_gateway}/voice", allow_redirects=False)
+        assert resp.status_code == 302
+        assert "/login" in resp.headers.get("Location", "")
+
+    def test_voice_no_key_shows_gate(self, live_gateway, auth_session, gateway_module):
+        """GET /voice with auth but no Gemini key shows gate page."""
+        # Ensure vault has no GEMINI_API_KEY
+        with open(self.vault_path, "w") as f:
+            f.write("")
+        resp = requests.get(
+            f"{live_gateway}/voice",
+            headers=auth_session,
+            allow_redirects=False,
+        )
+        assert resp.status_code == 200
+        body = resp.text
+        assert "Configure Gemini" in body or "/setup" in body
+
+    def test_voice_with_key_serves_page(self, live_gateway, auth_session, gateway_module):
+        """GET /voice with auth and Gemini key returns 200 with content."""
+        # Write GEMINI_API_KEY to vault
+        with open(self.vault_path, "w") as f:
+            yaml.dump({"GEMINI_API_KEY": "test-gemini-key-abc"}, f)
+        resp = requests.get(
+            f"{live_gateway}/voice",
+            headers=auth_session,
+            allow_redirects=False,
+        )
+        assert resp.status_code == 200
+        # Should serve voice.html or "coming soon" placeholder (voice.html may not exist)
+        body = resp.text
+        assert "Voice" in body or "voice" in body

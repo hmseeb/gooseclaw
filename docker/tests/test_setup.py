@@ -2,7 +2,10 @@
 
 import json
 import os
+
+import pytest
 import requests
+import yaml
 
 
 def _setup_auth(gateway_module, password="testpassword"):
@@ -124,3 +127,114 @@ class TestSetupSave:
             with open(gw.SETUP_FILE) as f:
                 saved = json.load(f)
             assert saved.get("provider_type") == "openai"
+
+
+class TestGeminiKeyInSetup:
+    """Tests for Gemini API key handling in setup save/config (SETUP-01)."""
+
+    @pytest.fixture(autouse=True)
+    def _patch_vault_file(self, gateway_module, live_gateway):
+        """Patch VAULT_FILE to test data secrets dir for vault read/write."""
+        gw = gateway_module
+        data_dir = gw.DATA_DIR
+        self.vault_path = os.path.join(data_dir, "secrets", "vault.yaml")
+        self._orig_vault = gw.VAULT_FILE
+        gw.VAULT_FILE = self.vault_path
+        # Ensure secrets dir exists, vault is empty
+        os.makedirs(os.path.dirname(self.vault_path), exist_ok=True)
+        with open(self.vault_path, "w") as f:
+            f.write("")
+        yield
+        gw.VAULT_FILE = self._orig_vault
+
+    def test_save_with_gemini_key_writes_vault(self, live_gateway, auth_session, gateway_module):
+        """POST /api/setup/save with gemini_api_key writes it to vault.yaml."""
+        resp = requests.post(
+            f"{live_gateway}/api/setup/save",
+            json={
+                "provider_type": "openai",
+                "api_key": "sk-test-key",
+                "web_auth_token": "testpassword",
+                "gemini_api_key": "AIzaSy-test-key-123",
+            },
+            headers=auth_session,
+        )
+        assert resp.status_code == 200
+        # Read vault and check GEMINI_API_KEY is present
+        with open(self.vault_path) as f:
+            vault_data = yaml.safe_load(f) or {}
+        assert vault_data.get("GEMINI_API_KEY") == "AIzaSy-test-key-123"
+
+    def test_save_without_gemini_key_skips_vault(self, live_gateway, auth_session, gateway_module):
+        """POST /api/setup/save without gemini_api_key does not write to vault."""
+        resp = requests.post(
+            f"{live_gateway}/api/setup/save",
+            json={
+                "provider_type": "openai",
+                "api_key": "sk-test-key",
+                "web_auth_token": "testpassword",
+            },
+            headers=auth_session,
+        )
+        assert resp.status_code == 200
+        with open(self.vault_path) as f:
+            vault_data = yaml.safe_load(f) or {}
+        assert "GEMINI_API_KEY" not in vault_data
+
+    def test_get_config_includes_gemini_key_set_true(self, live_gateway, auth_session, gateway_module):
+        """GET /api/setup/config includes gemini_api_key_set: true when key is in vault."""
+        # Write key to vault
+        with open(self.vault_path, "w") as f:
+            yaml.dump({"GEMINI_API_KEY": "test-key-set"}, f)
+        resp = requests.get(
+            f"{live_gateway}/api/setup/config",
+            headers=auth_session,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        config = data.get("config", data)
+        assert config.get("gemini_api_key_set") is True
+
+    def test_get_config_includes_gemini_key_set_false(self, live_gateway, auth_session, gateway_module):
+        """GET /api/setup/config includes gemini_api_key_set: false when no key."""
+        # Ensure vault has no GEMINI_API_KEY
+        with open(self.vault_path, "w") as f:
+            f.write("")
+        resp = requests.get(
+            f"{live_gateway}/api/setup/config",
+            headers=auth_session,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        config = data.get("config", data)
+        assert config.get("gemini_api_key_set") is False
+
+    def test_reconfigure_blank_gemini_keeps_existing(self, live_gateway, auth_session, gateway_module):
+        """Reconfigure with blank gemini_api_key preserves existing vault key."""
+        # First save with a real key
+        requests.post(
+            f"{live_gateway}/api/setup/save",
+            json={
+                "provider_type": "openai",
+                "api_key": "sk-test-key",
+                "web_auth_token": "testpassword",
+                "gemini_api_key": "AIzaSy-original-key",
+            },
+            headers=auth_session,
+        )
+        # Now reconfigure with blank gemini key
+        resp = requests.post(
+            f"{live_gateway}/api/setup/save",
+            json={
+                "provider_type": "openai",
+                "api_key": "sk-test-key",
+                "web_auth_token": "testpassword",
+                "gemini_api_key": "",
+            },
+            headers=auth_session,
+        )
+        assert resp.status_code == 200
+        # Vault should still have the original key
+        with open(self.vault_path) as f:
+            vault_data = yaml.safe_load(f) or {}
+        assert vault_data.get("GEMINI_API_KEY") == "AIzaSy-original-key"

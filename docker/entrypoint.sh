@@ -690,9 +690,11 @@ if [ -d /data/mem0/chroma ] && [ ! -f /data/mem0/.chroma_reset_v1 ]; then
     touch /data/mem0/.chroma_reset_v1
 fi
 
-# kuzu needs a directory for persistent storage
-mkdir -p /data/knowledge/chroma /data/knowledge/kuzu /data/mem0/chroma /data/hf_cache
-chown -R gooseclaw:gooseclaw /data/knowledge /data/mem0 /data/hf_cache
+# kuzu needs a directory for persistent storage, chroma cache avoids 79MB re-download
+mkdir -p /data/knowledge/chroma /data/knowledge/kuzu /data/mem0/chroma /data/hf_cache /data/chroma_cache
+# persist chromadb model cache on volume (prevents re-download on every restart)
+ln -sfn /data/chroma_cache /home/gooseclaw/.cache/chroma 2>/dev/null || true
+chown -R gooseclaw:gooseclaw /data/knowledge /data/mem0 /data/hf_cache /data/chroma_cache
 
 # Pre-download sentence-transformers model so MCP subprocess finds it cached.
 # Runs once, persists on volume across deploys.

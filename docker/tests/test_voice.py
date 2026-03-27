@@ -438,3 +438,80 @@ class TestVoicePageGating:
         # Should serve voice.html or "coming soon" placeholder (voice.html may not exist)
         body = resp.text
         assert "Voice" in body or "voice" in body
+
+
+# ── CSP and voice.html file tests (Phase 30-01) ─────────────────────────────
+
+
+class TestVoiceCSP:
+    """Test that CSP header includes worker-src blob: when serving voice.html."""
+
+    @pytest.fixture(autouse=True)
+    def _patch_vault_file(self, gateway_module, live_gateway, tmp_path):
+        """Patch VAULT_FILE to test data secrets dir for HTTP tests."""
+        data_dir = gateway_module.DATA_DIR
+        self.vault_path = os.path.join(data_dir, "secrets", "vault.yaml")
+        self._orig_vault = gateway_module.VAULT_FILE
+        gateway_module.VAULT_FILE = self.vault_path
+        os.makedirs(os.path.dirname(self.vault_path), exist_ok=True)
+        yield
+        gateway_module.VAULT_FILE = self._orig_vault
+
+    def test_csp_includes_worker_src_blob(self, live_gateway, auth_session, gateway_module):
+        """CSP header must include worker-src blob: for AudioWorklet support."""
+        # Write Gemini key to vault so voice.html is served
+        with open(self.vault_path, "w") as f:
+            yaml.dump({"GEMINI_API_KEY": "test-csp-key"}, f)
+        resp = requests.get(
+            f"{live_gateway}/voice",
+            headers=auth_session,
+            allow_redirects=False,
+        )
+        assert resp.status_code == 200
+        csp = resp.headers.get("Content-Security-Policy", "")
+        assert "worker-src blob:" in csp, f"CSP missing worker-src blob:, got: {csp}"
+
+
+class TestVoiceDashboardFile:
+    """Test that voice.html exists and meets single-file constraints."""
+
+    def test_voice_html_exists(self):
+        voice_path = os.path.join(os.path.dirname(__file__), "..", "voice.html")
+        assert os.path.exists(voice_path), "voice.html not found in docker/"
+
+    def test_voice_html_valid_doctype(self):
+        voice_path = os.path.join(os.path.dirname(__file__), "..", "voice.html")
+        with open(voice_path) as f:
+            content = f.read()
+        assert content.strip().startswith("<!DOCTYPE html>"), "voice.html must start with <!DOCTYPE html>"
+
+    def test_voice_html_no_external_scripts(self):
+        voice_path = os.path.join(os.path.dirname(__file__), "..", "voice.html")
+        with open(voice_path) as f:
+            content = f.read()
+        assert '<script src=' not in content, "voice.html must not have external script tags"
+
+    def test_voice_html_no_external_styles(self):
+        voice_path = os.path.join(os.path.dirname(__file__), "..", "voice.html")
+        with open(voice_path) as f:
+            content = f.read()
+        assert '<link rel="stylesheet" href=' not in content, "voice.html must not have external stylesheets"
+
+    def test_voice_html_contains_state_machine(self):
+        voice_path = os.path.join(os.path.dirname(__file__), "..", "voice.html")
+        with open(voice_path) as f:
+            content = f.read()
+        assert "STATE" in content, "voice.html must contain STATE machine"
+
+    def test_voice_html_contains_websocket(self):
+        voice_path = os.path.join(os.path.dirname(__file__), "..", "voice.html")
+        with open(voice_path) as f:
+            content = f.read()
+        assert "WebSocket" in content, "voice.html must reference WebSocket"
+
+    def test_voice_html_contains_getusermedia(self):
+        voice_path = os.path.join(os.path.dirname(__file__), "..", "voice.html")
+        with open(voice_path) as f:
+            content = f.read()
+        assert "getUserMedia" in content or "getusermedia" in content.lower(), \
+            "voice.html must reference getUserMedia"

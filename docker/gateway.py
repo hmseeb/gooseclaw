@@ -9879,6 +9879,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                 "style-src 'self' 'unsafe-inline'; "
                 "connect-src 'self' wss:; "
                 "media-src 'self' blob:; "
+                "worker-src blob:; "
                 "frame-ancestors 'none'"
             )
             self.send_header("Content-Security-Policy", csp)

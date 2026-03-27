@@ -110,7 +110,9 @@
   2. When Gemini sends a GoAway message at its 10-minute limit, the session auto-reconnects using a resumption handle without the user noticing
   3. Context window compression is enabled so long conversations don't hit the 15-minute audio ceiling
   4. Gateway generates session-scoped tokens for WebSocket auth so the Gemini API key never reaches the browser
-**Plans**: TBD
+**Plans**: 2 plans
+- [ ] 28-01-PLAN.md -- TDD: Voice session tokens, Gemini config builder, audio transcoding, message parser
+- [ ] 28-02-PLAN.md -- Gemini relay (replace echo loop), token REST endpoint, GoAway reconnect, integration tests
 
 ### Phase 29: Setup Wizard + Dashboard Gating
 **Goal**: Users can add their Gemini API key through the existing setup wizard, and the voice dashboard is only accessible when a valid key is configured
@@ -188,7 +190,7 @@ Note: Phases 28 and 29 can execute in parallel (both depend only on 27). Phase 3
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 27. WebSocket Infrastructure | 2/2 | Complete    | 2026-03-27 |
-| 28. Gemini Live API Integration | 0/TBD | Not started | - |
+| 28. Gemini Live API Integration | 1/2 | In Progress|  |
 | 29. Setup Wizard + Dashboard Gating | 0/TBD | Not started | - |
 | 30. Voice Dashboard | 0/TBD | Not started | - |
 | 31. Mobile + Keyboard UX | 0/TBD | Not started | - |

@@ -8771,6 +8771,108 @@ def ws_start_ping_loop(sock, interval=25, mask=False):
     return t
 
 
+# ── websocket connection management ─────────────────────────────────────────
+
+_ws_connections = {}          # id -> {"sock": socket, "created": float, "ping_thread": Thread}
+_ws_connections_lock = threading.Lock()
+_WS_MAX_CONCURRENT = 2       # single-user app, cap to prevent thread exhaustion
+
+_ws_log = logging.getLogger("ws")
+
+
+def _ws_register(conn_id, sock, ping_thread):
+    """Add connection to tracking. If at cap, close oldest connection first."""
+    with _ws_connections_lock:
+        if len(_ws_connections) >= _WS_MAX_CONCURRENT:
+            # close oldest connection
+            oldest_id = min(_ws_connections, key=lambda k: _ws_connections[k]["created"])
+            oldest = _ws_connections.pop(oldest_id)
+            try:
+                ws_send_close(oldest["sock"], code=1001, reason="replaced")
+            except Exception:
+                pass
+            try:
+                oldest["sock"].close()
+            except Exception:
+                pass
+            _ws_log.info("Evicted oldest WebSocket connection", extra={"event": "ws_evict", "conn_id": oldest_id})
+        _ws_connections[conn_id] = {
+            "sock": sock,
+            "created": time.time(),
+            "ping_thread": ping_thread,
+        }
+
+
+def _ws_unregister(conn_id):
+    """Remove connection from tracking. No error if not found."""
+    with _ws_connections_lock:
+        _ws_connections.pop(conn_id, None)
+
+
+def _ws_active_count():
+    """Return number of active WebSocket connections."""
+    with _ws_connections_lock:
+        return len(_ws_connections)
+
+
+def ws_client_connect(host, path, query_params=None):
+    """Open outbound TLS WebSocket connection. Returns ssl-wrapped socket."""
+    ctx = ssl.create_default_context()
+    raw_sock = socket.create_connection((host, 443), timeout=10)
+    sock = ctx.wrap_socket(raw_sock, server_hostname=host)
+
+    # build upgrade request
+    url = path
+    if query_params:
+        url = path + "?" + urllib.parse.urlencode(query_params)
+
+    client_key = base64.b64encode(os.urandom(16)).decode()
+    request = (
+        f"GET {url} HTTP/1.1\r\n"
+        f"Host: {host}\r\n"
+        f"Upgrade: websocket\r\n"
+        f"Connection: Upgrade\r\n"
+        f"Sec-WebSocket-Key: {client_key}\r\n"
+        f"Sec-WebSocket-Version: 13\r\n"
+        f"\r\n"
+    ).encode()
+    sock.sendall(request)
+
+    # read response until end of headers
+    response = b""
+    while b"\r\n\r\n" not in response:
+        chunk = sock.recv(4096)
+        if not chunk:
+            sock.close()
+            raise ConnectionError("connection closed during handshake")
+        response += chunk
+
+    # verify 101
+    status_line = response.split(b"\r\n")[0].decode()
+    if "101" not in status_line:
+        sock.close()
+        raise ConnectionError(f"expected 101, got: {status_line}")
+
+    # verify accept key
+    expected_accept = ws_accept_key(client_key)
+    headers_raw = response.split(b"\r\n\r\n")[0].decode()
+    accept_found = False
+    for line in headers_raw.split("\r\n")[1:]:
+        if ":" in line:
+            name, value = line.split(":", 1)
+            if name.strip().lower() == "sec-websocket-accept":
+                if value.strip() != expected_accept:
+                    sock.close()
+                    raise ConnectionError(f"accept key mismatch: got {value.strip()}, expected {expected_accept}")
+                accept_found = True
+                break
+    if not accept_found:
+        sock.close()
+        raise ConnectionError("missing Sec-WebSocket-Accept header")
+
+    return sock
+
+
 # ── HTTP handler ────────────────────────────────────────────────────────────
 
 class GatewayHandler(http.server.BaseHTTPRequestHandler):
@@ -8804,6 +8906,11 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
         # rate-limit all /api/* requests; skip static /setup pages and proxy
         if path.startswith("/api/") and not self._check_rate_limit(api_limiter):
+            return
+        # WebSocket upgrade detection
+        if (self.headers.get("Upgrade", "").lower() == "websocket"
+                and path == "/ws/voice"):
+            self.handle_voice_ws()
             return
         if path == "/api/health":
             self.handle_health()
@@ -9035,6 +9142,70 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             return "healthy" if resp.status == 200 else f"unhealthy (HTTP {resp.status})"
         except Exception:
             return "unreachable"
+
+    def handle_voice_ws(self):
+        """Upgrade HTTP to WebSocket and enter echo loop (Phase 27 scaffold)."""
+        # validate upgrade header
+        if self.headers.get("Upgrade", "").lower() != "websocket":
+            self.send_error(400, "Expected WebSocket upgrade")
+            return
+
+        # validate key
+        client_key = self.headers.get("Sec-WebSocket-Key")
+        if not client_key:
+            self.send_error(400, "Missing Sec-WebSocket-Key")
+            return
+
+        # origin check (warn but don't reject — Railway domain matching is complex)
+        origin = self.headers.get("Origin", "")
+        host = self.headers.get("Host", "")
+        if origin and host and origin.split("//")[-1].split("/")[0] != host:
+            _ws_log.warning("Origin mismatch", extra={"event": "ws_origin_mismatch", "origin": origin, "host": host})
+
+        # send 101 switching protocols
+        accept = ws_accept_key(client_key)
+        self.send_response(101, "Switching Protocols")
+        self.send_header("Upgrade", "websocket")
+        self.send_header("Connection", "Upgrade")
+        self.send_header("Sec-WebSocket-Accept", accept)
+        self.end_headers()
+        self.wfile.flush()
+
+        # prevent BaseHTTPRequestHandler from reading more HTTP
+        self.close_connection = True
+
+        # get raw socket and configure
+        sock = self.request
+        sock.settimeout(60)
+
+        conn_id = uuid.uuid4().hex[:8]
+        ping_thread = ws_start_ping_loop(sock, interval=25)
+        _ws_register(conn_id, sock, ping_thread)
+
+        _ws_log.info("WebSocket connected", extra={"event": "ws_open", "conn_id": conn_id})
+
+        try:
+            while True:
+                opcode, payload = ws_recv_frame(sock)
+                if opcode is None or opcode == WS_OP_CLOSE:
+                    break
+                if opcode == WS_OP_PING:
+                    ws_send_frame(sock, WS_OP_PONG, payload)
+                    continue
+                if opcode == WS_OP_PONG:
+                    continue
+                # Echo text and binary frames back (Phase 28 replaces with Gemini relay)
+                if opcode in (WS_OP_TEXT, WS_OP_BINARY):
+                    ws_send_frame(sock, opcode, payload)
+        except (ConnectionError, OSError, socket.timeout):
+            pass
+        finally:
+            _ws_unregister(conn_id)
+            try:
+                ws_send_close(sock)
+            except Exception:
+                pass
+            _ws_log.info("WebSocket closed", extra={"event": "ws_close", "conn_id": conn_id})
 
     def handle_health(self):
         """GET /api/health — deep health check: liveness + goosed subprocess status."""

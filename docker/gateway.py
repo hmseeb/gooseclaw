@@ -9132,14 +9132,14 @@ def _voice_build_tool_response(call_id, call_name, result):
     }
 
 
-def _gemini_connect(api_key, resumption_handle=None):
+def _gemini_connect(api_key, resumption_handle=None, tools=None):
     """Open WebSocket to Gemini Live API and send setup config. Returns socket."""
     sock = ws_client_connect(
         host=GEMINI_LIVE_HOST,
         path=GEMINI_LIVE_PATH,
         query_params={"key": api_key}
     )
-    config = _gemini_build_config(resumption_handle=resumption_handle)
+    config = _gemini_build_config(resumption_handle=resumption_handle, tools=tools)
     ws_send_frame(sock, WS_OP_TEXT, json.dumps(config).encode(), mask=True)
     return sock
 
@@ -9209,11 +9209,55 @@ def _voice_relay_gemini_to_browser(browser_sock, session_state, stop_event):
                     ws_send_frame(browser_sock, WS_OP_TEXT,
                         json.dumps(parsed).encode())
                 elif parsed["type"] == "tool_call":
-                    ws_send_frame(browser_sock, WS_OP_TEXT,
-                        json.dumps(parsed).encode())
+                    tool_data = parsed["data"]
+                    for fc in tool_data.get("functionCalls", []):
+                        call_id = fc.get("id", "")
+                        call_name = fc.get("name", "")
+                        call_args = fc.get("args", {})
+                        original_name = session_state.get("tool_name_map", {}).get(call_name, call_name)
+                        # Notify browser: tool running
+                        ws_send_frame(browser_sock, WS_OP_TEXT,
+                            json.dumps({"type": "tool_status", "name": call_name, "status": "running"}).encode())
+
+                        def _exec_tool(cid, cname, cargs, oname, sid):
+                            try:
+                                result = _voice_execute_tool(cname, cargs, sid, oname)
+                                response_msg = _voice_build_tool_response(cid, cname, result)
+                                with session_state["_lock"]:
+                                    gs2 = session_state["gemini_sock"]
+                                    if gs2:
+                                        ws_send_frame(gs2, WS_OP_TEXT,
+                                            json.dumps(response_msg).encode(), mask=True)
+                                summary = result.get("result", result.get("error", ""))[:200]
+                                status = "done" if "result" in result else "error"
+                                ws_send_frame(browser_sock, WS_OP_TEXT,
+                                    json.dumps({"type": "tool_status", "name": cname,
+                                                "status": status, "result": summary}).encode())
+                            except Exception as e:
+                                _voice_log.error(f"Tool exec error: {e}")
+                                err_response = _voice_build_tool_response(cid, cname, {"error": str(e)})
+                                try:
+                                    with session_state["_lock"]:
+                                        gs2 = session_state["gemini_sock"]
+                                        if gs2:
+                                            ws_send_frame(gs2, WS_OP_TEXT,
+                                                json.dumps(err_response).encode(), mask=True)
+                                except Exception:
+                                    pass
+                                ws_send_frame(browser_sock, WS_OP_TEXT,
+                                    json.dumps({"type": "tool_status", "name": cname,
+                                                "status": "error", "result": str(e)[:200]}).encode())
+
+                        t = threading.Thread(
+                            target=_exec_tool,
+                            args=(call_id, call_name, call_args, original_name,
+                                  session_state.get("tool_session_id")),
+                            daemon=True)
+                        t.start()
                 elif parsed["type"] == "tool_cancelled":
                     ws_send_frame(browser_sock, WS_OP_TEXT,
-                        json.dumps(parsed).encode())
+                        json.dumps({"type": "tool_status", "name": "tool", "status": "cancelled"}).encode())
+                    _voice_log.info(f"Tool calls cancelled: {parsed.get('ids', [])}")
                 elif parsed["type"] == "audio":
                     # Extract and forward audio chunks as binary PCM
                     chunks = _voice_extract_audio_chunks(msg)
@@ -9590,10 +9634,21 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
 
         _voice_log.info("Voice WebSocket connected", extra={"event": "voice_open", "conn_id": conn_id})
 
+        # discover MCP tools from goosed
+        tools, tool_name_map = _discover_voice_tools()
+        tool_session_id = None
+        if tools:
+            _voice_log.info(f"Discovered {len(tools)} voice tools: {[t['name'] for t in tools]}")
+            tool_session_id = _create_goose_session()
+            if not tool_session_id:
+                _voice_log.warning("Tool session creation failed, tools disabled for this voice session")
+                tools = []
+                tool_name_map = {}
+
         gemini_sock = None
         try:
             # connect to Gemini Live API
-            gemini_sock = _gemini_connect(api_key)
+            gemini_sock = _gemini_connect(api_key, tools=tools if tools else None)
             ws_start_ping_loop(gemini_sock, interval=25, mask=True)
 
             # session state shared between relay threads
@@ -9601,6 +9656,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                 "gemini_sock": gemini_sock,
                 "resumption_handle": None,
                 "api_key": api_key,
+                "tool_session_id": tool_session_id,
+                "tool_name_map": tool_name_map,
                 "_lock": threading.Lock(),
             }
 

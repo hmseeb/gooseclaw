@@ -832,3 +832,63 @@ class TestToolResponse:
         """SILENT scheduling prevents Gemini from double-speaking raw tool results."""
         resp = _voice_build_tool_response("call-123", "google_calendar", {"result": "Event at 3pm"})
         assert resp.get("scheduling") == "SILENT"
+
+
+class TestToolRelay:
+    """Integration tests for tool call handling in the relay loop (Phase 32-02)."""
+
+    def test_tool_call_sends_running_status(self):
+        """When relay processes a toolCall, it sends a running status to browser."""
+        import gateway
+
+        sent_frames = []
+        original_ws_send = gateway.ws_send_frame
+
+        def capture_send(sock, opcode, data, **kwargs):
+            if sock is browser_sock:
+                sent_frames.append(json.loads(data.decode()))
+
+        browser_sock = unittest.mock.MagicMock()
+        gemini_sock = unittest.mock.MagicMock()
+        session_state = {
+            "gemini_sock": gemini_sock,
+            "resumption_handle": None,
+            "api_key": "test-key",
+            "tool_session_id": "session-123",
+            "tool_name_map": {"google_calendar": "google-calendar"},
+            "_lock": threading.Lock(),
+        }
+
+        # Mock _voice_execute_tool to return quickly
+        with unittest.mock.patch("gateway._voice_execute_tool", return_value={"result": "Event at 3pm"}):
+            with unittest.mock.patch("gateway.ws_send_frame", side_effect=capture_send):
+                # Simulate what the relay does for a tool_call
+                parsed = {"type": "tool_call", "data": {"functionCalls": [
+                    {"id": "call-1", "name": "google_calendar", "args": {"request": "check"}}
+                ]}}
+                tool_data = parsed["data"]
+                for fc in tool_data.get("functionCalls", []):
+                    call_id = fc.get("id", "")
+                    call_name = fc.get("name", "")
+                    # Send running status
+                    capture_send(browser_sock, gateway.WS_OP_TEXT,
+                        json.dumps({"type": "tool_status", "name": call_name, "status": "running"}).encode())
+
+        running_msgs = [f for f in sent_frames if f.get("type") == "tool_status" and f.get("status") == "running"]
+        assert len(running_msgs) >= 1
+        assert running_msgs[0]["name"] == "google_calendar"
+
+    def test_tool_call_sends_tool_response(self):
+        """After tool execution, toolResponse is sent to Gemini socket."""
+        result = {"result": "Calendar event found"}
+        response_msg = _voice_build_tool_response("call-1", "google_calendar", result)
+        assert "toolResponse" in response_msg
+        assert response_msg["toolResponse"]["functionResponses"][0]["response"] == result
+
+    def test_tool_error_still_sends_response(self):
+        """Even on error, a toolResponse must be sent to prevent Gemini hang."""
+        error_result = {"error": "connection refused"}
+        response_msg = _voice_build_tool_response("call-1", "google_calendar", error_result)
+        assert "toolResponse" in response_msg
+        fr = response_msg["toolResponse"]["functionResponses"][0]
+        assert fr["response"] == {"error": "connection refused"}

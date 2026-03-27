@@ -8873,6 +8873,125 @@ def ws_client_connect(host, path, query_params=None):
     return sock
 
 
+# ── gemini live api ─────────────────────────────────────────────────────────
+
+GEMINI_LIVE_HOST = "generativelanguage.googleapis.com"
+GEMINI_LIVE_PATH = "/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
+
+_voice_tokens = {}  # token -> {"created": float, "api_key": str}
+_voice_tokens_lock = threading.Lock()
+_VOICE_TOKEN_TTL = 300  # 5 minutes
+
+
+def _voice_session_token_create(api_key):
+    """Create a short-lived session token that maps to an API key."""
+    token = secrets.token_urlsafe(32)
+    with _voice_tokens_lock:
+        now = time.time()
+        expired = [k for k, v in _voice_tokens.items() if now - v["created"] > _VOICE_TOKEN_TTL]
+        for k in expired:
+            del _voice_tokens[k]
+        _voice_tokens[token] = {"created": now, "api_key": api_key}
+    return token
+
+
+def _voice_session_token_validate(token):
+    """Validate token and return associated API key, or None if invalid/expired."""
+    with _voice_tokens_lock:
+        entry = _voice_tokens.get(token)
+        if not entry:
+            return None
+        if time.time() - entry["created"] > _VOICE_TOKEN_TTL:
+            del _voice_tokens[token]
+            return None
+        return entry["api_key"]
+
+
+def _gemini_build_config(resumption_handle=None, voice_name="Aoede"):
+    """Build Gemini Live API setup config JSON."""
+    return {
+        "config": {
+            "model": "models/gemini-3.1-flash-live-preview",
+            "generationConfig": {
+                "responseModalities": ["AUDIO"],
+                "speechConfig": {
+                    "voiceConfig": {
+                        "prebuiltVoiceConfig": {
+                            "voiceName": voice_name
+                        }
+                    }
+                }
+            },
+            "systemInstruction": {
+                "parts": [{"text": "You are a helpful AI assistant."}]
+            },
+            "sessionResumption": {
+                "handle": resumption_handle
+            },
+            "contextWindowCompression": {
+                "slidingWindow": {}
+            },
+            "inputAudioTranscription": {},
+            "outputAudioTranscription": {},
+            "realtimeInputConfig": {
+                "automaticActivityDetection": {
+                    "disabled": False
+                }
+            }
+        }
+    }
+
+
+def _voice_pcm_to_gemini_json(pcm_bytes):
+    """Convert raw PCM bytes to Gemini realtimeInput JSON format."""
+    return {
+        "realtimeInput": {
+            "audio": {
+                "data": base64.b64encode(pcm_bytes).decode(),
+                "mimeType": "audio/pcm;rate=16000"
+            }
+        }
+    }
+
+
+def _voice_extract_audio_chunks(server_content_msg):
+    """Extract raw PCM audio bytes from Gemini serverContent message."""
+    chunks = []
+    content = server_content_msg.get("serverContent", {})
+    model_turn = content.get("modelTurn", {})
+    for part in model_turn.get("parts", []):
+        inline = part.get("inlineData", {})
+        if inline.get("data"):
+            chunks.append(base64.b64decode(inline["data"]))
+    return chunks
+
+
+def _voice_parse_server_message(msg):
+    """Classify a Gemini Live API server message. Returns dict with type or None."""
+    if "setupComplete" in msg:
+        return {"type": "ready"}
+    if "sessionResumptionUpdate" in msg:
+        update = msg["sessionResumptionUpdate"]
+        return {"type": "resumption_update", "handle": update.get("newHandle")}
+    if "goAway" in msg:
+        return {"type": "goaway"}
+    if "serverContent" in msg:
+        content = msg["serverContent"]
+        if content.get("interrupted"):
+            return {"type": "interrupted"}
+        if content.get("outputTranscription"):
+            return {"type": "transcript", "speaker": "ai", "text": content["outputTranscription"]["text"]}
+        if content.get("inputTranscription"):
+            return {"type": "transcript", "speaker": "user", "text": content["inputTranscription"]["text"]}
+        # audio-only serverContent handled by _voice_extract_audio_chunks
+        return {"type": "audio"}
+    if "toolCall" in msg:
+        return {"type": "tool_call", "data": msg["toolCall"]}
+    if "toolCallCancellation" in msg:
+        return {"type": "tool_cancelled", "ids": msg["toolCallCancellation"].get("ids", [])}
+    return None
+
+
 # ── HTTP handler ────────────────────────────────────────────────────────────
 
 class GatewayHandler(http.server.BaseHTTPRequestHandler):

@@ -1,124 +1,117 @@
-# Requirements: GooseClaw v5.0 mem0 Memory Layer
+# Requirements: GooseClaw v6.0 Voice Dashboard
 
-**Defined:** 2026-03-20
+**Defined:** 2026-03-27
 **Core Value:** A user with zero DevOps knowledge can deploy and configure GooseClaw correctly on the first try
 
-## v5.0 Requirements
+## v6.0 Requirements
 
-### Memory MCP Extension
+### Voice Pipeline
 
-- [x] **MEM-01**: Bot can store memories from conversations via `memory_add` MCP tool
-- [x] **MEM-02**: Bot can search memories semantically via `memory_search` MCP tool
-- [x] **MEM-03**: Bot can delete specific memories via `memory_delete` MCP tool
-- [x] **MEM-04**: Bot can list all memories for a user via `memory_list` MCP tool
-- [x] **MEM-05**: Bot can view memory evolution via `memory_history` MCP tool
-- [x] **MEM-06**: mem0 MCP server runs as stdio extension registered in config.yaml
+- [ ] **VOICE-01**: User can open voice dashboard (voice.html) in any modern browser on phone or desktop
+- [ ] **VOICE-02**: Browser establishes WebSocket connection to gateway.py which proxies to Gemini Live API
+- [ ] **VOICE-03**: User can tap a push-to-talk button to start speaking, audio streams in real-time to Gemini
+- [ ] **VOICE-04**: User hears AI responses played back as streaming audio chunks (not buffered full response)
+- [ ] **VOICE-05**: User can interrupt the AI mid-sentence (barge-in) and AI stops speaking and listens
+- [ ] **VOICE-06**: Voice Activity Detection automatically detects when user stops speaking (Gemini built-in VAD)
+- [ ] **VOICE-07**: User sees live transcript of both their speech and AI responses as scrolling chat
+- [ ] **VOICE-08**: User sees clear connection state indicators (disconnected, connecting, listening, thinking, speaking)
+- [ ] **VOICE-09**: User gets clear error messages for mic denied, WebSocket drop, API errors, quota exceeded
+- [ ] **VOICE-10**: WebSocket proxy sends ping/pong keepalives to survive Railway's 10-min timeout
+- [ ] **VOICE-11**: Session handles Gemini's connection limits via context window compression and session resumption
 
-### Memory Configuration
+### Dashboard UI
 
-- [x] **CFG-01**: mem0 uses ChromaDB as vector store (existing, zero new infra)
-- [x] **CFG-02**: mem0 LLM extraction reuses user's existing provider from vault/setup.json
-- [x] **CFG-03**: mem0 extraction routes to a cheap model automatically (not user's main model)
-- [x] **CFG-04**: Shared config module builds mem0 config from environment variables
+- [ ] **UI-01**: Voice dashboard is a single self-contained HTML file (voice.html) with no build tooling
+- [ ] **UI-02**: Voice visualizer (reactive orb/waveform) responds to audio input/output volume in real-time
+- [ ] **UI-03**: Spacebar hold-to-talk, Escape to disconnect keyboard shortcuts work on desktop
+- [ ] **UI-04**: User can type messages in same interface when voice isn't convenient (text-to-voice switching)
+- [ ] **UI-05**: Dashboard layout is mobile-first, works great on phone browsers with touch-friendly controls
+- [ ] **UI-06**: Screen stays awake during active voice session on mobile (Screen Wake Lock API)
+- [ ] **UI-07**: Dashboard is only accessible when Gemini API key is configured, shows setup link otherwise
 
-### Gateway Integration
+### Tool Calling
 
-- [x] **GW-01**: Gateway memory writer uses mem0.add() instead of manual chromadb extraction
-- [x] **GW-02**: Memory extraction runs async in background thread with timeout (no blocking)
-- [x] **GW-03**: Identity routing preserved — user.md/soul.md stay file-based, mem0 handles knowledge only
-- [x] **GW-04**: Identity/knowledge routing rule enforced: traits stable 6+ months (name, role, preferences, communication style) → user.md via separate prompt. Everything else (projects, facts, events, integrations) → mem0 via add(). No duplication between the two.
+- [ ] **TOOL-01**: Gateway dynamically discovers ALL available MCP tools/extensions from goosed and maps them as Gemini function declarations
+- [ ] **TOOL-02**: When Gemini calls any function mid-conversation, gateway routes it to the correct MCP tool and feeds the result back
+- [ ] **TOOL-03**: Tool discovery refreshes on session start so newly installed extensions are immediately available to voice
+- [ ] **TOOL-04**: Tool execution shows visual feedback in transcript (tool name, "running..." spinner, result summary)
+- [ ] **TOOL-05**: Tool responses use SILENT scheduling so Gemini speaks naturally about results (no double-speech)
+- [ ] **TOOL-06**: Voice channel has feature parity with text channels for tool access (everything goosed can do, voice can do)
 
-### Migration
+### Intelligence
 
-- [x] **MIG-01**: One-time migration script moves chromadb runtime memories to mem0
-- [x] **MIG-02**: Migration bypasses mem0.add() (direct insert, no re-extraction)
-- [x] **MIG-03**: ChromaDB runtime collection deprecated after migration (system collection stays)
-- [x] **MIG-04**: Sentinel file prevents accidental re-migration
+- [ ] **INTEL-01**: Voice conversation transcripts auto-feed into mem0 memory pipeline after session ends
+- [ ] **INTEL-02**: User can view list of past voice sessions with timestamps and transcript previews
+- [ ] **INTEL-03**: User can tap a past session to view full transcript
+- [ ] **INTEL-04**: User can select from available Gemini voices in voice dashboard settings
 
-### Knowledge Graph
+### Setup & Auth
 
-- [x] **GRAPH-01**: Neo4j runs inside the same container, started by entrypoint, data on /data volume
-- [x] **GRAPH-02**: mem0 graph memory enabled for entity relationship extraction
-- [x] **GRAPH-03**: Relationship-enhanced search (graph augments vector results)
-- [x] **GRAPH-04**: Entity and relationship tools exposed via MCP (memory_entities, memory_relations)
+- [ ] **SETUP-01**: Gemini API key is an optional provider in the setup wizard
+- [ ] **SETUP-02**: Voice dashboard reuses existing PBKDF2 cookie-based auth (no separate login)
+- [ ] **SETUP-03**: Gateway generates session-scoped tokens for WebSocket auth (API key never reaches browser)
+- [ ] **SETUP-04**: Gemini API key stored in vault alongside other provider keys
 
-## v5.1 Requirements
+## Future Requirements (v6.x / v7+)
 
-### Fallback Provider System
-
-- [x] **FB-01**: Error classification distinguishes retriable errors (429, 5xx, timeout, connection) from permanent errors (401, 403, 400)
-- [x] **FB-02**: Main LLM (goose agent) tries fallback providers in user-defined order when primary fails with retriable error
-- [x] **FB-03**: mem0 extraction LLM tries fallback providers in user-defined order when primary fails
-- [x] **FB-04**: Fallback provider config validated in `validate_setup_config()` (provider exists, model present, provider has API key)
-- [x] **FB-05**: Fallback config persists in setup.json as `fallback_providers` and `mem0_fallback_providers` arrays
-- [x] **FB-06**: Setup wizard (first-time setup, step 3) includes fallback provider configuration with drag-to-reorder
-- [x] **FB-07**: Dashboard settings (post-setup) includes fallback provider configuration with drag-to-reorder
-- [x] **FB-08**: Entrypoint rehydrates fallback provider env vars from setup.json on container restart
-- [x] **FB-09**: Primary provider is always tried first on each new message (fallback is transient, not sticky)
-
-## v5.x Requirements (Future)
-
-### Enhanced Memory
-
-- **ENH-01**: Per-turn memory injection via MOIM (search before each response)
-- **ENH-02**: Memory categories/tagging via metadata
-- **ENH-03**: Custom extraction prompts matching GooseClaw's personality
+- **NOTIF-01**: Voice channel receives notifications from job engine during sessions
+- **VIDEO-01**: Camera/video input to Gemini during voice sessions
+- **MULTI-01**: Multi-language voice selection UI
+- **WAKE-01**: Wake word activation ("Hey Goose")
 
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
-| mem0 cloud/managed service | Violates self-hosted principle |
-| pgvector / separate PostgreSQL | ChromaDB backend avoids new infra and embedding costs |
-| Neo4j as separate Railway service | Runs inside the same container instead — zero extra cost |
-| Replacing user.md/soul.md with mem0 | Different access patterns: identity = always-present, memory = on-demand |
-| Real-time memory streaming in chat | Violates "show results, hide plumbing" |
-| OpenAI embedding key requirement | ChromaDB bundles its own embedder at zero cost |
-| Circuit breaker with open/half-open/closed states | Overkill for single-container single-process. Simple ordered fallback chain sufficient. |
-| Exponential backoff between fallback attempts | Switching providers, not retrying same one. Minimal delay is fine. |
-| Persistent fallback state across restarts | Fallback is transient resilience. Always start from primary on restart. |
+| Wake word / always-on listening | Browser tabs can't run persistent background listeners. Battery killer. Privacy concern. |
+| WebRTC direct connection | API key would be exposed to browser. Bypasses tool calling. |
+| Multiple simultaneous voice sessions | GooseClaw is single-user. Single active voice session. |
+| Voice cloning / custom TTS | Gemini handles TTS internally. 30 HD voices is plenty. |
+| Offline voice mode | Entire architecture depends on Gemini Live API (cloud). |
+| React / framework-based dashboard | Constraint: single HTML file, no build tooling. |
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| MEM-01 | Phase 22 | Complete |
-| MEM-02 | Phase 22 | Complete |
-| MEM-03 | Phase 22 | Complete |
-| MEM-04 | Phase 22 | Complete |
-| MEM-05 | Phase 22 | Complete |
-| MEM-06 | Phase 22 | Complete |
-| CFG-01 | Phase 22 | Complete |
-| CFG-02 | Phase 22 | Complete |
-| CFG-03 | Phase 22 | Complete |
-| CFG-04 | Phase 22 | Complete |
-| GW-01 | Phase 23 | Complete |
-| GW-02 | Phase 23 | Complete |
-| GW-03 | Phase 23 | Complete |
-| GW-04 | Phase 23 | Complete |
-| MIG-01 | Phase 24 | Complete |
-| MIG-02 | Phase 24 | Complete |
-| MIG-03 | Phase 24 | Complete |
-| MIG-04 | Phase 24 | Complete |
-| GRAPH-01 | Phase 25 | Complete |
-| GRAPH-02 | Phase 25 | Complete |
-| GRAPH-03 | Phase 25 | Complete |
-| GRAPH-04 | Phase 25 | Complete |
-| FB-01 | Phase 26 | Complete |
-| FB-02 | Phase 26 | Complete |
-| FB-03 | Phase 26 | Complete |
-| FB-04 | Phase 26 | Complete |
-| FB-05 | Phase 26 | Complete |
-| FB-06 | Phase 26 | Complete |
-| FB-07 | Phase 26 | Complete |
-| FB-08 | Phase 26 | Complete |
-| FB-09 | Phase 26 | Complete |
+| VOICE-01 | — | Pending |
+| VOICE-02 | — | Pending |
+| VOICE-03 | — | Pending |
+| VOICE-04 | — | Pending |
+| VOICE-05 | — | Pending |
+| VOICE-06 | — | Pending |
+| VOICE-07 | — | Pending |
+| VOICE-08 | — | Pending |
+| VOICE-09 | — | Pending |
+| VOICE-10 | — | Pending |
+| VOICE-11 | — | Pending |
+| UI-01 | — | Pending |
+| UI-02 | — | Pending |
+| UI-03 | — | Pending |
+| UI-04 | — | Pending |
+| UI-05 | — | Pending |
+| UI-06 | — | Pending |
+| UI-07 | — | Pending |
+| TOOL-01 | — | Pending |
+| TOOL-02 | — | Pending |
+| TOOL-03 | — | Pending |
+| TOOL-04 | — | Pending |
+| TOOL-05 | — | Pending |
+| TOOL-06 | — | Pending |
+| INTEL-01 | — | Pending |
+| INTEL-02 | — | Pending |
+| INTEL-03 | — | Pending |
+| INTEL-04 | — | Pending |
+| SETUP-01 | — | Pending |
+| SETUP-02 | — | Pending |
+| SETUP-03 | — | Pending |
+| SETUP-04 | — | Pending |
 
 **Coverage:**
-- v5.0 requirements: 22 total, all complete
-- v5.1 fallback requirements: 9 total, all complete
-- Unmapped: 0
+- v6.0 requirements: 32 total
+- Mapped to phases: 0
+- Unmapped: 32
 
 ---
-*Requirements defined: 2026-03-20*
-*Last updated: 2026-03-25 after Phase 26 planning*
+*Requirements defined: 2026-03-27*
+*Last updated: 2026-03-27 after v6.0 milestone initialization*

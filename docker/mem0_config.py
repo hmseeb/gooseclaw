@@ -265,7 +265,7 @@ def build_mem0_config_for_provider(provider, model):
         config["graph_store"] = {
             "provider": "kuzu",
             "config": {
-                "db": ":memory:",
+                "db": os.environ.get("MEM0_KUZU_PATH", "/data/knowledge/kuzu"),
             }
         }
 
@@ -332,7 +332,7 @@ def build_mem0_config():
         config["graph_store"] = {
             "provider": "kuzu",
             "config": {
-                "db": ":memory:",
+                "db": os.environ.get("MEM0_KUZU_PATH", "/data/knowledge/kuzu"),
             }
         }
 

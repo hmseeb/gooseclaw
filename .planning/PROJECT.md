@@ -32,22 +32,28 @@ A user with zero DevOps knowledge can deploy GooseClaw and configure it correctl
 - ✓ CVE scanning via Dependabot — v4.0
 - ✓ 103-test automated suite (HTTP endpoints, shell scripts, entrypoint, e2e) — v4.0
 
+- ✓ mem0 MCP extension with ChromaDB backend and shared config — v5.0
+- ✓ Gateway auto-feeds conversations to mem0 after each session — v5.0
+- ✓ ChromaDB migration from runtime collection to mem0 — v5.0
+- ✓ Neo4j knowledge graph for entity relationships (in-container) — v5.0
+- ✓ Fallback provider system with drag-to-reorder chains — v5.1
+
 ### Active
 
-## Current Milestone: v5.0 mem0 Memory Layer
+## Current Milestone: v6.0 Voice Dashboard
 
-**Goal:** Replace flat chromadb vector search with mem0's vector + knowledge graph memory system as a self-hosted MCP extension.
+**Goal:** Add a real-time voice channel to GooseClaw using Gemini 3.1 Flash Live API. Users talk to their AI agent via a web dashboard from phone or PC.
 
 **Target features:**
-- Self-hosted mem0 MCP extension (stdio, Python)
-- pgvector for vector embeddings (replaces chromadb for user memories)
-- Neo4j knowledge graph for entity relationships (phased)
-- Automatic entity extraction from conversations via LLM
-- Contradiction resolution (new facts update old ones)
-- Gateway auto-feeds conversations to mem0 after each session
-- LLM extraction using existing provider from vault
-- Migration from chromadb runtime collection to mem0
-- Keep chromadb for system docs (platform reference, separate concern)
+- Web dashboard with mic button, voice visualizer, live transcript
+- Gemini 3.1 Flash Live API as the voice brain (STT + LLM + TTS in one model)
+- WebSocket proxy in gateway.py relaying audio between browser and Gemini Live API
+- Tool calling mid-conversation (Gmail, Calendar, memory, knowledge search, etc.)
+- Gemini API key as optional provider in setup wizard
+- Voice dashboard gates access on Gemini key presence
+- Works on phone and desktop browsers, no app install
+- Channel plugin architecture (like Telegram channel)
+- Ephemeral tokens for secure browser-to-API auth
 
 ### Out of Scope
 
@@ -104,6 +110,8 @@ Key technical constraints:
 | Structured logging always-on (no toggle) | Simpler than env var toggle, Railway needs JSON anyway | ✓ Good |
 | HTTP-level tests (not function mocks) | 400KB monolith, real server on random port is more reliable | ✓ Good |
 | Shell injection fix via os.environ pattern | Mechanical, grep-verifiable, zero string interpolation into Python | ✓ Good |
+| Gemini as voice brain (not goosed proxy) | Single model handles STT+LLM+TTS, lower latency, simpler arch. Voice channel uses different LLM than text channels. | — Pending |
+| Optional Gemini key in setup wizard | Users who don't want voice can skip it. Dashboard gates on key presence. | — Pending |
 
 ---
-*Last updated: 2026-03-19 after v5.0 milestone start*
+*Last updated: 2026-03-27 after v6.0 milestone start*

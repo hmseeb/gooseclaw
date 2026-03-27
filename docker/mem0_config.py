@@ -262,6 +262,7 @@ def build_mem0_config_for_provider(provider, model):
             "provider": "huggingface",
             "config": {
                 "model": "sentence-transformers/all-MiniLM-L6-v2",
+                "embedding_dims": 384,
             }
         },
         "llm": {
@@ -329,6 +330,7 @@ def build_mem0_config():
             "provider": "huggingface",
             "config": {
                 "model": "sentence-transformers/all-MiniLM-L6-v2",
+                "embedding_dims": 384,
             }
         },
         "llm": {

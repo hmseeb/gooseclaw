@@ -1983,6 +1983,20 @@ body::after {
         </div>
         <button class="dashboard-edit-btn" onclick="startDashboardEdit('authtoken')">edit</button>
       </div>
+      <div class="dashboard-field" id="df-gemini">
+        <span class="dashboard-field-label">Gemini API Key</span>
+        <span class="dashboard-field-value" id="dfv-gemini"></span>
+        <div class="dashboard-field-edit" id="dfe-gemini">
+          <div class="secret-field-wrapper">
+            <input type="password" id="dfi-gemini" placeholder="AI...">
+            <button type="button" class="secret-toggle-btn" onclick="toggleSecretVisibility(this)" title="Toggle visibility">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
+          <div style="font-size:11px;color:var(--muted);margin-top:4px">enables voice dashboard. get key at <a href="https://aistudio.google.com/apikey" target="_blank" style="color:var(--accent)">aistudio.google.com</a></div>
+        </div>
+        <button class="dashboard-edit-btn" onclick="startDashboardEdit('gemini')">edit</button>
+      </div>
     </div>
 
     <div class="channel-routing" id="channelRouting">
@@ -3721,6 +3735,18 @@ function renderDashboardValues(config) {
     afv.className = 'dashboard-field-value ok';
   }
 
+  /* gemini api key */
+  const gfv = document.getElementById('dfv-gemini');
+  if (gfv) {
+    if (config.gemini_api_key_set) {
+      gfv.textContent = '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022';
+      gfv.className = 'dashboard-field-value ok';
+    } else {
+      gfv.textContent = 'Not configured';
+      gfv.className = 'dashboard-field-value muted';
+    }
+  }
+
   /* lead config */
   renderLeadConfigSection(config);
 
@@ -4353,6 +4379,13 @@ function startDashboardEdit(field) {
       inp.value = '';
       inp.placeholder = 'enter new password (leave blank to keep current)';
     }
+  } else if (field === 'gemini') {
+    const inp = document.getElementById('dfi-gemini');
+    if (inp) {
+      const isSet = dashboardConfig.gemini_api_key_set;
+      inp.value = '';
+      inp.placeholder = isSet ? '(key saved) enter new key to change' : 'AI...';
+    }
   }
 }
 
@@ -4382,6 +4415,13 @@ async function saveDashboardChanges() {
   const newAt = document.getElementById('dfi-authtoken')?.value?.trim();
   if (atField && atField.classList.contains('editing') && newAt) {
     config.web_auth_token = newAt;
+  }
+
+  /* gemini api key */
+  const gemField = document.getElementById('df-gemini');
+  const newGem = document.getElementById('dfi-gemini')?.value?.trim();
+  if (gemField && gemField.classList.contains('editing') && newGem) {
+    config.gemini_api_key = newGem;
   }
 
   /* fallback providers from dashboard */

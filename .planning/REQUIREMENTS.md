@@ -27,7 +27,7 @@
 - [ ] **UI-04**: User can type messages in same interface when voice isn't convenient (text-to-voice switching)
 - [ ] **UI-05**: Dashboard layout is mobile-first, works great on phone browsers with touch-friendly controls
 - [ ] **UI-06**: Screen stays awake during active voice session on mobile (Screen Wake Lock API)
-- [ ] **UI-07**: Dashboard is only accessible when Gemini API key is configured, shows setup link otherwise
+- [x] **UI-07**: Dashboard is only accessible when Gemini API key is configured, shows setup link otherwise
 
 ### Tool Calling
 
@@ -47,10 +47,10 @@
 
 ### Setup & Auth
 
-- [ ] **SETUP-01**: Gemini API key is an optional provider in the setup wizard
-- [ ] **SETUP-02**: Voice dashboard reuses existing PBKDF2 cookie-based auth (no separate login)
+- [x] **SETUP-01**: Gemini API key is an optional provider in the setup wizard
+- [x] **SETUP-02**: Voice dashboard reuses existing PBKDF2 cookie-based auth (no separate login)
 - [x] **SETUP-03**: Gateway generates session-scoped tokens for WebSocket auth (API key never reaches browser)
-- [ ] **SETUP-04**: Gemini API key stored in vault alongside other provider keys
+- [x] **SETUP-04**: Gemini API key stored in vault alongside other provider keys
 
 ## Future Requirements (v6.x / v7+)
 
@@ -91,7 +91,7 @@
 | UI-04 | Phase 31 | Pending |
 | UI-05 | Phase 31 | Pending |
 | UI-06 | Phase 31 | Pending |
-| UI-07 | Phase 29 | Pending |
+| UI-07 | Phase 29 | Complete |
 | TOOL-01 | Phase 32 | Pending |
 | TOOL-02 | Phase 32 | Pending |
 | TOOL-03 | Phase 32 | Pending |
@@ -102,10 +102,10 @@
 | INTEL-02 | Phase 33 | Pending |
 | INTEL-03 | Phase 33 | Pending |
 | INTEL-04 | Phase 33 | Pending |
-| SETUP-01 | Phase 29 | Pending |
-| SETUP-02 | Phase 29 | Pending |
+| SETUP-01 | Phase 29 | Complete |
+| SETUP-02 | Phase 29 | Complete |
 | SETUP-03 | Phase 28 | Complete |
-| SETUP-04 | Phase 29 | Pending |
+| SETUP-04 | Phase 29 | Complete |
 
 **Coverage:**
 - v6.0 requirements: 32 total

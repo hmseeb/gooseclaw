@@ -8664,6 +8664,113 @@ def _sanitize_string(value, max_length=2000):
     return value
 
 
+# ── websocket protocol (RFC 6455) ───────────────────────────────────────────
+
+WS_MAGIC = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+WS_OP_TEXT = 0x1
+WS_OP_BINARY = 0x2
+WS_OP_CLOSE = 0x8
+WS_OP_PING = 0x9
+WS_OP_PONG = 0xA
+
+
+def ws_accept_key(client_key):
+    """Compute Sec-WebSocket-Accept from Sec-WebSocket-Key (RFC 6455 4.2.2)."""
+    raw = (client_key.strip() + WS_MAGIC).encode("utf-8")
+    return base64.b64encode(hashlib.sha1(raw).digest()).decode("utf-8")
+
+
+def _ws_recv_exact(sock, n):
+    """Read exactly n bytes from socket. Raises ConnectionError on short read."""
+    buf = bytearray()
+    while len(buf) < n:
+        chunk = sock.recv(n - len(buf))
+        if not chunk:
+            raise ConnectionError("socket closed mid-read")
+        buf.extend(chunk)
+    return bytes(buf)
+
+
+def ws_recv_frame(sock):
+    """Read one WebSocket frame. Returns (opcode, payload) or (None, b'') on close."""
+    try:
+        header = _ws_recv_exact(sock, 2)
+        opcode = header[0] & 0x0F
+        masked = bool(header[1] & 0x80)
+        length = header[1] & 0x7F
+
+        if length == 126:
+            length = struct.unpack(">H", _ws_recv_exact(sock, 2))[0]
+        elif length == 127:
+            length = struct.unpack(">Q", _ws_recv_exact(sock, 8))[0]
+
+        mask_key = _ws_recv_exact(sock, 4) if masked else None
+        payload = _ws_recv_exact(sock, length) if length > 0 else b""
+
+        if masked and mask_key:
+            payload = bytes(b ^ mask_key[i % 4] for i, b in enumerate(payload))
+
+        return (opcode, payload)
+    except (ConnectionError, OSError):
+        return (None, b"")
+
+
+def ws_send_frame(sock, opcode, payload, mask=False):
+    """Send one WebSocket frame."""
+    frame = bytearray()
+    # FIN + opcode
+    frame.append(0x80 | opcode)
+
+    length = len(payload)
+    mask_bit = 0x80 if mask else 0x00
+
+    if length < 126:
+        frame.append(mask_bit | length)
+    elif length < 65536:
+        frame.append(mask_bit | 126)
+        frame.extend(struct.pack(">H", length))
+    else:
+        frame.append(mask_bit | 127)
+        frame.extend(struct.pack(">Q", length))
+
+    if mask:
+        mask_key = os.urandom(4)
+        frame.extend(mask_key)
+        payload = bytes(b ^ mask_key[i % 4] for i, b in enumerate(payload))
+
+    frame.extend(payload)
+    sock.sendall(bytes(frame))
+
+
+def ws_send_ping(sock, mask=False):
+    """Send WebSocket ping frame."""
+    ws_send_frame(sock, WS_OP_PING, b"", mask=mask)
+
+
+def ws_send_close(sock, code=1000, reason="", mask=False):
+    """Send WebSocket close frame with status code and optional reason."""
+    try:
+        payload = struct.pack(">H", code) + reason.encode("utf-8")
+        ws_send_frame(sock, WS_OP_CLOSE, payload, mask=mask)
+    except (OSError, BrokenPipeError):
+        pass
+
+
+def ws_start_ping_loop(sock, interval=25, mask=False):
+    """Start a daemon thread that sends WebSocket ping every interval seconds.
+    Returns the Thread object. Thread exits on socket error."""
+    def _ping():
+        while True:
+            try:
+                time.sleep(interval)
+                ws_send_ping(sock, mask=mask)
+            except (OSError, BrokenPipeError):
+                break
+    t = threading.Thread(target=_ping, daemon=True)
+    t.start()
+    return t
+
+
 # ── HTTP handler ────────────────────────────────────────────────────────────
 
 class GatewayHandler(http.server.BaseHTTPRequestHandler):

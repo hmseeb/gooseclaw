@@ -9,6 +9,7 @@ import os
 import socket
 import struct
 import sys
+import threading
 
 # Add docker/ to sys.path so gateway can be imported
 docker_dir = os.path.join(os.path.dirname(__file__), "..")
@@ -104,10 +105,18 @@ class TestFrameParser:
         a, b = socket.socketpair()
         try:
             data = os.urandom(70000)
+            result = [None, None]
+
+            def _recv():
+                result[0], result[1] = ws_recv_frame(b)
+
+            t = threading.Thread(target=_recv)
+            t.start()
             ws_send_frame(a, WS_OP_BINARY, data)
-            opcode, payload = ws_recv_frame(b)
-            assert opcode == WS_OP_BINARY
-            assert payload == data
+            t.join(timeout=10)
+            assert not t.is_alive(), "recv thread timed out"
+            assert result[0] == WS_OP_BINARY
+            assert result[1] == data
         finally:
             a.close()
             b.close()

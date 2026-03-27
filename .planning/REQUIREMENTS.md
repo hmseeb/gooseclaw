@@ -31,12 +31,12 @@
 
 ### Tool Calling
 
-- [ ] **TOOL-01**: Gateway dynamically discovers ALL available MCP tools/extensions from goosed and maps them as Gemini function declarations
-- [ ] **TOOL-02**: When Gemini calls any function mid-conversation, gateway routes it to the correct MCP tool and feeds the result back
-- [ ] **TOOL-03**: Tool discovery refreshes on session start so newly installed extensions are immediately available to voice
-- [ ] **TOOL-04**: Tool execution shows visual feedback in transcript (tool name, "running..." spinner, result summary)
-- [ ] **TOOL-05**: Tool responses use SILENT scheduling so Gemini speaks naturally about results (no double-speech)
-- [ ] **TOOL-06**: Voice channel has feature parity with text channels for tool access (everything goosed can do, voice can do)
+- [x] **TOOL-01**: Gateway dynamically discovers ALL available MCP tools/extensions from goosed and maps them as Gemini function declarations
+- [x] **TOOL-02**: When Gemini calls any function mid-conversation, gateway routes it to the correct MCP tool and feeds the result back
+- [x] **TOOL-03**: Tool discovery refreshes on session start so newly installed extensions are immediately available to voice
+- [x] **TOOL-04**: Tool execution shows visual feedback in transcript (tool name, "running..." spinner, result summary)
+- [x] **TOOL-05**: Tool responses use SILENT scheduling so Gemini speaks naturally about results (no double-speech)
+- [x] **TOOL-06**: Voice channel has feature parity with text channels for tool access (everything goosed can do, voice can do)
 
 ### Intelligence
 
@@ -92,12 +92,12 @@
 | UI-05 | Phase 31 | Complete |
 | UI-06 | Phase 31 | Complete |
 | UI-07 | Phase 29 | Complete |
-| TOOL-01 | Phase 32 | Pending |
-| TOOL-02 | Phase 32 | Pending |
-| TOOL-03 | Phase 32 | Pending |
-| TOOL-04 | Phase 32 | Pending |
-| TOOL-05 | Phase 32 | Pending |
-| TOOL-06 | Phase 32 | Pending |
+| TOOL-01 | Phase 32 | Complete |
+| TOOL-02 | Phase 32 | Complete |
+| TOOL-03 | Phase 32 | Complete |
+| TOOL-04 | Phase 32 | Complete |
+| TOOL-05 | Phase 32 | Complete |
+| TOOL-06 | Phase 32 | Complete |
 | INTEL-01 | Phase 33 | Pending |
 | INTEL-02 | Phase 33 | Pending |
 | INTEL-03 | Phase 33 | Pending |

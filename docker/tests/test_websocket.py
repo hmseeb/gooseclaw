@@ -3,8 +3,11 @@
 Unit tests: RFC 6455 frame parsing, accept key computation, masking,
 ping/pong, and close frame construction.
 
-Integration tests: HTTP 101 upgrade handshake, echo, close, connection
+Integration tests: HTTP 101 upgrade handshake, close, connection
 cap, ping keepalive, outbound client validation.
+
+Note: Phase 28 replaced the echo loop with Gemini relay. Integration tests
+now use valid voice session tokens and mock _gemini_connect.
 """
 
 import base64
@@ -14,6 +17,7 @@ import struct
 import sys
 import threading
 import time
+import unittest.mock
 
 import pytest
 
@@ -33,6 +37,7 @@ from gateway import (
     WS_OP_CLOSE,
     WS_OP_PING,
     WS_OP_PONG,
+    _voice_session_token_create,
 )
 
 
@@ -228,11 +233,14 @@ class TestCloseFrame:
 # ── Integration tests (Phase 27-02) ────────────────────────────────────────
 
 
-def _ws_upgrade(sock, host, path="/ws/voice"):
+def _ws_upgrade(sock, host, path="/ws/voice", token=None):
     """Send HTTP upgrade request to WebSocket endpoint. Returns (key, response_bytes)."""
+    url = path
+    if token:
+        url = f"{path}?token={token}"
     key = base64.b64encode(os.urandom(16)).decode()
     request = (
-        f"GET {path} HTTP/1.1\r\n"
+        f"GET {url} HTTP/1.1\r\n"
         f"Host: {host}\r\n"
         f"Upgrade: websocket\r\n"
         f"Connection: Upgrade\r\n"
@@ -251,68 +259,56 @@ def _ws_upgrade(sock, host, path="/ws/voice"):
     return key, response
 
 
+def _make_voice_token():
+    """Create a valid voice session token for test use."""
+    return _voice_session_token_create("test-api-key")
+
+
 class TestWsHandshake:
     """WebSocket upgrade via live gateway."""
 
     def test_ws_handshake(self, live_gateway):
-        """HTTP 101 upgrade on /ws/voice with valid accept key."""
+        """HTTP 101 upgrade on /ws/voice with valid token and accept key."""
+        port = int(live_gateway.split(":")[-1])
+        token = _make_voice_token()
+        sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+        try:
+            with unittest.mock.patch("gateway._gemini_connect", side_effect=ConnectionError("test")):
+                key, response = _ws_upgrade(sock, f"127.0.0.1:{port}", token=token)
+                response_str = response.decode()
+
+                # verify 101
+                assert "101" in response_str.split("\r\n")[0]
+                # verify upgrade header
+                assert "upgrade: websocket" in response_str.lower()
+                # verify accept key
+                expected_accept = ws_accept_key(key)
+                assert expected_accept in response_str
+
+                # connection will close shortly because _gemini_connect fails
+                ws_send_close(sock)
+        finally:
+            sock.close()
+
+    def test_ws_no_token_rejected(self, live_gateway):
+        """WebSocket upgrade without token returns 403."""
         port = int(live_gateway.split(":")[-1])
         sock = socket.create_connection(("127.0.0.1", port), timeout=5)
         try:
             key, response = _ws_upgrade(sock, f"127.0.0.1:{port}")
             response_str = response.decode()
-
-            # verify 101
-            assert "101" in response_str.split("\r\n")[0]
-            # verify upgrade header
-            assert "upgrade: websocket" in response_str.lower()
-            # verify accept key
-            expected_accept = ws_accept_key(key)
-            assert expected_accept in response_str
-
-            # send text frame, verify echo
-            ws_send_frame(sock, WS_OP_TEXT, b"hello")
-            opcode, payload = ws_recv_frame(sock)
-            assert opcode == WS_OP_TEXT
-            assert payload == b"hello"
-
-            # clean close
-            ws_send_close(sock)
+            assert "403" in response_str.split("\r\n")[0]
         finally:
             sock.close()
 
-    def test_ws_text_echo(self, live_gateway):
-        """Send 3 text frames, verify all 3 are echoed back."""
+    def test_ws_invalid_token_rejected(self, live_gateway):
+        """WebSocket upgrade with bogus token returns 403."""
         port = int(live_gateway.split(":")[-1])
         sock = socket.create_connection(("127.0.0.1", port), timeout=5)
         try:
-            _ws_upgrade(sock, f"127.0.0.1:{port}")
-
-            messages = [b"first", b"second", b"third"]
-            for msg in messages:
-                ws_send_frame(sock, WS_OP_TEXT, msg)
-                opcode, payload = ws_recv_frame(sock)
-                assert opcode == WS_OP_TEXT
-                assert payload == msg
-
-            ws_send_close(sock)
-        finally:
-            sock.close()
-
-    def test_ws_binary_echo(self, live_gateway):
-        """Send binary frame with 500 random bytes, verify echo matches."""
-        port = int(live_gateway.split(":")[-1])
-        sock = socket.create_connection(("127.0.0.1", port), timeout=5)
-        try:
-            _ws_upgrade(sock, f"127.0.0.1:{port}")
-
-            data = os.urandom(500)
-            ws_send_frame(sock, WS_OP_BINARY, data)
-            opcode, payload = ws_recv_frame(sock)
-            assert opcode == WS_OP_BINARY
-            assert payload == data
-
-            ws_send_close(sock)
+            key, response = _ws_upgrade(sock, f"127.0.0.1:{port}", token="bogus-token")
+            response_str = response.decode()
+            assert "403" in response_str.split("\r\n")[0]
         finally:
             sock.close()
 
@@ -321,36 +317,34 @@ class TestWsClose:
     """Clean close handshake."""
 
     def test_ws_close_from_client(self, live_gateway):
-        """Connect, send close frame, verify connection terminates cleanly."""
+        """Connect with valid token, send close frame, verify clean termination."""
         port = int(live_gateway.split(":")[-1])
+        token = _make_voice_token()
         sock = socket.create_connection(("127.0.0.1", port), timeout=5)
         try:
-            _ws_upgrade(sock, f"127.0.0.1:{port}")
-            ws_send_close(sock)
-            # server should close its side. recv should return empty or close frame.
-            sock.settimeout(3)
-            try:
-                opcode, payload = ws_recv_frame(sock)
-                # either a close frame or connection dropped is fine
-                assert opcode is None or opcode == WS_OP_CLOSE
-            except (ConnectionError, OSError, socket.timeout):
-                pass  # connection closed, that's fine
+            with unittest.mock.patch("gateway._gemini_connect", side_effect=ConnectionError("test")):
+                _ws_upgrade(sock, f"127.0.0.1:{port}", token=token)
+                ws_send_close(sock)
+                # server should close its side. recv should return empty or close frame.
+                sock.settimeout(3)
+                try:
+                    opcode, payload = ws_recv_frame(sock)
+                    # either a close frame or connection dropped is fine
+                    assert opcode is None or opcode == WS_OP_CLOSE
+                except (ConnectionError, OSError, socket.timeout):
+                    pass  # connection closed, that's fine
         finally:
             sock.close()
 
-    def test_ws_close_after_exchange(self, live_gateway):
-        """Connect, exchange a message, then close. Verify no errors."""
+    def test_ws_close_after_upgrade(self, live_gateway):
+        """Connect with token, then close. Verify no errors."""
         port = int(live_gateway.split(":")[-1])
+        token = _make_voice_token()
         sock = socket.create_connection(("127.0.0.1", port), timeout=5)
         try:
-            _ws_upgrade(sock, f"127.0.0.1:{port}")
-
-            ws_send_frame(sock, WS_OP_TEXT, b"before close")
-            opcode, payload = ws_recv_frame(sock)
-            assert opcode == WS_OP_TEXT
-            assert payload == b"before close"
-
-            ws_send_close(sock)
+            with unittest.mock.patch("gateway._gemini_connect", side_effect=ConnectionError("test")):
+                _ws_upgrade(sock, f"127.0.0.1:{port}", token=token)
+                ws_send_close(sock)
         finally:
             sock.close()
 
@@ -426,30 +420,21 @@ class TestWsConnectionCap:
         socks = []
 
         try:
-            for i in range(3):
-                s = socket.create_connection(("127.0.0.1", port), timeout=5)
-                _ws_upgrade(s, f"127.0.0.1:{port}")
-                socks.append(s)
-                time.sleep(0.1)  # ensure ordered creation timestamps
+            with unittest.mock.patch("gateway._gemini_connect", side_effect=ConnectionError("test")):
+                for i in range(3):
+                    token = _make_voice_token()
+                    s = socket.create_connection(("127.0.0.1", port), timeout=5)
+                    _ws_upgrade(s, f"127.0.0.1:{port}", token=token)
+                    socks.append(s)
+                    time.sleep(0.1)  # ensure ordered creation timestamps
 
-            # give server time to process
-            time.sleep(0.3)
+                # give server time to process
+                time.sleep(0.3)
 
-            # check active count
-            active = gw._ws_active_count()
-            assert active <= 2, f"expected <= 2 active connections, got {active}"
-
-            # verify the most recent connections can still echo
-            # (oldest should have been evicted)
-            for s in socks[1:]:
-                try:
-                    ws_send_frame(s, WS_OP_TEXT, b"test")
-                    opcode, payload = ws_recv_frame(s)
-                    # if we get echo back, connection is alive
-                    if opcode == WS_OP_TEXT:
-                        assert payload == b"test"
-                except (ConnectionError, OSError):
-                    pass  # evicted connection, expected
+                # check active count (connections close quickly since _gemini_connect
+                # fails, but cap enforcement still happens during _ws_register)
+                active = gw._ws_active_count()
+                assert active <= 2, f"expected <= 2 active connections, got {active}"
         finally:
             for s in socks:
                 try:
@@ -465,34 +450,61 @@ class TestWsConnectionCap:
                 gw._ws_connections.clear()
 
 
+def _mock_gemini_connect(*args, **kwargs):
+    """Return a socket pair simulating a Gemini connection for tests.
+    The 'server' side (gemini_remote) blocks on recv, keeping the relay alive."""
+    gemini_local, gemini_remote = socket.socketpair()
+    gemini_local.settimeout(60)
+    gemini_remote.settimeout(60)
+
+    # Send a setupComplete message so the relay loop starts
+    setup_msg = b'{"setupComplete": {}}'
+    ws_send_frame(gemini_remote, WS_OP_TEXT, setup_msg)
+
+    # Keep gemini_remote around so it doesn't close immediately
+    _mock_gemini_connect._remotes.append(gemini_remote)
+    return gemini_local
+
+_mock_gemini_connect._remotes = []
+
+
 class TestWsPingLoop:
     """Integration test for keepalive."""
 
     @pytest.mark.timeout(35)
     def test_ws_receives_ping(self, live_gateway):
-        """Connect via WS, verify at least one ping frame received within 30s."""
+        """Connect via WS with valid token, verify at least one ping frame received within 30s."""
         port = int(live_gateway.split(":")[-1])
+        token = _make_voice_token()
         sock = socket.create_connection(("127.0.0.1", port), timeout=30)
+        _mock_gemini_connect._remotes = []
         try:
-            _ws_upgrade(sock, f"127.0.0.1:{port}")
-            sock.settimeout(30)
+            with unittest.mock.patch("gateway._gemini_connect", side_effect=_mock_gemini_connect):
+                _ws_upgrade(sock, f"127.0.0.1:{port}", token=token)
+                sock.settimeout(30)
 
-            # wait for ping from server (interval=25s)
-            ping_received = False
-            deadline = time.time() + 30
-            while time.time() < deadline:
-                try:
-                    opcode, payload = ws_recv_frame(sock)
-                    if opcode == WS_OP_PING:
-                        ping_received = True
+                # wait for ping from server (interval=25s)
+                ping_received = False
+                deadline = time.time() + 30
+                while time.time() < deadline:
+                    try:
+                        opcode, payload = ws_recv_frame(sock)
+                        if opcode == WS_OP_PING:
+                            ping_received = True
+                            break
+                        if opcode is None:
+                            break
+                        # skip other messages (like ready from setupComplete)
+                    except socket.timeout:
                         break
-                    if opcode is None:
-                        break
-                except socket.timeout:
-                    break
 
-            assert ping_received, "expected at least one ping frame within 30 seconds"
+                assert ping_received, "expected at least one ping frame within 30 seconds"
 
-            ws_send_close(sock)
+                ws_send_close(sock)
         finally:
             sock.close()
+            for remote in _mock_gemini_connect._remotes:
+                try:
+                    remote.close()
+                except Exception:
+                    pass

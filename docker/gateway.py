@@ -8506,6 +8506,19 @@ def _sync_vault_to_goosed_secrets():
     return False
 
 
+def _get_gemini_api_key():
+    """Read Gemini API key from vault. Returns key string or None."""
+    if not os.path.exists(VAULT_FILE):
+        return None
+    try:
+        import yaml
+        with open(VAULT_FILE) as f:
+            data = yaml.safe_load(f) or {}
+        return data.get("GEMINI_API_KEY")
+    except Exception:
+        return None
+
+
 def start_goosed():
     global goosed_process, _INTERNAL_GOOSE_TOKEN
     _check_stale_pid("goosed")
@@ -8992,6 +9005,129 @@ def _voice_parse_server_message(msg):
     return None
 
 
+_voice_log = logging.getLogger("voice")
+
+
+def _gemini_connect(api_key, resumption_handle=None):
+    """Open WebSocket to Gemini Live API and send setup config. Returns socket."""
+    sock = ws_client_connect(
+        host=GEMINI_LIVE_HOST,
+        path=GEMINI_LIVE_PATH,
+        query_params={"key": api_key}
+    )
+    config = _gemini_build_config(resumption_handle=resumption_handle)
+    ws_send_frame(sock, WS_OP_TEXT, json.dumps(config).encode(), mask=True)
+    return sock
+
+
+def _voice_relay_browser_to_gemini(browser_sock, session_state, stop_event):
+    """Read from browser WS, convert binary PCM to Gemini JSON, forward."""
+    try:
+        while not stop_event.is_set():
+            opcode, payload = ws_recv_frame(browser_sock)
+            if opcode is None or opcode == WS_OP_CLOSE:
+                break
+            if opcode == WS_OP_PING:
+                ws_send_frame(browser_sock, WS_OP_PONG, payload)
+                continue
+            if opcode == WS_OP_PONG:
+                continue
+            if opcode == WS_OP_BINARY:
+                msg = _voice_pcm_to_gemini_json(payload)
+                with session_state["_lock"]:
+                    gs = session_state["gemini_sock"]
+                    if gs:
+                        ws_send_frame(gs, WS_OP_TEXT, json.dumps(msg).encode(), mask=True)
+            elif opcode == WS_OP_TEXT:
+                with session_state["_lock"]:
+                    gs = session_state["gemini_sock"]
+                    if gs:
+                        ws_send_frame(gs, WS_OP_TEXT, payload, mask=True)
+    except (ConnectionError, OSError, socket.timeout):
+        pass
+    finally:
+        stop_event.set()
+
+
+def _voice_relay_gemini_to_browser(browser_sock, session_state, stop_event):
+    """Read from Gemini WS, handle protocol messages, forward audio to browser."""
+    try:
+        while not stop_event.is_set():
+            with session_state["_lock"]:
+                gs = session_state["gemini_sock"]
+            if not gs:
+                break
+            opcode, payload = ws_recv_frame(gs)
+            if opcode is None or opcode == WS_OP_CLOSE:
+                break
+            if opcode == WS_OP_PING:
+                ws_send_frame(gs, WS_OP_PONG, payload, mask=True)
+                continue
+            if opcode == WS_OP_PONG:
+                continue
+            if opcode == WS_OP_TEXT:
+                msg = json.loads(payload.decode())
+                parsed = _voice_parse_server_message(msg)
+                if not parsed:
+                    continue
+
+                if parsed["type"] == "ready":
+                    ws_send_frame(browser_sock, WS_OP_TEXT,
+                        json.dumps({"type": "ready"}).encode())
+                elif parsed["type"] == "resumption_update":
+                    session_state["resumption_handle"] = parsed["handle"]
+                elif parsed["type"] == "goaway":
+                    _voice_handle_goaway(session_state, stop_event)
+                elif parsed["type"] == "interrupted":
+                    ws_send_frame(browser_sock, WS_OP_TEXT,
+                        json.dumps({"type": "interrupted"}).encode())
+                elif parsed["type"] == "transcript":
+                    ws_send_frame(browser_sock, WS_OP_TEXT,
+                        json.dumps(parsed).encode())
+                elif parsed["type"] == "tool_call":
+                    ws_send_frame(browser_sock, WS_OP_TEXT,
+                        json.dumps(parsed).encode())
+                elif parsed["type"] == "tool_cancelled":
+                    ws_send_frame(browser_sock, WS_OP_TEXT,
+                        json.dumps(parsed).encode())
+                elif parsed["type"] == "audio":
+                    # Extract and forward audio chunks as binary PCM
+                    chunks = _voice_extract_audio_chunks(msg)
+                    for chunk in chunks:
+                        ws_send_frame(browser_sock, WS_OP_BINARY, chunk)
+    except (ConnectionError, OSError, socket.timeout):
+        pass
+    finally:
+        stop_event.set()
+
+
+def _voice_handle_goaway(session_state, stop_event):
+    """Handle GoAway by reconnecting with resumption handle."""
+    handle = session_state.get("resumption_handle")
+    api_key = session_state.get("api_key")
+    if not handle or not api_key:
+        _voice_log.warning("GoAway received but no resumption handle available")
+        stop_event.set()
+        return
+    _voice_log.info("GoAway received, reconnecting with resumption handle")
+    try:
+        new_sock = _gemini_connect(api_key, resumption_handle=handle)
+        ws_start_ping_loop(new_sock, interval=25, mask=True)
+        with session_state["_lock"]:
+            old_sock = session_state["gemini_sock"]
+            session_state["gemini_sock"] = new_sock
+        if old_sock:
+            try:
+                ws_send_close(old_sock, mask=True)
+                old_sock.close()
+            except Exception:
+                pass
+        _voice_log.info("Session resumed after GoAway")
+    except Exception as e:
+        _voice_log.error(f"Failed to reconnect after GoAway: {e}")
+        stop_event.set()
+
+
 # ── HTTP handler ────────────────────────────────────────────────────────────
 
 class GatewayHandler(http.server.BaseHTTPRequestHandler):
@@ -9110,6 +9246,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.handle_list_watchers()
         elif path in ("/api/channels", "/api/plugins"):
             self.handle_list_channels()
+        elif path == "/api/voice/token":
+            self.handle_voice_token()
         elif path.rstrip("/") == "/login":
             self.handle_login_page()
         elif path.rstrip("/") == "/admin":
@@ -9262,8 +9400,19 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         except Exception:
             return "unreachable"
 
+    def handle_voice_token(self):
+        """GET /api/voice/token - mint session-scoped token for WebSocket auth."""
+        if not check_auth(self):
+            return
+        api_key = _get_gemini_api_key()
+        if not api_key:
+            self.send_json(503, {"error": "Gemini API key not configured"})
+            return
+        token = _voice_session_token_create(api_key)
+        self.send_json(200, {"token": token})
+
     def handle_voice_ws(self):
-        """Upgrade HTTP to WebSocket and enter echo loop (Phase 27 scaffold)."""
+        """Upgrade HTTP to WebSocket and relay audio to/from Gemini Live API."""
         # validate upgrade header
         if self.headers.get("Upgrade", "").lower() != "websocket":
             self.send_error(400, "Expected WebSocket upgrade")
@@ -9273,6 +9422,18 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         client_key = self.headers.get("Sec-WebSocket-Key")
         if not client_key:
             self.send_error(400, "Missing Sec-WebSocket-Key")
+            return
+
+        # extract and validate session token from query params
+        parsed_url = urllib.parse.urlparse(self.path)
+        query = urllib.parse.parse_qs(parsed_url.query)
+        token = query.get("token", [None])[0]
+        if not token:
+            self.send_error(403, "Missing voice session token")
+            return
+        api_key = _voice_session_token_validate(token)
+        if not api_key:
+            self.send_error(403, "Invalid or expired voice session token")
             return
 
         # origin check (warn but don't reject — Railway domain matching is complex)
@@ -9294,37 +9455,65 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         self.close_connection = True
 
         # get raw socket and configure
-        sock = self.request
-        sock.settimeout(60)
+        browser_sock = self.request
+        browser_sock.settimeout(60)
 
         conn_id = uuid.uuid4().hex[:8]
-        ping_thread = ws_start_ping_loop(sock, interval=25)
-        _ws_register(conn_id, sock, ping_thread)
+        browser_ping = ws_start_ping_loop(browser_sock, interval=25)
+        _ws_register(conn_id, browser_sock, browser_ping)
 
-        _ws_log.info("WebSocket connected", extra={"event": "ws_open", "conn_id": conn_id})
+        _voice_log.info("Voice WebSocket connected", extra={"event": "voice_open", "conn_id": conn_id})
 
+        gemini_sock = None
         try:
-            while True:
-                opcode, payload = ws_recv_frame(sock)
-                if opcode is None or opcode == WS_OP_CLOSE:
-                    break
-                if opcode == WS_OP_PING:
-                    ws_send_frame(sock, WS_OP_PONG, payload)
-                    continue
-                if opcode == WS_OP_PONG:
-                    continue
-                # Echo text and binary frames back (Phase 28 replaces with Gemini relay)
-                if opcode in (WS_OP_TEXT, WS_OP_BINARY):
-                    ws_send_frame(sock, opcode, payload)
-        except (ConnectionError, OSError, socket.timeout):
-            pass
+            # connect to Gemini Live API
+            gemini_sock = _gemini_connect(api_key)
+            ws_start_ping_loop(gemini_sock, interval=25, mask=True)
+
+            # session state shared between relay threads
+            session_state = {
+                "gemini_sock": gemini_sock,
+                "resumption_handle": None,
+                "api_key": api_key,
+                "_lock": threading.Lock(),
+            }
+
+            stop_event = threading.Event()
+
+            # spawn relay threads
+            t_browser = threading.Thread(
+                target=_voice_relay_browser_to_gemini,
+                args=(browser_sock, session_state, stop_event),
+                daemon=True,
+            )
+            t_gemini = threading.Thread(
+                target=_voice_relay_gemini_to_browser,
+                args=(browser_sock, session_state, stop_event),
+                daemon=True,
+            )
+            t_browser.start()
+            t_gemini.start()
+
+            # block until either side disconnects
+            stop_event.wait()
+
+        except (ConnectionError, OSError) as e:
+            _voice_log.error(f"Gemini connection failed: {e}", extra={"event": "voice_gemini_error", "conn_id": conn_id})
         finally:
             _ws_unregister(conn_id)
+            # close browser socket
             try:
-                ws_send_close(sock)
+                ws_send_close(browser_sock)
             except Exception:
                 pass
-            _ws_log.info("WebSocket closed", extra={"event": "ws_close", "conn_id": conn_id})
+            # close Gemini socket
+            if gemini_sock:
+                try:
+                    ws_send_close(gemini_sock, mask=True)
+                    gemini_sock.close()
+                except Exception:
+                    pass
+            _voice_log.info("Voice WebSocket closed", extra={"event": "voice_close", "conn_id": conn_id})
 
     def handle_health(self):
         """GET /api/health — deep health check: liveness + goosed subprocess status."""

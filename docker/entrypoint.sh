@@ -691,8 +691,10 @@ if [ ! -f /data/.chroma_reset_v2 ]; then
     touch /data/.chroma_reset_v2
 fi
 
-# kuzu needs a directory for persistent storage, chroma cache avoids 79MB re-download
-mkdir -p /data/knowledge/chroma /data/knowledge/kuzu /data/mem0/chroma /data/hf_cache /data/chroma_cache
+# chroma + cache dirs. kuzu creates its own db dir, so do NOT mkdir it
+mkdir -p /data/knowledge/chroma /data/mem0/chroma /data/hf_cache /data/chroma_cache
+# remove empty kuzu dir if pre-created (kuzu rejects existing directories)
+[ -d /data/knowledge/kuzu ] && [ -z "$(ls -A /data/knowledge/kuzu 2>/dev/null)" ] && rmdir /data/knowledge/kuzu 2>/dev/null || true
 # persist chromadb model cache on volume (prevents re-download on every restart)
 ln -sfn /data/chroma_cache /home/gooseclaw/.cache/chroma 2>/dev/null || true
 chown -R gooseclaw:gooseclaw /data/knowledge /data/mem0 /data/hf_cache /data/chroma_cache

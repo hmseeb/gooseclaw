@@ -683,6 +683,13 @@ fi
 # Re-indexes system namespace on every boot (system.md, onboarding.md, schemas/).
 # Runtime namespace (user facts, integrations) is never wiped.
 
+# one-time nuke of corrupted mem0 chroma (compactor backfill error)
+if [ -d /data/mem0/chroma ] && [ ! -f /data/mem0/.chroma_reset_v1 ]; then
+    echo "[mem0] resetting corrupted chroma store..."
+    rm -rf /data/mem0/chroma
+    touch /data/mem0/.chroma_reset_v1
+fi
+
 # kuzu needs a directory for persistent storage
 mkdir -p /data/knowledge/chroma /data/knowledge/kuzu /data/mem0/chroma /data/hf_cache
 chown -R gooseclaw:gooseclaw /data/knowledge /data/mem0 /data/hf_cache

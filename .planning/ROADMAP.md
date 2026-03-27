@@ -78,7 +78,7 @@
 
 **Milestone Goal:** Add a real-time voice channel to GooseClaw using Gemini 3.1 Flash Live API. Users talk to their AI agent via a web dashboard from phone or PC. Mid-conversation tool calling (the killer differentiator over ChatGPT voice) works through existing MCP extensions.
 
-- [ ] **Phase 27: WebSocket Infrastructure** - RFC 6455 frame parser, server + client handlers, ping/pong keepalive
+- [x] **Phase 27: WebSocket Infrastructure** - RFC 6455 frame parser, server + client handlers, ping/pong keepalive (completed 2026-03-27)
 - [ ] **Phase 28: Gemini Live API Integration** - Outbound Gemini connection, bidirectional relay, session management, ephemeral auth
 - [ ] **Phase 29: Setup Wizard + Dashboard Gating** - Gemini API key in wizard, vault storage, auth reuse, dashboard access control
 - [ ] **Phase 30: Voice Dashboard** - voice.html with mic capture, push-to-talk, streaming playback, transcript, visualizer, state indicators
@@ -187,7 +187,7 @@ Note: Phases 28 and 29 can execute in parallel (both depend only on 27). Phase 3
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 27. WebSocket Infrastructure | 1/2 | In Progress|  |
+| 27. WebSocket Infrastructure | 2/2 | Complete   | 2026-03-27 |
 | 28. Gemini Live API Integration | 0/TBD | Not started | - |
 | 29. Setup Wizard + Dashboard Gating | 0/TBD | Not started | - |
 | 30. Voice Dashboard | 0/TBD | Not started | - |

@@ -10,9 +10,9 @@ See: .planning/PROJECT.md (updated 2026-03-27)
 ## Current Position
 
 Phase: 32 of 33 (Tool Calling)
-Plan: 1 of 2 in current phase
-Status: Executing
-Last activity: 2026-03-27 — Plan 32-01 complete (TDD core tool functions)
+Plan: 2 of 2 in current phase
+Status: Verifying
+Last activity: 2026-03-27 — Plan 32-02 complete (Integration wiring + UI)
 
 Progress v1.0: [==========] 100% (shipped 2026-03-11)
 Progress v2.0: [==========] 100% (shipped 2026-03-13)

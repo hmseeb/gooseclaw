@@ -119,6 +119,44 @@
       -webkit-overflow-scrolling: touch;
     }
 
+    /* Transcript messages */
+    .transcript-msg {
+      max-width: 80%;
+      padding: 10px 14px;
+      border-radius: 16px;
+      font-size: 14px;
+      line-height: 1.5;
+      word-wrap: break-word;
+      animation: fadeIn 0.2s ease;
+    }
+
+    .transcript-msg.user {
+      align-self: flex-end;
+      background: #7c6aef;
+      color: #fff;
+      border-bottom-right-radius: 4px;
+    }
+
+    .transcript-msg.ai {
+      align-self: flex-start;
+      background: #1e1e1e;
+      color: #e0e0e0;
+      border-bottom-left-radius: 4px;
+    }
+
+    .transcript-msg .speaker-label {
+      font-size: 11px;
+      opacity: 0.6;
+      margin-bottom: 2px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
     /* Controls */
     #controls {
       display: flex;
@@ -307,6 +345,8 @@
 
       // Clear transcript for new session
       document.getElementById('transcript').innerHTML = '';
+      lastTranscriptSpeaker = null;
+      lastTranscriptEl = null;
 
       // Fetch session token
       let token;
@@ -370,6 +410,9 @@
         ws.close(1000);
       }
       ws = null;
+      // Reset transcript tracking (keep content for reading)
+      lastTranscriptSpeaker = null;
+      lastTranscriptEl = null;
       // Audio cleanup
       if (isCapturing) {
         stopCapture();
@@ -378,11 +421,17 @@
         playback.clearQueue();
         playback = null;
       }
+      if (visualizerAnimId) {
+        cancelAnimationFrame(visualizerAnimId);
+        visualizerAnimId = null;
+      }
+      analyserNode = null;
       if (audioContext) {
         audioContext.close();
         audioContext = null;
       }
       setState(STATE.DISCONNECTED);
+      startVisualizer();
     }
 
     function handleProtocolMessage(msg) {
@@ -440,6 +489,8 @@
     var captureSource = null;
     var isCapturing = false;
     var playback = null;
+    var analyserNode = null;
+    var visualizerAnimId = null;
 
     // ── AudioPlayback Class ────────────────────────────────────────────────────
 
@@ -563,6 +614,17 @@
         console.warn('[voice] AudioWorklet load error, may already be registered:', err);
       }
 
+      // Create AnalyserNode for visualizer
+      if (!analyserNode) {
+        analyserNode = audioContext.createAnalyser();
+        analyserNode.fftSize = 256;
+        analyserNode.smoothingTimeConstant = 0.8;
+        analyserNode.connect(audioContext.destination);
+        if (playback) {
+          playback.setAnalyser(analyserNode);
+        }
+      }
+
       // Create capture chain
       captureSource = audioContext.createMediaStreamSource(captureStream);
       captureNode = new AudioWorkletNode(audioContext, 'pcm-capture');
@@ -573,14 +635,19 @@
       };
       captureSource.connect(captureNode);
       captureNode.connect(audioContext.destination);
+      captureSource.connect(analyserNode);
 
       // Create playback if needed
       if (!playback) {
         playback = new AudioPlayback(audioContext);
+        if (analyserNode) {
+          playback.setAnalyser(analyserNode);
+        }
       }
 
       isCapturing = true;
       setState(STATE.LISTENING);
+      startVisualizer();
     }
 
     function stopCapture() {
@@ -606,6 +673,9 @@
       if (!audioContext || audioContext.state !== 'running') return;
       if (!playback) {
         playback = new AudioPlayback(audioContext);
+        if (analyserNode) {
+          playback.setAnalyser(analyserNode);
+        }
       }
       playback.addPCM16(data);
       if (currentState !== STATE.SPEAKING) {
@@ -613,10 +683,41 @@
       }
     }
 
-    // ── Transcript Stub (Plan 03) ──────────────────────────────────────────────
+    // ── Transcript Display ───────────────────────────────────────────────────
+
+    var lastTranscriptSpeaker = null;
+    var lastTranscriptEl = null;
 
     function addTranscript(speaker, text) {
-      // Plan 03: render transcript chat bubbles
+      if (speaker === lastTranscriptSpeaker && lastTranscriptEl) {
+        // Update existing message (Gemini sends incremental updates)
+        lastTranscriptEl.textContent = text;
+      } else {
+        // Create new message bubble
+        var el = document.createElement('div');
+        el.className = 'transcript-msg ' + speaker;
+        var label = document.createElement('div');
+        label.className = 'speaker-label';
+        label.textContent = speaker === 'user' ? 'You' : 'GooseClaw';
+        var textEl = document.createElement('div');
+        textEl.className = 'msg-text';
+        textEl.textContent = text;
+        el.appendChild(label);
+        el.appendChild(textEl);
+        document.getElementById('transcript').appendChild(el);
+        lastTranscriptSpeaker = speaker;
+        lastTranscriptEl = textEl;
+      }
+      autoScrollTranscript();
+    }
+
+    function autoScrollTranscript() {
+      var container = document.getElementById('transcript');
+      var threshold = 80;
+      var isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < threshold;
+      if (isNearBottom) {
+        container.scrollTop = container.scrollHeight;
+      }
     }
 
     // ── Interruption (Barge-in) ────────────────────────────────────────────────
@@ -657,6 +758,94 @@
       }
     }
 
+    // ── Visualizer ──────────────────────────────────────────────────────────────
+
+    function startVisualizer() {
+      if (visualizerAnimId) {
+        cancelAnimationFrame(visualizerAnimId);
+        visualizerAnimId = null;
+      }
+      var canvas = document.getElementById('visualizer-canvas');
+      if (!canvas) return;
+      var ctx = canvas.getContext('2d');
+      var dpr = window.devicePixelRatio || 1;
+      canvas.width = canvas.clientWidth * dpr;
+      canvas.height = canvas.clientHeight * dpr;
+      ctx.scale(dpr, dpr);
+      var w = canvas.clientWidth;
+      var h = canvas.clientHeight;
+      var cx = w / 2;
+      var cy = h / 2;
+      var dataArray = analyserNode ? new Uint8Array(analyserNode.frequencyBinCount) : null;
+
+      function draw() {
+        visualizerAnimId = requestAnimationFrame(draw);
+        ctx.clearRect(0, 0, w, h);
+
+        var amplitude = 0;
+        if (analyserNode && dataArray) {
+          analyserNode.getByteFrequencyData(dataArray);
+          var sum = 0;
+          for (var i = 0; i < dataArray.length; i++) sum += dataArray[i];
+          amplitude = sum / dataArray.length / 255;
+        }
+
+        var baseRadius = Math.min(w, h) * 0.15;
+        var maxExpand = Math.min(w, h) * 0.2;
+        var radius = baseRadius + amplitude * maxExpand;
+
+        var r, g, b, alpha;
+        switch (currentState) {
+          case STATE.DISCONNECTED:
+            r = 80; g = 80; b = 80; alpha = 0.3;
+            break;
+          case STATE.CONNECTING:
+            r = 100; g = 100; b = 100; alpha = 0.5;
+            break;
+          case STATE.READY:
+            r = 124; g = 106; b = 239; alpha = 0.5;
+            break;
+          case STATE.LISTENING:
+            r = 239; g = 68; b = 68; alpha = 0.4 + amplitude * 0.6;
+            break;
+          case STATE.THINKING:
+            r = 245; g = 158; b = 11; alpha = 0.5;
+            break;
+          case STATE.SPEAKING:
+            r = 34; g = 197; b = 94; alpha = 0.4 + amplitude * 0.6;
+            break;
+          default:
+            r = 80; g = 80; b = 80; alpha = 0.3;
+        }
+
+        // Outer glow
+        var gradient = ctx.createRadialGradient(cx, cy, radius * 0.5, cx, cy, radius * 1.5);
+        gradient.addColorStop(0, 'rgba(' + r + ', ' + g + ', ' + b + ', ' + (alpha * 0.3) + ')');
+        gradient.addColorStop(1, 'rgba(' + r + ', ' + g + ', ' + b + ', 0)');
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius * 1.5, 0, Math.PI * 2);
+        ctx.fillStyle = gradient;
+        ctx.fill();
+
+        // Main orb
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(' + r + ', ' + g + ', ' + b + ', ' + alpha + ')';
+        ctx.fill();
+
+        // Inner highlight
+        var inner = ctx.createRadialGradient(cx - radius * 0.2, cy - radius * 0.2, 0, cx, cy, radius);
+        inner.addColorStop(0, 'rgba(255, 255, 255, ' + (alpha * 0.15) + ')');
+        inner.addColorStop(1, 'rgba(255, 255, 255, 0)');
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+        ctx.fillStyle = inner;
+        ctx.fill();
+      }
+
+      draw();
+    }
+
     // ── Mic Button Handler ─────────────────────────────────────────────────────
 
     function onMicClick() {
@@ -683,6 +872,9 @@
           break;
       }
     }
+
+    // Start idle visualizer on load
+    startVisualizer();
   </script>
 </body>
 </html>

@@ -7,21 +7,21 @@
 
 ### Voice Pipeline
 
-- [ ] **VOICE-01**: User can open voice dashboard (voice.html) in any modern browser on phone or desktop
+- [x] **VOICE-01**: User can open voice dashboard (voice.html) in any modern browser on phone or desktop
 - [x] **VOICE-02**: Browser establishes WebSocket connection to gateway.py which proxies to Gemini Live API
 - [ ] **VOICE-03**: User can tap a push-to-talk button to start speaking, audio streams in real-time to Gemini
 - [ ] **VOICE-04**: User hears AI responses played back as streaming audio chunks (not buffered full response)
 - [ ] **VOICE-05**: User can interrupt the AI mid-sentence (barge-in) and AI stops speaking and listens
 - [ ] **VOICE-06**: Voice Activity Detection automatically detects when user stops speaking (Gemini built-in VAD)
 - [ ] **VOICE-07**: User sees live transcript of both their speech and AI responses as scrolling chat
-- [ ] **VOICE-08**: User sees clear connection state indicators (disconnected, connecting, listening, thinking, speaking)
-- [ ] **VOICE-09**: User gets clear error messages for mic denied, WebSocket drop, API errors, quota exceeded
+- [x] **VOICE-08**: User sees clear connection state indicators (disconnected, connecting, listening, thinking, speaking)
+- [x] **VOICE-09**: User gets clear error messages for mic denied, WebSocket drop, API errors, quota exceeded
 - [ ] **VOICE-10**: WebSocket proxy sends ping/pong keepalives to survive Railway's 10-min timeout
 - [x] **VOICE-11**: Session handles Gemini's connection limits via context window compression and session resumption
 
 ### Dashboard UI
 
-- [ ] **UI-01**: Voice dashboard is a single self-contained HTML file (voice.html) with no build tooling
+- [x] **UI-01**: Voice dashboard is a single self-contained HTML file (voice.html) with no build tooling
 - [ ] **UI-02**: Voice visualizer (reactive orb/waveform) responds to audio input/output volume in real-time
 - [ ] **UI-03**: Spacebar hold-to-talk, Escape to disconnect keyboard shortcuts work on desktop
 - [ ] **UI-04**: User can type messages in same interface when voice isn't convenient (text-to-voice switching)
@@ -74,18 +74,18 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| VOICE-01 | Phase 30 | Pending |
+| VOICE-01 | Phase 30 | Complete |
 | VOICE-02 | Phase 28 | Complete |
 | VOICE-03 | Phase 30 | Pending |
 | VOICE-04 | Phase 30 | Pending |
 | VOICE-05 | Phase 30 | Pending |
 | VOICE-06 | Phase 30 | Pending |
 | VOICE-07 | Phase 30 | Pending |
-| VOICE-08 | Phase 30 | Pending |
-| VOICE-09 | Phase 30 | Pending |
+| VOICE-08 | Phase 30 | Complete |
+| VOICE-09 | Phase 30 | Complete |
 | VOICE-10 | Phase 27 | Pending |
 | VOICE-11 | Phase 28 | Complete |
-| UI-01 | Phase 30 | Pending |
+| UI-01 | Phase 30 | Complete |
 | UI-02 | Phase 30 | Pending |
 | UI-03 | Phase 31 | Pending |
 | UI-04 | Phase 31 | Pending |

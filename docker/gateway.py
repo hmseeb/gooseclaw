@@ -8963,9 +8963,9 @@ def _voice_session_token_validate(token):
         return entry["api_key"]
 
 
-def _gemini_build_config(resumption_handle=None, voice_name="Aoede"):
+def _gemini_build_config(resumption_handle=None, voice_name="Aoede", tools=None):
     """Build Gemini Live API setup config JSON."""
-    return {
+    cfg = {
         "config": {
             "model": "models/gemini-3.1-flash-live-preview",
             "generationConfig": {
@@ -8996,6 +8996,9 @@ def _gemini_build_config(resumption_handle=None, voice_name="Aoede"):
             }
         }
     }
+    if tools:
+        cfg["config"]["tools"] = [{"functionDeclarations": tools}]
+    return cfg
 
 
 def _voice_pcm_to_gemini_json(pcm_bytes):
@@ -9049,6 +9052,84 @@ def _voice_parse_server_message(msg):
 
 
 _voice_log = logging.getLogger("voice")
+
+
+def _discover_voice_tools():
+    """Query goosed for enabled extensions, return (Gemini function declarations, name_map).
+
+    Returns:
+        tuple: (list of function declaration dicts, dict mapping sanitized_name -> original_name)
+    """
+    try:
+        conn = _goosed_conn(timeout=5)
+        conn.request("GET", "/config", headers={"X-Secret-Key": _INTERNAL_GOOSE_TOKEN})
+        resp = conn.getresponse()
+        if resp.status != 200:
+            resp.read()
+            conn.close()
+            return [], {}
+        cfg = json.loads(resp.read().decode("utf-8", errors="replace"))
+        conn.close()
+
+        extensions = cfg.get("config", {}).get("extensions", {})
+        declarations = []
+        name_map = {}
+        for ext_name, ext_cfg in extensions.items():
+            if not isinstance(ext_cfg, dict):
+                continue
+            if ext_cfg.get("enabled") is False:
+                continue
+            safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', ext_name)
+            if safe_name and safe_name[0].isdigit():
+                safe_name = "ext_" + safe_name
+            declarations.append({
+                "name": safe_name,
+                "description": f"Use the {ext_name} extension/tool",
+                "parameters": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "request": {
+                            "type": "STRING",
+                            "description": "What to do with this tool",
+                        }
+                    },
+                    "required": ["request"],
+                },
+            })
+            name_map[safe_name] = ext_name
+        return declarations, name_map
+    except Exception as e:
+        _voice_log.warning(f"Tool discovery failed: {e}")
+        return [], {}
+
+
+def _voice_execute_tool(tool_name, tool_args, session_id, original_name):
+    """Execute a tool call via goosed and return result dict."""
+    try:
+        request = tool_args.get("request", str(tool_args))
+        prompt = f"Use the {original_name} tool: {request}"
+        response_text, error_string, _media = _do_rest_relay(prompt, session_id, timeout=15)
+        if error_string:
+            return {"error": error_string}
+        return {"result": response_text[:2000]}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _voice_build_tool_response(call_id, call_name, result):
+    """Build Gemini toolResponse message dict."""
+    return {
+        "toolResponse": {
+            "functionResponses": [
+                {
+                    "id": call_id,
+                    "name": call_name,
+                    "response": result,
+                }
+            ]
+        },
+        "scheduling": "SILENT",
+    }
 
 
 def _gemini_connect(api_key, resumption_handle=None):

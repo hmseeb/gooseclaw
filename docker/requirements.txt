@@ -10,6 +10,7 @@ websocket-client==1.8.0
 chromadb==1.5.5
 mem0ai[graph]==1.0.6
 kuzu>=0.8.0
+rank-bm25>=0.2.2
 groq>=0.18.0
 sentence-transformers>=5.0.0
 anthropic>=0.40.0

@@ -10250,7 +10250,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(_VOICE_GATE_HTML)
             return
         # Gemini key is configured -- try to serve voice.html
-        voice_html_path = os.path.join(os.environ.get("APP_DIR", "/app"), "voice.html")
+        voice_html_path = os.path.join(APP_DIR, "docker", "voice.html")
         try:
             with open(voice_html_path, "rb") as f:
                 content = f.read()

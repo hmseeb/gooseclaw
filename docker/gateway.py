@@ -9935,6 +9935,10 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             # connect to Gemini Live API (no tools initially, voice-only)
             gemini_sock = _gemini_connect(api_key, voice_name=voice_name)
 
+            # setupComplete was consumed by _gemini_connect, send "ready" to browser
+            ws_send_frame(browser_sock, WS_OP_TEXT, json.dumps({"type": "ready"}).encode())
+            _voice_log.info("Sent ready to browser")
+
             # session state shared between relay threads
             session_state = {
                 "gemini_sock": gemini_sock,

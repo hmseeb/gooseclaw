@@ -10003,29 +10003,24 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         self.send_json(200, {"voice_name": voice_name})
 
     def handle_voice_ws(self):
-        """Raw TCP proxy to voice_test_server.py on localhost:8765.
+        """Direct WebSocket relay: browser <-> gateway <-> Gemini Live API.
 
-        1. Complete the HTTP 101 upgrade with the browser (keep existing validation)
-        2. Open a NEW TCP connection to localhost:8765
-        3. Reconstruct and forward the original HTTP upgrade request to 8765
-        4. Read the 101 response from 8765 (discard it, we already sent 101 to browser)
-        5. Use select.select() to bidirectionally copy raw bytes
-        6. No WebSocket framing, no parsing. just raw byte relay
+        No intermediate voice_test_server. Gateway handles:
+        1. WebSocket handshake with browser
+        2. Direct connection to Gemini Live API
+        3. Frame-level relay using _voice_relay_loop()
         """
-        _VOICE_BACKEND_PORT = 8765
-
         # validate upgrade header
         if self.headers.get("Upgrade", "").lower() != "websocket":
             self.send_error(400, "Expected WebSocket upgrade")
             return
 
-        # validate key
         client_key = self.headers.get("Sec-WebSocket-Key")
         if not client_key:
             self.send_error(400, "Missing Sec-WebSocket-Key")
             return
 
-        # extract and validate session token from query params
+        # extract and validate session token
         parsed_url = urllib.parse.urlparse(self.path)
         query = urllib.parse.parse_qs(parsed_url.query)
         token = query.get("token", [None])[0]
@@ -10037,117 +10032,111 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.send_error(403, "Invalid or expired voice session token")
             return
 
+        voice_name = query.get("voice", ["Aoede"])[0]
+
         # origin check (warn but don't reject)
         origin = self.headers.get("Origin", "")
         host = self.headers.get("Host", "")
         if origin and host and origin.split("//")[-1].split("/")[0] != host:
             _ws_log.warning("Origin mismatch", extra={"event": "ws_origin_mismatch", "origin": origin, "host": host})
 
-        # DON'T do the 101 here. Forward the entire HTTP upgrade to
-        # the voice server and let IT handle the WebSocket handshake.
-        # This way there's ONE WebSocket session, not two.
         self.close_connection = True
-
         browser_sock = self.request
         conn_id = uuid.uuid4().hex[:8]
-        _voice_log.info("Voice WS proxy started", extra={"event": "voice_proxy_open", "conn_id": conn_id})
+        session_id = uuid.uuid4().hex
 
-        internal_sock = None
+        # Complete WebSocket handshake with browser
+        accept_key = ws_accept_key(client_key)
+        handshake_response = (
+            "HTTP/1.1 101 Switching Protocols\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            f"Sec-WebSocket-Accept: {accept_key}\r\n"
+            "\r\n"
+        ).encode()
         try:
-            # connect to voice_test_server on localhost:8765
-            internal_sock = socket.create_connection(("127.0.0.1", _VOICE_BACKEND_PORT), timeout=5)
+            browser_sock.sendall(handshake_response)
+        except (OSError, BrokenPipeError) as e:
+            _voice_log.info(f"Browser handshake send failed: {e}")
+            return
 
-            # forward the ORIGINAL HTTP request to the voice server
-            req_line = f"GET {self.path} HTTP/1.1\r\n"
-            header_lines = ""
-            for hdr_key, hdr_val in self.headers.items():
-                header_lines += f"{hdr_key}: {hdr_val}\r\n"
-            upgrade_req = (req_line + header_lines + "\r\n").encode()
-            internal_sock.sendall(upgrade_req)
+        _voice_log.info(f"Voice WS handshake complete", extra={"event": "voice_ws_open", "conn_id": conn_id})
 
-            # read voice server's 101 response and forward to browser
-            internal_sock.settimeout(10)
-            resp_buf = b""
-            while b"\r\n\r\n" not in resp_buf:
-                chunk = internal_sock.recv(4096)
-                if not chunk:
-                    raise ConnectionError("voice backend closed during handshake")
-                resp_buf += chunk
-
-            status_line = resp_buf.split(b"\r\n")[0]
-            if b"101" not in status_line:
-                raise ConnectionError(f"voice backend rejected: {status_line.decode(errors='replace')}")
-
-            # send the voice server's 101 response to browser (pass-through)
-            browser_sock.sendall(resp_buf)
-
-            _voice_log.info("Voice backend handshake OK, starting raw proxy", extra={"event": "voice_proxy_connected", "conn_id": conn_id})
-
-            # Use raw socket fd for select, bypassing rfile BufferedReader.
-            # rfile may have buffered data; detach it to prevent interference.
+        gemini_sock = None
+        try:
+            # Discover tools from goosed
+            tools, tool_name_map = [], {}
             try:
-                self.rfile.detach()  # release the socket from BufferedReader
-            except Exception:
-                pass
+                tools, tool_name_map = _discover_voice_tools()
+                if tools:
+                    _voice_log.info(f"Discovered {len(tools)} voice tools")
+            except Exception as e:
+                _voice_log.warning(f"Tool discovery failed: {e}")
 
-            # set both sockets non-blocking for select loop
-            browser_sock.setblocking(False)
-            internal_sock.setblocking(False)
+            # Connect to Gemini Live API directly
+            gemini_sock = _gemini_connect(api_key, tools=tools if tools else None, voice_name=voice_name)
 
-            # bidirectional raw byte relay using select
-            BUF_SIZE = 65536
-            while True:
+            # Send ready to browser
+            ws_send_frame(browser_sock, WS_OP_TEXT,
+                json.dumps({"type": "ready"}).encode())
+            _voice_log.info("Sent ready to browser, starting relay loop")
+
+            # Build session state for the relay loop
+            session_state = {
+                "gemini_sock": gemini_sock,
+                "api_key": api_key,
+                "voice_name": voice_name,
+                "resumption_handle": None,
+                "tool_name_map": tool_name_map,
+                "tool_session_id": None,
+                "transcripts": [],
+                "session_id": session_id,
+            }
+
+            # Run the relay loop (blocks until session ends)
+            _voice_relay_loop(browser_sock, gemini_sock, session_state)
+
+            # Save session if we have transcripts
+            if session_state["transcripts"]:
+                session_data = {
+                    "id": session_id,
+                    "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "transcript": session_state["transcripts"],
+                    "voice": voice_name,
+                    "preview": _voice_build_preview(session_state["transcripts"]),
+                }
                 try:
-                    readable, _, exceptional = select.select(
-                        [browser_sock, internal_sock],
-                        [],
-                        [browser_sock, internal_sock],
-                        30.0,  # 30s timeout to detect dead connections
-                    )
-                except (ValueError, OSError):
-                    # socket closed
-                    break
-
-                if exceptional:
-                    break
-
-                if not readable:
-                    # timeout, send ping or just continue (connection might be idle)
-                    continue
-
-                for sock in readable:
-                    try:
-                        data = sock.recv(BUF_SIZE)
-                    except (BlockingIOError, ssl.SSLWantReadError):
-                        continue
-                    except (ConnectionError, OSError):
-                        data = b""
-
-                    if not data:
-                        # one side closed, we're done
-                        raise ConnectionError("peer disconnected")
-
-                    # forward to the other side
-                    target = internal_sock if sock is browser_sock else browser_sock
-                    try:
-                        target.sendall(data)
-                    except (ConnectionError, OSError, BrokenPipeError):
-                        raise ConnectionError("target disconnected")
+                    _voice_save_session(session_data)
+                    # Extract memory in background
+                    threading.Thread(
+                        target=_voice_extract_memory,
+                        args=(session_data,),
+                        daemon=True,
+                    ).start()
+                except Exception as e:
+                    _voice_log.warning(f"Session save failed: {e}")
 
         except Exception as e:
-            _voice_log.info(f"Voice proxy ended: {e}", extra={"event": "voice_proxy_end", "conn_id": conn_id})
+            _voice_log.info(f"Voice session error: {e}", extra={"event": "voice_error", "conn_id": conn_id})
+            try:
+                ws_send_frame(browser_sock, WS_OP_TEXT,
+                    json.dumps({"type": "error", "message": str(e)}).encode())
+            except Exception:
+                pass
         finally:
-            # clean up both sockets
-            if internal_sock:
+            # Clean close
+            if gemini_sock:
                 try:
-                    internal_sock.close()
+                    ws_send_close(gemini_sock, mask=True)
+                    gemini_sock.close()
                 except Exception:
                     pass
             try:
+                ws_send_close(browser_sock)
                 browser_sock.close()
             except Exception:
                 pass
-            _voice_log.info("Voice WS proxy closed", extra={"event": "voice_proxy_close", "conn_id": conn_id})
+            _voice_log.info("Voice session ended", extra={"event": "voice_ws_close", "conn_id": conn_id})
 
     def handle_health(self):
         """GET /api/health — deep health check: liveness + goosed subprocess status."""

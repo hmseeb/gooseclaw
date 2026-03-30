@@ -9257,7 +9257,7 @@ def _voice_extract_memory(session_data):
 
 def _gemini_connect(api_key, resumption_handle=None, tools=None, voice_name="Aoede"):
     """Open WebSocket to Gemini Live API and send setup config. Returns socket."""
-    _voice_log.info("Connecting to Gemini Live API...")
+    _voice_log.info(f"Connecting to Gemini Live API... (key prefix: {api_key[:8]}..., len: {len(api_key)})")
     sock = ws_client_connect(
         host=GEMINI_LIVE_HOST,
         path=GEMINI_LIVE_PATH,
@@ -9311,8 +9311,17 @@ def _voice_relay_gemini_to_browser(browser_sock, session_state, stop_event):
                 break
             opcode, payload = ws_recv_frame(gs)
             if opcode is None or opcode == WS_OP_CLOSE:
-                close_reason = payload.decode(errors="replace")[:200] if payload else "no reason"
+                close_reason = ""
+                if payload and len(payload) > 2:
+                    close_reason = payload[2:].decode(errors="replace")[:200]
                 _voice_log.info(f"Gemini closed connection: opcode={opcode} reason={close_reason}")
+                # Send error to browser so user sees it
+                if close_reason:
+                    try:
+                        err_msg = json.dumps({"type": "error", "message": close_reason})
+                        ws_send_frame(browser_sock, WS_OP_TEXT, err_msg.encode())
+                    except Exception:
+                        pass
                 break
             if opcode == WS_OP_PING:
                 ws_send_frame(gs, WS_OP_PONG, payload, mask=True)

@@ -1079,6 +1079,7 @@
     // ── WebSocket Manager ──────────────────────────────────────────────────────
 
     let ws = null;
+    let _gotReadyState = false;
 
     async function connectVoice() {
       if (currentState !== STATE.DISCONNECTED) return;
@@ -1089,6 +1090,7 @@
       document.getElementById('transcript').innerHTML = '';
       lastTranscriptSpeaker = null;
       lastTranscriptEl = null;
+      _gotReadyState = false;
 
       // Fetch session token
       let token;
@@ -1134,10 +1136,12 @@
       };
 
       ws.onclose = function(event) {
-        console.log('[voice] WebSocket closed, code:', event.code);
+        console.log('[voice] WebSocket closed, code:', event.code, 'reason:', event.reason);
         setState(STATE.DISCONNECTED);
-        if (event.code !== 1000) {
-          showError('Connection lost. Tap mic to reconnect.');
+        if (event.code === 1000 && !_gotReadyState) {
+          showError('Voice setup failed. Check your Gemini API key in settings.');
+        } else if (event.code !== 1000) {
+          showError('Connection lost (code ' + event.code + '). Tap mic to reconnect.');
         }
         ws = null;
       };
@@ -1180,6 +1184,7 @@
     function handleProtocolMessage(msg) {
       switch (msg.type) {
         case 'ready':
+          _gotReadyState = true;
           setState(STATE.READY);
           break;
         case 'transcript':

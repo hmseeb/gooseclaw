@@ -124,7 +124,8 @@ def _recv_frame(sock):
         if masked and mk:
             payload = bytes(b ^ mk[i % 4] for i, b in enumerate(payload))
         return op, payload
-    except (ConnectionError, OSError):
+    except (ConnectionError, OSError) as e:
+        print(f"[recv_frame] {type(e).__name__}: {e}")
         return None, b""
 
 

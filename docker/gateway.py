@@ -2737,7 +2737,9 @@ async function doLogin(e) {
     });
     const data = await resp.json();
     if (data.success) {
-      window.location.href = '/';
+      // Redirect back to where user came from (or home)
+      var params = new URLSearchParams(window.location.search);
+      window.location.href = params.get('next') || '/';
     } else {
       errEl.textContent = data.error || 'Login failed';
       errEl.style.display = 'block';
@@ -9436,8 +9438,14 @@ def _voice_relay_gemini_to_browser(browser_sock, session_state, stop_event):
                             "speaker": "tool", "name": original_name, "status": "running", "ts": time.time(),
                         })
 
-                        def _exec_tool(cid, cname, cargs, oname, sid):
+                        def _exec_tool(cid, cname, cargs, oname, ss):
                             try:
+                                # Lazy session creation on first tool call
+                                sid = ss.get("tool_session_id")
+                                if not sid:
+                                    sid = _create_goose_session()
+                                    ss["tool_session_id"] = sid
+                                    _voice_log.info(f"Created tool session: {sid}")
                                 result = _voice_execute_tool(cname, cargs, sid, oname)
                                 response_msg = _voice_build_tool_response(cid, cname, result)
                                 with session_state["_lock"]:
@@ -9471,7 +9479,7 @@ def _voice_relay_gemini_to_browser(browser_sock, session_state, stop_event):
                         t = threading.Thread(
                             target=_exec_tool,
                             args=(call_id, call_name, call_args, original_name,
-                                  session_state.get("tool_session_id")),
+                                  session_state),
                             daemon=True)
                         t.start()
                 elif parsed["type"] == "tool_cancelled":
@@ -9947,11 +9955,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             tools, tool_name_map = _discover_voice_tools()
             if tools:
                 _voice_log.info(f"Discovered {len(tools)} voice tools: {[t['name'] for t in tools]}")
-                tool_session_id = _create_goose_session()
-                if not tool_session_id:
-                    _voice_log.warning("Tool session creation failed, tools disabled")
-                    tools = []
-                    tool_name_map = {}
+                # Don't create goosed session yet - defer until first tool call
+                # to avoid extension loading threads that destabilize the connection
         except Exception as e:
             _voice_log.warning(f"Tool discovery failed: {e}")
 
@@ -10251,7 +10256,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         is_recovery = "recover" in query
         if load_setup() and not is_recovery and not check_auth(self):
             self.send_response(302)
-            self.send_header("Location", "/login")
+            self.send_header("Location", "/login?next=/setup")
             self.end_headers()
             return
         try:
@@ -10336,7 +10341,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         """Serve voice dashboard. Gates on auth + Gemini key presence."""
         if not check_auth(self):
             self.send_response(302)
-            self.send_header("Location", "/login")
+            self.send_header("Location", "/login?next=/voice")
             self.end_headers()
             return
         api_key = _get_gemini_api_key()

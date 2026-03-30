@@ -10000,8 +10000,13 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             t_gemini.start()
 
             # block until either side disconnects, sending pings every 25s
-            # (replaces dedicated ping threads to reduce thread count)
+            # Max session: 9 min (Gemini limit is 10 min, leave margin)
+            session_start = time.time()
+            max_duration = 9 * 60
             while not stop_event.wait(timeout=25):
+                if time.time() - session_start > max_duration:
+                    _voice_log.info("Voice session max duration reached (9 min)")
+                    break
                 try:
                     ws_send_frame(browser_sock, WS_OP_PING, b"")
                 except Exception:
@@ -11962,7 +11967,7 @@ def main():
 
     class BoundedThreadServer(ThreadingHTTPServer):
         """HTTPServer with a bounded thread pool instead of unlimited thread spawning."""
-        _pool = ThreadPoolExecutor(max_workers=64)
+        _pool = ThreadPoolExecutor(max_workers=32)
 
         def process_request(self, request, client_address):
             try:

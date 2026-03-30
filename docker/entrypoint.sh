@@ -866,6 +866,12 @@ if [ -f /data/boot-services.sh ]; then
     fi
 fi
 
+# ─── start voice WebSocket server (websockets library, async) ─────────────
+
+echo "[voice] starting voice server on port 8765..."
+runuser -u gooseclaw -- python3 "$APP_DIR/docker/voice_test_server.py" &
+VOICE_SERVER_PID=$!
+
 # ─── start gateway (setup wizard + reverse proxy to goosed) ──────────────
 
 echo "[gateway] starting gateway on port ${PORT:-8080}..."
@@ -906,6 +912,14 @@ fi
     sleep 30  # initial grace period
     while true; do
         sleep 60
+
+        # check voice server
+        if ! kill -0 "$VOICE_SERVER_PID" 2>/dev/null; then
+            echo "[watchdog] voice server crashed, restarting..."
+            runuser -u gooseclaw -- python3 "$APP_DIR/docker/voice_test_server.py" &
+            VOICE_SERVER_PID=$!
+            echo "[watchdog] voice server restarted (pid $VOICE_SERVER_PID)"
+        fi
 
         # check gateway
         if ! kill -0 "$GATEWAY_PY_PID" 2>/dev/null; then

@@ -82,7 +82,7 @@ COPY .goosehints /app/.goosehints
 COPY VERSION /app/VERSION
 
 # make scripts executable
-RUN chmod +x /app/docker/entrypoint.sh /app/docker/gateway.py /app/scripts/persist.sh /app/docker/scripts/notify.sh /app/docker/scripts/secret.sh /app/docker/scripts/remind.sh /app/docker/scripts/job.sh
+RUN chmod +x /app/docker/entrypoint.sh /app/docker/gateway.py /app/docker/voice_test_server.py /app/scripts/persist.sh /app/docker/scripts/notify.sh /app/docker/scripts/secret.sh /app/docker/scripts/remind.sh /app/docker/scripts/job.sh
 # put helper scripts on PATH
 RUN ln -sf /app/docker/scripts/notify.sh /usr/local/bin/notify && \
     ln -sf /app/docker/scripts/secret.sh /usr/local/bin/secret && \

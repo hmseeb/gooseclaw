@@ -10043,22 +10043,12 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         if origin and host and origin.split("//")[-1].split("/")[0] != host:
             _ws_log.warning("Origin mismatch", extra={"event": "ws_origin_mismatch", "origin": origin, "host": host})
 
-        # send 101 switching protocols to browser
-        accept = ws_accept_key(client_key)
-        self.send_response(101, "Switching Protocols")
-        self.send_header("Upgrade", "websocket")
-        self.send_header("Connection", "Upgrade")
-        self.send_header("Sec-WebSocket-Accept", accept)
-        self.end_headers()
-        self.wfile.flush()
-
-        # prevent BaseHTTPRequestHandler from reading more HTTP
+        # DON'T do the 101 here. Forward the entire HTTP upgrade to
+        # the voice server and let IT handle the WebSocket handshake.
+        # This way there's ONE WebSocket session, not two.
         self.close_connection = True
 
-        # get raw browser socket
         browser_sock = self.request
-        browser_sock.setblocking(False)
-
         conn_id = uuid.uuid4().hex[:8]
         _voice_log.info("Voice WS proxy started", extra={"event": "voice_proxy_open", "conn_id": conn_id})
 
@@ -10067,21 +10057,15 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             # connect to voice_test_server on localhost:8765
             internal_sock = socket.create_connection(("127.0.0.1", _VOICE_BACKEND_PORT), timeout=5)
 
-            # reconstruct the original HTTP upgrade request to forward
+            # forward the ORIGINAL HTTP request to the voice server
             req_line = f"GET {self.path} HTTP/1.1\r\n"
             header_lines = ""
-            for key, val in self.headers.items():
-                if key.lower() == "host":
-                    header_lines += f"Host: 127.0.0.1:{_VOICE_BACKEND_PORT}\r\n"
-                else:
-                    header_lines += f"{key}: {val}\r\n"
-            # ensure Host header exists
-            if "host" not in [k.lower() for k in self.headers.keys()]:
-                header_lines += f"Host: 127.0.0.1:{_VOICE_BACKEND_PORT}\r\n"
+            for hdr_key, hdr_val in self.headers.items():
+                header_lines += f"{hdr_key}: {hdr_val}\r\n"
             upgrade_req = (req_line + header_lines + "\r\n").encode()
             internal_sock.sendall(upgrade_req)
 
-            # read the 101 response from voice_test_server (blocking, short timeout)
+            # read voice server's 101 response and forward to browser
             internal_sock.settimeout(10)
             resp_buf = b""
             while b"\r\n\r\n" not in resp_buf:
@@ -10089,22 +10073,19 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                 if not chunk:
                     raise ConnectionError("voice backend closed during handshake")
                 resp_buf += chunk
-            # check it's actually 101
+
             status_line = resp_buf.split(b"\r\n")[0]
             if b"101" not in status_line:
-                raise ConnectionError(f"voice backend rejected upgrade: {status_line.decode(errors='replace')}")
+                raise ConnectionError(f"voice backend rejected: {status_line.decode(errors='replace')}")
 
-            # any leftover bytes after the headers belong to the WebSocket stream
-            leftover = resp_buf.split(b"\r\n\r\n", 1)[1]
+            # send the voice server's 101 response to browser (pass-through)
+            browser_sock.sendall(resp_buf)
 
             _voice_log.info("Voice backend handshake OK, starting raw proxy", extra={"event": "voice_proxy_connected", "conn_id": conn_id})
 
             # set both sockets non-blocking for select loop
+            browser_sock.setblocking(False)
             internal_sock.setblocking(False)
-
-            # if there's leftover data from the backend handshake response, send it to browser
-            if leftover:
-                browser_sock.sendall(leftover)
 
             # bidirectional raw byte relay using select
             BUF_SIZE = 65536

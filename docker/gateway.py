@@ -4664,15 +4664,18 @@ def _job_engine_loop():
                 cron_expr = job.get("cron")
                 if cron_expr:
                     if _cron_matches_now(cron_expr, now_local):
-                        # double-fire prevention
+                        # double-fire prevention: compare full local datetime (YYYY-MM-DD HH:MM)
                         last_run = job.get("last_run", "")
                         if last_run:
                             try:
-                                if "T" in last_run:
-                                    lr_time = last_run.split("T")[1][:5]
-                                    now_time = time.strftime("%H:%M", now_local)
-                                    if lr_time == now_time:
-                                        continue
+                                # convert UTC last_run to local time for comparison
+                                lr_utc = time.strptime(last_run[:19], "%Y-%m-%dT%H:%M:%S")
+                                lr_epoch = time.mktime(lr_utc) - time.timezone
+                                lr_local = time.localtime(lr_epoch)
+                                lr_minute = time.strftime("%Y-%m-%d %H:%M", lr_local)
+                                now_minute = time.strftime("%Y-%m-%d %H:%M", now_local)
+                                if lr_minute == now_minute:
+                                    continue
                             except Exception:
                                 pass
                         should_fire = True
@@ -5583,11 +5586,14 @@ def _cron_scheduler_loop():
                 last_run = job.get("last_run", "")
                 if last_run:
                     try:
-                        if "T" in last_run:
-                            lr_time = last_run.split("T")[1][:5]  # HH:MM
-                            now_time = time.strftime("%H:%M", now)
-                            if lr_time == now_time:
-                                continue
+                        # convert UTC last_run to local time for comparison
+                        lr_utc = time.strptime(last_run[:19], "%Y-%m-%dT%H:%M:%S")
+                        lr_epoch = time.mktime(lr_utc) - time.timezone
+                        lr_local = time.localtime(lr_epoch)
+                        lr_minute = time.strftime("%Y-%m-%d %H:%M", lr_local)
+                        now_minute = time.strftime("%Y-%m-%d %H:%M", now)
+                        if lr_minute == now_minute:
+                            continue
                     except Exception:
                         pass
 

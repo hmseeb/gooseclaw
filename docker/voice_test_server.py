@@ -421,6 +421,9 @@ async def main():
         "0.0.0.0",
         PORT,
         process_request=process_request,
+        ping_interval=None,  # disable keepalive pings (proxy can't relay pongs reliably)
+        ping_timeout=None,
+        close_timeout=5,
     ):
         await asyncio.Future()
 

@@ -10003,23 +10003,19 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             t_browser.start()
             t_gemini.start()
 
-            # Keep connection alive with frequent pings (Railway proxy kills idle WS)
-            # Railway's proxy timeout is ~10s for idle WebSocket connections
+            # Keep browser connection alive with pings.
+            # Do NOT ping gemini_sock here — the browser relay thread
+            # also writes to it. Concurrent writes corrupt WebSocket frames
+            # and cause Gemini to close the connection.
+            # Audio data flow keeps the Gemini connection alive naturally.
             session_start = time.time()
             max_duration = 9 * 60
-            while not stop_event.wait(timeout=5):
+            while not stop_event.wait(timeout=10):
                 if time.time() - session_start > max_duration:
                     _voice_log.info("Voice session max duration reached (9 min)")
                     break
                 try:
                     ws_send_frame(browser_sock, WS_OP_PING, b"")
-                except Exception:
-                    break
-                try:
-                    with session_state["_lock"]:
-                        gs = session_state["gemini_sock"]
-                    if gs:
-                        ws_send_frame(gs, WS_OP_PING, b"", mask=True)
                 except Exception:
                     break
 

@@ -93,7 +93,7 @@ def _discover_voice_tools():
             name_map[safe_name] = ext_name
         return declarations, name_map
     except Exception as e:
-        print(f"[voice] tool discovery failed: {e}")
+        print(f"[voice] tool discovery failed: {e}", flush=True)
         return [], {}
 
 
@@ -125,7 +125,12 @@ def _recv_frame(sock):
             payload = bytes(b ^ mk[i % 4] for i, b in enumerate(payload))
         return op, payload
     except (ConnectionError, OSError) as e:
-        print(f"[recv_frame] {type(e).__name__}: {e}")
+        import sys
+        print(f"[recv_frame] {type(e).__name__}: {e}", flush=True)
+        return None, b""
+    except Exception as e:
+        import sys
+        print(f"[recv_frame] UNEXPECTED {type(e).__name__}: {e}", flush=True)
         return None, b""
 
 
@@ -182,7 +187,7 @@ def gemini_connect(api_key, voice_name="Aoede", tools=None):
                 return d
             return orig(n)
         sock.recv = patched
-    print("[gemini] handshake OK")
+    print("[gemini] handshake OK", flush=True)
 
     config = {
         "setup": {
@@ -213,7 +218,7 @@ def gemini_connect(api_key, voice_name="Aoede", tools=None):
         config["setup"]["tools"] = [{"functionDeclarations": tools}]
 
     _send_frame(sock, 1, json.dumps(config).encode(), mask=True)
-    print("[gemini] config sent")
+    print("[gemini] config sent", flush=True)
     sock.settimeout(15)
     op, payload = _recv_frame(sock)
     if op is None:
@@ -224,7 +229,7 @@ def gemini_connect(api_key, voice_name="Aoede", tools=None):
     try:
         msg = json.loads(payload.decode())
         if "setupComplete" in msg:
-            print("[gemini] setupComplete OK")
+            print("[gemini] setupComplete OK", flush=True)
     except Exception:
         pass
     sock.settimeout(60)
@@ -260,7 +265,7 @@ def parse_msg(msg):
 # ── WebSocket handler ────────────────────────────────────────────────────────
 
 async def voice_handler(ws):
-    print(f"[ws] browser connected: {ws.remote_address}")
+    print(f"[ws] browser connected: {ws.remote_address}", flush=True)
     gemini = None
 
     api_key = _get_gemini_api_key()
@@ -274,14 +279,14 @@ async def voice_handler(ws):
     try:
         tools, tool_name_map = _discover_voice_tools()
         if tools:
-            print(f"[voice] discovered {len(tools)} tools: {[t['name'] for t in tools]}")
+            print(f"[voice] discovered {len(tools)} tools: {[t['name'] for t in tools]}", flush=True)
     except Exception as e:
-        print(f"[voice] tool discovery failed: {e}")
+        print(f"[voice] tool discovery failed: {e}", flush=True)
 
     try:
         gemini = gemini_connect(api_key, tools=tools if tools else None)
         await ws.send(json.dumps({"type": "ready"}))
-        print("[ws] sent ready")
+        print("[ws] sent ready", flush=True)
 
         stop = asyncio.Event()
 
@@ -302,7 +307,7 @@ async def voice_handler(ws):
                     else:
                         _send_frame(gemini, 1, msg.encode() if isinstance(msg, str) else msg, mask=True)
             except Exception as e:
-                print(f"[b->g] {e}")
+                print(f"[b->g] {e}", flush=True)
             finally:
                 stop.set()
 
@@ -315,7 +320,7 @@ async def voice_handler(ws):
                         reason = payload[2:].decode(errors="replace") if payload and len(payload) > 2 else ""
                         if reason:
                             await ws.send(json.dumps({"type": "error", "message": reason}))
-                        print(f"[g->b] gemini closed: {reason}")
+                        print(f"[g->b] gemini closed: {reason}", flush=True)
                         break
                     if op == 9:
                         _send_frame(gemini, 10, payload, mask=True)
@@ -336,18 +341,18 @@ async def voice_handler(ws):
                                 await ws.send(chunk)
                             if parsed["type"] == "transcript":
                                 await ws.send(json.dumps(parsed))
-                                print(f"  [{parsed['speaker']}] {parsed['text']}")
+                                print(f"  [{parsed['speaker']}] {parsed['text']}", flush=True)
                         elif parsed["type"] == "interrupted":
                             await ws.send(json.dumps({"type": "interrupted"}))
             except Exception as e:
-                print(f"[g->b] {e}")
+                print(f"[g->b] {e}", flush=True)
             finally:
                 stop.set()
 
         await asyncio.gather(browser_to_gemini(), gemini_to_browser())
 
     except Exception as e:
-        print(f"[ws] error: {e}")
+        print(f"[ws] error: {e}", flush=True)
         try:
             await ws.send(json.dumps({"type": "error", "message": str(e)}))
         except Exception:
@@ -358,7 +363,7 @@ async def voice_handler(ws):
                 gemini.close()
             except Exception:
                 pass
-        print("[ws] session ended")
+        print("[ws] session ended", flush=True)
 
 
 # ── HTTP request handler (non-WebSocket) ─────────────────────────────────────
@@ -408,9 +413,9 @@ async def process_request(connection, request):
 # ── main ─────────────────────────────────────────────────────────────────────
 
 async def main():
-    print(f"[voice] server starting on 0.0.0.0:{PORT}")
-    print(f"[voice] vault: {VAULT_FILE}")
-    print(f"[voice] goosed: 127.0.0.1:{GOOSE_PORT}")
+    print(f"[voice] server starting on 0.0.0.0:{PORT}", flush=True)
+    print(f"[voice] vault: {VAULT_FILE}", flush=True)
+    print(f"[voice] goosed: 127.0.0.1:{GOOSE_PORT}", flush=True)
     async with websockets.serve(
         voice_handler,
         "0.0.0.0",

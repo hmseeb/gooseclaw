@@ -9068,11 +9068,15 @@ def _voice_parse_server_message(msg):
         content = msg["serverContent"]
         if content.get("interrupted"):
             return {"type": "interrupted"}
+        # Check for transcription (audio may also be present in same message)
         if content.get("outputTranscription"):
             return {"type": "transcript", "speaker": "ai", "text": content["outputTranscription"]["text"]}
         if content.get("inputTranscription"):
             return {"type": "transcript", "speaker": "user", "text": content["inputTranscription"]["text"]}
-        # audio-only serverContent handled by _voice_extract_audio_chunks
+        # Audio-only or modelTurn content
+        if content.get("modelTurn"):
+            return {"type": "audio"}
+        # turnComplete or other serverContent
         return {"type": "audio"}
     if "toolCall" in msg:
         return {"type": "tool_call", "data": msg["toolCall"]}
@@ -9395,17 +9399,23 @@ def _voice_relay_gemini_to_browser(browser_sock, session_state, stop_event):
                 elif parsed["type"] == "interrupted":
                     ws_send_frame(browser_sock, WS_OP_TEXT,
                         json.dumps({"type": "interrupted"}).encode())
-                elif parsed["type"] == "transcript":
-                    ws_send_frame(browser_sock, WS_OP_TEXT,
-                        json.dumps(parsed).encode())
-                    # Collect transcript server-side (with deduplication for same-speaker updates)
-                    if parsed.get("text"):
-                        transcripts = session_state["transcripts"]
-                        entry = {"speaker": parsed["speaker"], "text": parsed["text"], "ts": time.time()}
-                        if transcripts and transcripts[-1]["speaker"] == parsed["speaker"]:
-                            transcripts[-1] = entry  # update in-place (incremental update from Gemini)
-                        else:
-                            transcripts.append(entry)
+                elif parsed["type"] in ("transcript", "audio"):
+                    # Always extract and forward audio if present
+                    audio_chunks = _voice_extract_audio_chunks(msg)
+                    for chunk in audio_chunks:
+                        ws_send_frame(browser_sock, WS_OP_BINARY, chunk)
+                    # Forward transcript if present
+                    if parsed["type"] == "transcript":
+                        ws_send_frame(browser_sock, WS_OP_TEXT,
+                            json.dumps(parsed).encode())
+                        # Collect transcript server-side
+                        if parsed.get("text"):
+                            transcripts = session_state["transcripts"]
+                            entry = {"speaker": parsed["speaker"], "text": parsed["text"], "ts": time.time()}
+                            if transcripts and transcripts[-1]["speaker"] == parsed["speaker"]:
+                                transcripts[-1] = entry
+                            else:
+                                transcripts.append(entry)
                 elif parsed["type"] == "tool_call":
                     tool_data = parsed["data"]
                     for fc in tool_data.get("functionCalls", []):

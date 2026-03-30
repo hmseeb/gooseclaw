@@ -9287,6 +9287,33 @@ def _gemini_connect(api_key, resumption_handle=None, tools=None, voice_name="Aoe
     _voice_log.info(f"Sending Gemini config ({len(config_json)} bytes, tools={bool(tools)})")
     ws_send_frame(sock, WS_OP_TEXT, config_json.encode(), mask=True)
     _voice_log.info("Gemini config sent, waiting for setupComplete...")
+
+    # Wait for setupComplete before returning (blocks up to 15s)
+    sock.settimeout(15)
+    try:
+        opcode, payload = ws_recv_frame(sock)
+        _voice_log.info(f"Gemini first response: opcode={opcode} len={len(payload) if payload else 0}")
+        if opcode is None:
+            raise ConnectionError("No response from Gemini after config")
+        if opcode == WS_OP_CLOSE:
+            close_reason = payload[2:].decode(errors="replace") if payload and len(payload) > 2 else "unknown"
+            raise ConnectionError(f"Gemini rejected config: {close_reason}")
+        # Parse response (may be binary JSON)
+        try:
+            msg = json.loads(payload.decode())
+            if "setupComplete" in msg:
+                _voice_log.info("Gemini setupComplete received")
+            else:
+                _voice_log.warning(f"Unexpected first message: {json.dumps(msg)[:200]}")
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            _voice_log.warning(f"Non-JSON first frame: opcode={opcode} len={len(payload)}")
+    except (ConnectionError, OSError) as e:
+        _voice_log.error(f"Gemini setup failed: {e}")
+        sock.close()
+        raise
+    finally:
+        sock.settimeout(60)
+
     return sock
 
 

@@ -1195,6 +1195,10 @@
         case 'tool_status':
           addToolStatus(msg.name, msg.status, msg.result || '');
           break;
+        case 'error':
+          showError('Server: ' + (msg.message || 'Unknown error'));
+          console.error('[voice] server error:', msg.message);
+          break;
         default:
           console.log('[voice] unknown message type:', msg.type);
       }

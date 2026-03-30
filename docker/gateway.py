@@ -9917,8 +9917,14 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                 except Exception:
                     break
 
-        except (ConnectionError, OSError) as e:
-            _voice_log.error(f"Gemini connection failed: {e}", extra={"event": "voice_gemini_error", "conn_id": conn_id})
+        except Exception as e:
+            _voice_log.error(f"Voice session error: {type(e).__name__}: {e}", extra={"event": "voice_gemini_error", "conn_id": conn_id})
+            # Send error to browser before closing
+            try:
+                err_msg = json.dumps({"type": "error", "message": f"{type(e).__name__}: {e}"})
+                ws_send_frame(browser_sock, WS_OP_TEXT, err_msg.encode())
+            except Exception:
+                pass
         finally:
             _ws_unregister(conn_id)
             # close browser socket

@@ -10361,7 +10361,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                 self.send_header(header, value)
             csp = (
                 "default-src 'self'; "
-                "script-src 'self' 'unsafe-inline'; "
+                "script-src 'self' 'unsafe-inline' blob:; "
                 "style-src 'self' 'unsafe-inline'; "
                 "connect-src 'self' wss:; "
                 "media-src 'self' blob:; "

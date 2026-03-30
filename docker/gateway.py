@@ -9096,6 +9096,19 @@ def _voice_parse_server_message(msg):
 
 _voice_log = logging.getLogger("voice")
 
+# ── Voice debug ring buffer ──────────────────────────────────────────────────
+_voice_debug_log = []
+_voice_debug_lock = threading.Lock()
+_VOICE_DEBUG_MAX = 200
+
+def _vlog(msg):
+    """Log to both voice logger and debug ring buffer."""
+    _voice_log.info(msg)
+    with _voice_debug_lock:
+        _voice_debug_log.append(f"{time.strftime('%H:%M:%S')} {msg}")
+        if len(_voice_debug_log) > _VOICE_DEBUG_MAX:
+            _voice_debug_log.pop(0)
+
 
 def _discover_voice_tools():
     """Query goosed for enabled extensions, return (Gemini function declarations, name_map).
@@ -9348,6 +9361,7 @@ def _voice_relay_loop(browser_sock, gemini_sock, session_state):
     def _handle_browser_frame(opcode, payload):
         """Process a frame from the browser, forward to Gemini."""
         if opcode is None or opcode == WS_OP_CLOSE:
+            _vlog(f"browser closed: opcode={opcode}")
             return False  # signal to stop
         if opcode == WS_OP_PING:
             ws_send_frame(browser_sock, WS_OP_PONG, payload)
@@ -9371,7 +9385,7 @@ def _voice_relay_loop(browser_sock, gemini_sock, session_state):
             close_reason = ""
             if payload and len(payload) > 2:
                 close_reason = payload[2:].decode(errors="replace")[:200]
-            _voice_log.info(f"Gemini closed connection: opcode={opcode} reason={close_reason}")
+            _vlog(f"Gemini closed: opcode={opcode} reason={close_reason}")
             if close_reason:
                 try:
                     err_msg = json.dumps({"type": "error", "message": close_reason})
@@ -9547,7 +9561,7 @@ def _voice_relay_loop(browser_sock, gemini_sock, session_state):
         while True:
             # Check max session duration
             if time.time() - session_start > max_duration:
-                _voice_log.info("Voice session max duration reached (9 min)")
+                _vlog("session max duration reached (9 min)")
                 break
 
             # Build readable list, always using current gemini_sock (may change on goaway)
@@ -9595,7 +9609,7 @@ def _voice_relay_loop(browser_sock, gemini_sock, session_state):
                 except socket.timeout:
                     pass  # select said readable but no complete frame yet, retry
                 except (ConnectionError, OSError) as e:
-                    _voice_log.info(f"browser->gemini relay ended: {type(e).__name__}: {e}")
+                    _vlog(f"browser->gemini relay ended: {type(e).__name__}: {e}")
                     break
 
             # Process gemini data (re-fetch in case goaway swapped the socket)
@@ -9610,7 +9624,7 @@ def _voice_relay_loop(browser_sock, gemini_sock, session_state):
                 except socket.timeout:
                     pass  # no complete frame yet, retry
                 except (ConnectionError, OSError) as e:
-                    _voice_log.info(f"gemini->browser relay ended: {type(e).__name__}: {e}")
+                    _vlog(f"gemini->browser relay ended: {type(e).__name__}: {e}")
                     break
 
             # After processing, drain any remaining SSL-buffered data
@@ -9625,13 +9639,14 @@ def _voice_relay_loop(browser_sock, gemini_sock, session_state):
                 except socket.timeout:
                     pass
                 except (ConnectionError, OSError) as e:
-                    _voice_log.info(f"gemini->browser relay ended (drain): {type(e).__name__}: {e}")
+                    _vlog(f"gemini->browser relay ended (drain): {type(e).__name__}: {e}")
                     return
 
     except (ConnectionError, OSError, socket.timeout) as e:
-        _voice_log.info(f"voice relay loop ended: {type(e).__name__}: {e}")
+        _vlog(f"relay loop ended: {type(e).__name__}: {e}")
     except Exception as e:
-        _voice_log.error(f"voice relay loop UNEXPECTED: {type(e).__name__}: {e}")
+        import traceback
+        _vlog(f"relay loop UNEXPECTED: {type(e).__name__}: {e}\n{traceback.format_exc()}")
 
 
 # ── HTTP handler ────────────────────────────────────────────────────────────
@@ -9764,6 +9779,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json(400, {"error": "Missing session ID"})
         elif path == "/api/voice/preference":
             self.handle_voice_preference_get()
+        elif path == "/api/voice/debug":
+            self.handle_voice_debug()
         elif path.rstrip("/") == "/voice":
             self.handle_voice_page()
         elif path.rstrip("/") == "/login":
@@ -9974,6 +9991,14 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         except (json.JSONDecodeError, IOError) as e:
             self.send_json(500, {"error": str(e)})
 
+    def handle_voice_debug(self):
+        """GET /api/voice/debug - return recent voice debug log entries."""
+        if not check_auth(self):
+            return
+        with _voice_debug_lock:
+            entries = list(_voice_debug_log)
+        self.send_json(200, {"entries": entries, "count": len(entries)})
+
     def handle_voice_preference_get(self):
         """GET /api/voice/preference - get current voice preference."""
         if not check_auth(self):
@@ -10060,7 +10085,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             _voice_log.info(f"Browser handshake send failed: {e}")
             return
 
-        _voice_log.info(f"Voice WS handshake complete", extra={"event": "voice_ws_open", "conn_id": conn_id})
+        _vlog(f"[{conn_id}] WS handshake complete, voice={voice_name}")
 
         gemini_sock = None
         try:
@@ -10068,18 +10093,19 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             tools, tool_name_map = [], {}
             try:
                 tools, tool_name_map = _discover_voice_tools()
-                if tools:
-                    _voice_log.info(f"Discovered {len(tools)} voice tools")
+                _vlog(f"[{conn_id}] tools: {len(tools)} discovered")
             except Exception as e:
-                _voice_log.warning(f"Tool discovery failed: {e}")
+                _vlog(f"[{conn_id}] tool discovery failed: {e}")
 
             # Connect to Gemini Live API directly
+            _vlog(f"[{conn_id}] connecting to Gemini...")
             gemini_sock = _gemini_connect(api_key, tools=tools if tools else None, voice_name=voice_name)
+            _vlog(f"[{conn_id}] Gemini connected, sending ready")
 
             # Send ready to browser
             ws_send_frame(browser_sock, WS_OP_TEXT,
                 json.dumps({"type": "ready"}).encode())
-            _voice_log.info("Sent ready to browser, starting relay loop")
+            _vlog(f"[{conn_id}] ready sent, entering relay loop")
 
             # Build session state for the relay loop
             session_state = {
@@ -10095,6 +10121,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
 
             # Run the relay loop (blocks until session ends)
             _voice_relay_loop(browser_sock, gemini_sock, session_state)
+            _vlog(f"[{conn_id}] relay loop ended normally")
 
             # Save session if we have transcripts
             if session_state["transcripts"]:
@@ -10117,14 +10144,15 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                     _voice_log.warning(f"Session save failed: {e}")
 
         except Exception as e:
-            _voice_log.info(f"Voice session error: {e}", extra={"event": "voice_error", "conn_id": conn_id})
+            import traceback
+            tb = traceback.format_exc()
+            _vlog(f"[{conn_id}] EXCEPTION: {type(e).__name__}: {e}\n{tb}")
             try:
                 ws_send_frame(browser_sock, WS_OP_TEXT,
-                    json.dumps({"type": "error", "message": str(e)}).encode())
+                    json.dumps({"type": "error", "message": f"{type(e).__name__}: {e}"}).encode())
             except Exception:
-                pass
+                _vlog(f"[{conn_id}] could not send error to browser")
         finally:
-            # Clean close
             if gemini_sock:
                 try:
                     ws_send_close(gemini_sock, mask=True)
@@ -10136,7 +10164,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                 browser_sock.close()
             except Exception:
                 pass
-            _voice_log.info("Voice session ended", extra={"event": "voice_ws_close", "conn_id": conn_id})
+            _vlog(f"[{conn_id}] session ended")
 
     def handle_health(self):
         """GET /api/health — deep health check: liveness + goosed subprocess status."""

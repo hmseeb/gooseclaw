@@ -8978,7 +8978,7 @@ def _voice_session_token_validate(token):
 def _gemini_build_config(resumption_handle=None, voice_name="Aoede", tools=None):
     """Build Gemini Live API setup config JSON."""
     cfg = {
-        "config": {
+        "setup": {
             "model": "models/gemini-3.1-flash-live-preview",
             "generationConfig": {
                 "responseModalities": ["AUDIO"],
@@ -9009,7 +9009,7 @@ def _gemini_build_config(resumption_handle=None, voice_name="Aoede", tools=None)
         }
     }
     if tools:
-        cfg["config"]["tools"] = [{"functionDeclarations": tools}]
+        cfg["setup"]["tools"] = [{"functionDeclarations": tools}]
     return cfg
 
 

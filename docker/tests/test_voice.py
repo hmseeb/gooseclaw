@@ -85,33 +85,33 @@ class TestGeminiBuildConfig:
 
     def test_config_has_model(self):
         cfg = _gemini_build_config()
-        assert cfg["config"]["model"] == "models/gemini-3.1-flash-live-preview"
+        assert cfg["setup"]["model"] == "models/gemini-3.1-flash-live-preview"
 
     def test_config_has_audio_response(self):
         cfg = _gemini_build_config()
-        assert "AUDIO" in cfg["config"]["generationConfig"]["responseModalities"]
+        assert "AUDIO" in cfg["setup"]["generationConfig"]["responseModalities"]
 
     def test_config_has_compression(self):
         cfg = _gemini_build_config()
-        assert isinstance(cfg["config"]["contextWindowCompression"]["slidingWindow"], dict)
+        assert isinstance(cfg["setup"]["contextWindowCompression"]["slidingWindow"], dict)
 
     def test_config_has_session_resumption(self):
         cfg = _gemini_build_config()
-        assert "sessionResumption" in cfg["config"]
-        assert "handle" in cfg["config"]["sessionResumption"]
+        assert "sessionResumption" in cfg["setup"]
+        assert cfg["setup"]["sessionResumption"] == {}  # empty for new sessions
 
     def test_config_with_resumption_handle(self):
         cfg = _gemini_build_config(resumption_handle="abc123")
-        assert cfg["config"]["sessionResumption"]["handle"] == "abc123"
+        assert cfg["setup"]["sessionResumption"]["handle"] == "abc123"
 
     def test_config_has_transcription(self):
         cfg = _gemini_build_config()
-        assert "inputAudioTranscription" in cfg["config"]
-        assert "outputAudioTranscription" in cfg["config"]
+        assert "inputAudioTranscription" in cfg["setup"]
+        assert "outputAudioTranscription" in cfg["setup"]
 
     def test_config_has_system_instruction(self):
         cfg = _gemini_build_config()
-        parts = cfg["config"]["systemInstruction"]["parts"]
+        parts = cfg["setup"]["systemInstruction"]["parts"]
         assert isinstance(parts, list)
         assert len(parts) >= 1
         assert "text" in parts[0]
@@ -119,12 +119,12 @@ class TestGeminiBuildConfig:
     def test_config_includes_tools_when_provided(self):
         tools = [{"name": "test", "description": "test tool", "parameters": {"type": "OBJECT", "properties": {}}}]
         cfg = _gemini_build_config(tools=tools)
-        assert "tools" in cfg["config"]
-        assert cfg["config"]["tools"] == [{"functionDeclarations": tools}]
+        assert "tools" in cfg["setup"]
+        assert cfg["setup"]["tools"] == [{"functionDeclarations": tools}]
 
     def test_config_no_tools_when_none(self):
         cfg = _gemini_build_config()
-        assert "tools" not in cfg["config"]
+        assert "tools" not in cfg["setup"]
 
 
 class TestAudioTranscoding:

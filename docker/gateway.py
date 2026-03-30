@@ -9328,8 +9328,14 @@ def _voice_relay_gemini_to_browser(browser_sock, session_state, stop_event):
                 continue
             if opcode == WS_OP_PONG:
                 continue
-            if opcode == WS_OP_TEXT:
-                msg = json.loads(payload.decode())
+            if opcode in (WS_OP_TEXT, WS_OP_BINARY):
+                # Gemini sends JSON as both text and binary frames
+                try:
+                    msg = json.loads(payload.decode())
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    # Actual binary audio data, forward to browser
+                    ws_send_frame(browser_sock, WS_OP_BINARY, payload)
+                    continue
                 parsed = _voice_parse_server_message(msg)
                 if not parsed:
                     continue

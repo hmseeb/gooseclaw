@@ -5,7 +5,7 @@
 # To install via pip instead:
 #   pip3 install --no-cache-dir --break-system-packages -r requirements.txt
 
-PyYAML==6.0.2
+PyYAML==6.0.3
 websocket-client==1.8.0
 websockets>=15.0
 chromadb==1.5.5

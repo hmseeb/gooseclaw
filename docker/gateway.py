@@ -10003,11 +10003,11 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             t_browser.start()
             t_gemini.start()
 
-            # block until either side disconnects, sending pings every 25s
-            # Max session: 9 min (Gemini limit is 10 min, leave margin)
+            # Keep connection alive with frequent pings (Railway proxy kills idle WS)
+            # Railway's proxy timeout is ~10s for idle WebSocket connections
             session_start = time.time()
             max_duration = 9 * 60
-            while not stop_event.wait(timeout=25):
+            while not stop_event.wait(timeout=5):
                 if time.time() - session_start > max_duration:
                     _voice_log.info("Voice session max duration reached (9 min)")
                     break

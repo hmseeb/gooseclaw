@@ -947,7 +947,7 @@
         </svg>
       </div>
     </div>
-    <div id="status-text">Tap to connect</div>
+    <div id="status-text">Tap to start</div>
     <div class="keyboard-hint">Space: hold to talk &middot; Esc: disconnect</div>
   </div>
 
@@ -1014,7 +1014,7 @@
     };
 
     const STATUS_TEXT = {
-      disconnected: 'Tap to connect',
+      disconnected: 'Tap to start',
       connecting: 'Connecting...',
       ready: 'Tap to speak',
       listening: 'Listening...',
@@ -1190,10 +1190,11 @@
       switch (msg.type) {
         case 'ready':
           _gotReadyState = true;
-          setState(STATE.READY);
-          // Auto-start mic capture so user doesn't need to tap twice
+          // Show connecting state until capture starts (avoid "Tap to speak" flash)
+          setState(STATE.CONNECTING);
           startCapture().catch(function(e) {
             console.warn('[voice] auto-capture failed:', e);
+            setState(STATE.READY);
           });
           break;
         case 'transcript':
@@ -1226,17 +1227,23 @@
       '    super();',
       '    this.buffer = new Int16Array(2048);',
       '    this.writeIndex = 0;',
+      '    this.ratio = sampleRate / 16000;',
+      '    this.accumulator = 0;',
       '  }',
       '  process(inputs) {',
       '    var input = inputs[0];',
       '    if (!input || !input[0]) return true;',
       '    var samples = input[0];',
       '    for (var i = 0; i < samples.length; i++) {',
-      '      var s = Math.max(-1, Math.min(1, samples[i]));',
-      '      this.buffer[this.writeIndex++] = s * 0x7FFF;',
-      '      if (this.writeIndex >= this.buffer.length) {',
-      '        this.port.postMessage(this.buffer.buffer.slice(0));',
-      '        this.writeIndex = 0;',
+      '      this.accumulator += 1;',
+      '      if (this.accumulator >= this.ratio) {',
+      '        this.accumulator -= this.ratio;',
+      '        var s = Math.max(-1, Math.min(1, samples[i]));',
+      '        this.buffer[this.writeIndex++] = s * 0x7FFF;',
+      '        if (this.writeIndex >= this.buffer.length) {',
+      '          this.port.postMessage(this.buffer.buffer.slice(0));',
+      '          this.writeIndex = 0;',
+      '        }',
       '      }',
       '    }',
       '    return true;',
@@ -1301,7 +1308,8 @@
             if (self.queue.length === 0 && self.scheduledSources.length === 0 && self.playing) {
               self.playing = false;
               if (currentState === STATE.SPEAKING) {
-                setState(STATE.READY);
+                // Go back to LISTENING if mic is active, READY if not
+                setState(isCapturing ? STATE.LISTENING : STATE.READY);
               }
             }
           };
@@ -1355,7 +1363,7 @@
       // Request microphone via getUserMedia
       try {
         captureStream = await navigator.mediaDevices.getUserMedia({
-          audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }
+          audio: { channelCount: 1, echoCancellation: { ideal: true }, noiseSuppression: { ideal: true }, autoGainControl: { ideal: true } }
         });
       } catch (err) {
         if (err.name === 'NotAllowedError') {
@@ -1378,11 +1386,12 @@
         console.warn('[voice] AudioWorklet load error, may already be registered:', err);
       }
 
-      // Create AnalyserNode for visualizer
+      // Create AnalyserNode for visualizer + playback output
       if (!analyserNode) {
         analyserNode = audioContext.createAnalyser();
         analyserNode.fftSize = 256;
         analyserNode.smoothingTimeConstant = 0.8;
+        // Connect to destination so playback audio reaches speakers
         analyserNode.connect(audioContext.destination);
         if (playback) {
           playback.setAnalyser(analyserNode);
@@ -1393,13 +1402,13 @@
       captureSource = audioContext.createMediaStreamSource(captureStream);
       captureNode = new AudioWorkletNode(audioContext, 'pcm-capture');
       captureNode.port.onmessage = function(e) {
-        if (ws && ws.readyState === WebSocket.OPEN && isCapturing) {
+        // Don't send mic data while AI is speaking (prevents echo)
+        if (ws && ws.readyState === WebSocket.OPEN && isCapturing && currentState !== STATE.SPEAKING) {
           ws.send(new Uint8Array(e.data));
         }
       };
       captureSource.connect(captureNode);
-      captureNode.connect(audioContext.destination);
-      captureSource.connect(analyserNode);
+      // Do NOT connect mic to analyserNode (it routes to speakers = echo)
 
       // Create playback if needed
       if (!playback) {
@@ -1454,8 +1463,14 @@
 
     function addTranscript(speaker, text) {
       if (speaker === lastTranscriptSpeaker && lastTranscriptEl) {
-        // Update existing message (Gemini sends incremental updates)
-        lastTranscriptEl.textContent = text;
+        // Gemini sends accumulated text. Use the longer of current vs new
+        // to handle both full-text and delta modes
+        if (text.length >= lastTranscriptEl.textContent.length) {
+          lastTranscriptEl.textContent = text;
+        } else {
+          // Delta mode: append
+          lastTranscriptEl.textContent += ' ' + text;
+        }
       } else {
         // Create new message bubble
         var el = document.createElement('div');
@@ -1676,6 +1691,11 @@
     function onMicClick() {
       switch (currentState) {
         case STATE.DISCONNECTED:
+          // Pre-create AudioContext inside user gesture so auto-capture works after ready
+          if (!audioContext) {
+            audioContext = new AudioContext();
+          }
+          audioContext.resume();
           connectVoice();
           break;
         case STATE.CONNECTING:

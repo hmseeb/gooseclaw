@@ -56,6 +56,7 @@ import select
 import signal
 import socket
 import ssl
+import io
 import struct
 import subprocess
 import sys
@@ -2543,11 +2544,41 @@ def _make_session_cookie(token):
 
 # ── session expiry ───────────────────────────────────────────────────────────
 
-SESSION_MAX_AGE = 86400  # 24 hours in seconds
+SESSION_MAX_AGE = 604800  # 7 days in seconds
 
 # server-side session store: {session_token: creation_timestamp}
+# persisted to disk so sessions survive redeploys
 _auth_sessions = {}
 _auth_sessions_lock = threading.Lock()
+_AUTH_SESSIONS_FILE = os.path.join(DATA_DIR, "auth_sessions.json")
+
+
+def _load_auth_sessions():
+    """Load sessions from disk on startup."""
+    global _auth_sessions
+    try:
+        if os.path.exists(_AUTH_SESSIONS_FILE):
+            with open(_AUTH_SESSIONS_FILE) as f:
+                data = json.load(f)
+            now = time.time()
+            # drop expired sessions
+            _auth_sessions = {k: v for k, v in data.items() if now - v <= SESSION_MAX_AGE}
+    except Exception:
+        _auth_sessions = {}
+
+
+def _save_auth_sessions():
+    """Persist sessions to disk."""
+    try:
+        os.makedirs(os.path.dirname(_AUTH_SESSIONS_FILE) or ".", exist_ok=True)
+        with _auth_sessions_lock:
+            data = dict(_auth_sessions)
+        tmp = _AUTH_SESSIONS_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(data, f)
+        os.replace(tmp, _AUTH_SESSIONS_FILE)
+    except Exception:
+        pass
 
 
 def _create_auth_session():
@@ -2555,6 +2586,7 @@ def _create_auth_session():
     token = secrets.token_urlsafe(32)
     with _auth_sessions_lock:
         _auth_sessions[token] = time.time()
+    _save_auth_sessions()
     return token
 
 
@@ -2568,8 +2600,12 @@ def _validate_auth_session(token):
         # expired, clean it up
         with _auth_sessions_lock:
             _auth_sessions.pop(token, None)
+        _save_auth_sessions()
         return False
     return True
+
+
+_load_auth_sessions()  # restore sessions from disk on import
 
 
 def _invalidate_all_auth_sessions():
@@ -8792,6 +8828,8 @@ def ws_recv_frame(sock):
         return (None, b"")
 
 
+_ws_frame_counter = [0]  # mutable counter for debug
+
 def ws_send_frame(sock, opcode, payload, mask=False):
     """Send one WebSocket frame."""
     frame = bytearray()
@@ -8816,6 +8854,14 @@ def ws_send_frame(sock, opcode, payload, mask=False):
         payload = bytes(b ^ mask_key[i % 4] for i, b in enumerate(payload))
 
     frame.extend(payload)
+
+    # Debug: log frame header for non-masked (browser-bound) frames
+    if not mask:
+        _ws_frame_counter[0] += 1
+        hdr = bytes(frame[:min(10, len(frame))])
+        if _ws_frame_counter[0] <= 50:
+            _vlog(f"TX#{_ws_frame_counter[0]} op={opcode} len={length} hdr={hdr.hex()}")
+
     sock.sendall(bytes(frame))
 
 
@@ -9361,7 +9407,14 @@ def _voice_relay_loop(browser_sock, gemini_sock, session_state):
     def _handle_browser_frame(opcode, payload):
         """Process a frame from the browser, forward to Gemini."""
         if opcode is None or opcode == WS_OP_CLOSE:
-            _vlog(f"browser closed: opcode={opcode}")
+            close_code = struct.unpack(">H", payload[:2])[0] if payload and len(payload) >= 2 else 0
+            close_reason = payload[2:].decode(errors="replace") if payload and len(payload) > 2 else ""
+            _vlog(f"browser closed: opcode={opcode} code={close_code} reason={close_reason}")
+            # Respond with close frame immediately (RFC 6455)
+            try:
+                ws_send_close(browser_sock, code=close_code or 1000)
+            except Exception:
+                pass
             return False  # signal to stop
         if opcode == WS_OP_PING:
             ws_send_frame(browser_sock, WS_OP_PONG, payload)
@@ -9385,7 +9438,7 @@ def _voice_relay_loop(browser_sock, gemini_sock, session_state):
             close_reason = ""
             if payload and len(payload) > 2:
                 close_reason = payload[2:].decode(errors="replace")[:200]
-            _vlog(f"Gemini closed: opcode={opcode} reason={close_reason}")
+            _vlog(f"Gemini closed: opcode={opcode} code={struct.unpack('>H', payload[:2])[0] if payload and len(payload) >= 2 else 0} reason={close_reason}")
             if close_reason:
                 try:
                     err_msg = json.dumps({"type": "error", "message": close_reason})
@@ -9409,6 +9462,7 @@ def _voice_relay_loop(browser_sock, gemini_sock, session_state):
                 return True
             parsed = _voice_parse_server_message(msg)
             if not parsed:
+                _vlog(f"gemini: unhandled msg keys={list(msg.keys())}")
                 return True
 
             if parsed["type"] == "ready":
@@ -9455,10 +9509,14 @@ def _voice_relay_loop(browser_sock, gemini_sock, session_state):
             elif parsed["type"] in ("transcript", "audio"):
                 # Always extract and forward audio if present
                 audio_chunks = _voice_extract_audio_chunks(msg)
+                total_audio = sum(len(c) for c in audio_chunks)
+                if audio_chunks:
+                    _vlog(f"gemini->browser: {len(audio_chunks)} audio chunks, {total_audio} bytes")
                 for chunk in audio_chunks:
                     ws_send_frame(browser_sock, WS_OP_BINARY, chunk)
                 # Forward transcript if present
                 if parsed["type"] == "transcript":
+                    _vlog(f"gemini->browser: transcript [{parsed.get('speaker')}] {parsed.get('text', '')[:80]}")
                     ws_send_frame(browser_sock, WS_OP_TEXT,
                         json.dumps(parsed).encode())
                     if parsed.get("text"):
@@ -9558,6 +9616,10 @@ def _voice_relay_loop(browser_sock, gemini_sock, session_state):
         browser_sock.settimeout(30)
         gemini_sock.settimeout(30)
 
+        frame_count = 0
+        _vlog(f"relay: browser_sock type={type(browser_sock).__name__} fd={browser_sock.fileno()} timeout={browser_sock.gettimeout()}")
+        _vlog(f"relay: gemini_sock type={type(gemini_sock).__name__} fd={gemini_sock.fileno()} timeout={gemini_sock.gettimeout()}")
+
         while True:
             # Check max session duration
             if time.time() - session_start > max_duration:
@@ -9567,6 +9629,7 @@ def _voice_relay_loop(browser_sock, gemini_sock, session_state):
             # Build readable list, always using current gemini_sock (may change on goaway)
             gs = session_state["gemini_sock"]
             if not gs:
+                _vlog("relay: gemini_sock is None, breaking")
                 break
 
             # For SSL sockets, check pending() before select.
@@ -9584,7 +9647,8 @@ def _voice_relay_loop(browser_sock, gemini_sock, session_state):
                 # Nothing pending in SSL buffers, use select
                 try:
                     readable, _, _ = select.select([browser_sock, gs], [], [], ping_interval)
-                except (ValueError, OSError):
+                except (ValueError, OSError) as e:
+                    _vlog(f"relay: select error: {type(e).__name__}: {e}")
                     break  # socket closed
                 read_browser = browser_sock in readable
                 read_gemini = gs in readable
@@ -9596,7 +9660,9 @@ def _voice_relay_loop(browser_sock, gemini_sock, session_state):
                     try:
                         ws_send_frame(browser_sock, WS_OP_PING, b"")
                         last_ping = now
-                    except Exception:
+                        _vlog("relay: sent ping to browser")
+                    except Exception as e:
+                        _vlog(f"relay: ping failed: {e}")
                         break
                 continue
 
@@ -9604,9 +9670,13 @@ def _voice_relay_loop(browser_sock, gemini_sock, session_state):
             if read_browser:
                 try:
                     opcode, payload = ws_recv_frame(browser_sock)
+                    frame_count += 1
+                    if frame_count <= 5 or opcode != WS_OP_BINARY:
+                        _vlog(f"relay: browser frame #{frame_count} op={opcode} len={len(payload)}")
                     if not _handle_browser_frame(opcode, payload):
                         break
                 except socket.timeout:
+                    _vlog("relay: browser recv timeout (select said readable)")
                     pass  # select said readable but no complete frame yet, retry
                 except (ConnectionError, OSError) as e:
                     _vlog(f"browser->gemini relay ended: {type(e).__name__}: {e}")
@@ -9619,9 +9689,11 @@ def _voice_relay_loop(browser_sock, gemini_sock, session_state):
                     break
                 try:
                     opcode, payload = ws_recv_frame(gs)
+                    _vlog(f"relay: gemini frame op={opcode} len={len(payload)}")
                     if not _handle_gemini_frame(opcode, payload):
                         break
                 except socket.timeout:
+                    _vlog("relay: gemini recv timeout (select said readable)")
                     pass  # no complete frame yet, retry
                 except (ConnectionError, OSError) as e:
                     _vlog(f"gemini->browser relay ended: {type(e).__name__}: {e}")
@@ -10086,6 +10158,10 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             return
 
         _vlog(f"[{conn_id}] WS handshake complete, voice={voice_name}")
+
+        # Neutralize rfile/wfile so BaseHTTPRequestHandler.finish() can't interfere
+        self.rfile = io.BytesIO(b"")
+        self.wfile = io.BytesIO(b"")
 
         gemini_sock = None
         try:

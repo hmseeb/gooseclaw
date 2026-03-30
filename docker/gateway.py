@@ -8938,6 +8938,24 @@ def ws_client_connect(host, path, query_params=None):
         sock.close()
         raise ConnectionError("missing Sec-WebSocket-Accept header")
 
+    # push any leftover data (WebSocket frames received with HTTP headers)
+    # back into the socket so ws_recv_frame can read them
+    leftover = response.split(b"\r\n\r\n", 1)[1]
+    if leftover:
+        # wrap socket to prepend leftover bytes to next recv
+        original_recv = sock.recv
+        _leftover_buf = [leftover]
+        def _recv_with_leftover(bufsize, flags=0):
+            if _leftover_buf[0]:
+                data = _leftover_buf[0][:bufsize]
+                _leftover_buf[0] = _leftover_buf[0][bufsize:]
+                return data
+            return original_recv(bufsize)
+        sock.recv = _recv_with_leftover
+
+    # increase timeout for ongoing communication
+    sock.settimeout(60)
+
     return sock
 
 

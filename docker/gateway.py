@@ -10083,6 +10083,18 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
 
             _voice_log.info("Voice backend handshake OK, starting raw proxy", extra={"event": "voice_proxy_connected", "conn_id": conn_id})
 
+            # CRITICAL: drain any data buffered by BaseHTTPRequestHandler's rfile.
+            # The framework may have read ahead from the socket, consuming the first
+            # WebSocket frame(s) from the browser. Forward them to the voice server.
+            try:
+                buffered = self.rfile.peek(65536)
+                if buffered:
+                    internal_sock.sendall(buffered)
+                    self.rfile.read(len(buffered))  # consume from buffer
+                    _voice_log.info(f"Forwarded {len(buffered)} buffered bytes to voice server")
+            except Exception:
+                pass
+
             # set both sockets non-blocking for select loop
             browser_sock.setblocking(False)
             internal_sock.setblocking(False)

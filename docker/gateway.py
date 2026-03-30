@@ -9852,8 +9852,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         browser_sock.settimeout(60)
 
         conn_id = uuid.uuid4().hex[:8]
-        browser_ping = ws_start_ping_loop(browser_sock, interval=25)
-        _ws_register(conn_id, browser_sock, browser_ping)
+        _ws_register(conn_id, browser_sock, None)
 
         _voice_log.info("Voice WebSocket connected", extra={"event": "voice_open", "conn_id": conn_id})
 
@@ -9872,7 +9871,6 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         try:
             # connect to Gemini Live API
             gemini_sock = _gemini_connect(api_key, tools=tools if tools else None, voice_name=voice_name)
-            ws_start_ping_loop(gemini_sock, interval=25, mask=True)
 
             # session state shared between relay threads
             session_state = {
@@ -9904,8 +9902,20 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             t_browser.start()
             t_gemini.start()
 
-            # block until either side disconnects
-            stop_event.wait()
+            # block until either side disconnects, sending pings every 25s
+            # (replaces dedicated ping threads to reduce thread count)
+            while not stop_event.wait(timeout=25):
+                try:
+                    ws_send_frame(browser_sock, WS_OP_PING, b"")
+                except Exception:
+                    break
+                try:
+                    with session_state["_lock"]:
+                        gs = session_state["gemini_sock"]
+                    if gs:
+                        ws_send_frame(gs, WS_OP_PING, b"", mask=True)
+                except Exception:
+                    break
 
         except (ConnectionError, OSError) as e:
             _voice_log.error(f"Gemini connection failed: {e}", extra={"event": "voice_gemini_error", "conn_id": conn_id})

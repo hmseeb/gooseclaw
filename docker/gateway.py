@@ -9352,8 +9352,10 @@ def _voice_relay_browser_to_gemini(browser_sock, session_state, stop_event):
                     gs = session_state["gemini_sock"]
                     if gs:
                         ws_send_frame(gs, WS_OP_TEXT, payload, mask=True)
-    except (ConnectionError, OSError, socket.timeout):
-        pass
+    except (ConnectionError, OSError, socket.timeout) as e:
+        _voice_log.info(f"browser->gemini relay ended: {type(e).__name__}: {e}")
+    except Exception as e:
+        _voice_log.error(f"browser->gemini relay UNEXPECTED: {type(e).__name__}: {e}")
     finally:
         stop_event.set()
 
@@ -9491,8 +9493,10 @@ def _voice_relay_gemini_to_browser(browser_sock, session_state, stop_event):
                     chunks = _voice_extract_audio_chunks(msg)
                     for chunk in chunks:
                         ws_send_frame(browser_sock, WS_OP_BINARY, chunk)
-    except (ConnectionError, OSError, socket.timeout):
-        pass
+    except (ConnectionError, OSError, socket.timeout) as e:
+        _voice_log.info(f"gemini->browser relay ended: {type(e).__name__}: {e}")
+    except Exception as e:
+        _voice_log.error(f"gemini->browser relay UNEXPECTED: {type(e).__name__}: {e}")
     finally:
         stop_event.set()
 

@@ -8993,9 +8993,9 @@ def _gemini_build_config(resumption_handle=None, voice_name="Aoede", tools=None)
             "systemInstruction": {
                 "parts": [{"text": "You are a helpful AI assistant."}]
             },
-            "sessionResumption": {
-                "handle": resumption_handle
-            },
+            "sessionResumption": (
+                {"handle": resumption_handle} if resumption_handle else {}
+            ),
             "contextWindowCompression": {
                 "slidingWindow": {}
             },
@@ -9257,13 +9257,18 @@ def _voice_extract_memory(session_data):
 
 def _gemini_connect(api_key, resumption_handle=None, tools=None, voice_name="Aoede"):
     """Open WebSocket to Gemini Live API and send setup config. Returns socket."""
+    _voice_log.info("Connecting to Gemini Live API...")
     sock = ws_client_connect(
         host=GEMINI_LIVE_HOST,
         path=GEMINI_LIVE_PATH,
         query_params={"key": api_key}
     )
+    _voice_log.info("Gemini WebSocket handshake complete")
     config = _gemini_build_config(resumption_handle=resumption_handle, voice_name=voice_name, tools=tools)
-    ws_send_frame(sock, WS_OP_TEXT, json.dumps(config).encode(), mask=True)
+    config_json = json.dumps(config)
+    _voice_log.info(f"Sending Gemini config ({len(config_json)} bytes, tools={bool(tools)})")
+    ws_send_frame(sock, WS_OP_TEXT, config_json.encode(), mask=True)
+    _voice_log.info("Gemini config sent, waiting for setupComplete...")
     return sock
 
 
@@ -9306,6 +9311,8 @@ def _voice_relay_gemini_to_browser(browser_sock, session_state, stop_event):
                 break
             opcode, payload = ws_recv_frame(gs)
             if opcode is None or opcode == WS_OP_CLOSE:
+                close_reason = payload.decode(errors="replace")[:200] if payload else "no reason"
+                _voice_log.info(f"Gemini closed connection: opcode={opcode} reason={close_reason}")
                 break
             if opcode == WS_OP_PING:
                 ws_send_frame(gs, WS_OP_PONG, payload, mask=True)

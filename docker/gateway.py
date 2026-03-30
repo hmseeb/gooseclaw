@@ -9878,21 +9878,17 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
 
         _voice_log.info("Voice WebSocket connected", extra={"event": "voice_open", "conn_id": conn_id})
 
-        # discover MCP tools from goosed
-        tools, tool_name_map = _discover_voice_tools()
+        # Tool discovery deferred: goosed session creation spawns 12+ extension
+        # loading threads which exhaust Railway's thread limit. Connect to Gemini
+        # first (voice works immediately), discover tools lazily on first tool call.
+        tools = []
+        tool_name_map = {}
         tool_session_id = None
-        if tools:
-            _voice_log.info(f"Discovered {len(tools)} voice tools: {[t['name'] for t in tools]}")
-            tool_session_id = _create_goose_session()
-            if not tool_session_id:
-                _voice_log.warning("Tool session creation failed, tools disabled for this voice session")
-                tools = []
-                tool_name_map = {}
 
         gemini_sock = None
         try:
-            # connect to Gemini Live API
-            gemini_sock = _gemini_connect(api_key, tools=tools if tools else None, voice_name=voice_name)
+            # connect to Gemini Live API (no tools initially, voice-only)
+            gemini_sock = _gemini_connect(api_key, voice_name=voice_name)
 
             # session state shared between relay threads
             session_state = {

@@ -9939,17 +9939,26 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
 
         _voice_log.info("Voice WebSocket connected", extra={"event": "voice_open", "conn_id": conn_id})
 
-        # Tool discovery deferred: goosed session creation spawns 12+ extension
-        # loading threads which exhaust Railway's thread limit. Connect to Gemini
-        # first (voice works immediately), discover tools lazily on first tool call.
+        # Discover tools BEFORE connecting (Gemini needs them in config)
         tools = []
         tool_name_map = {}
         tool_session_id = None
+        try:
+            tools, tool_name_map = _discover_voice_tools()
+            if tools:
+                _voice_log.info(f"Discovered {len(tools)} voice tools: {[t['name'] for t in tools]}")
+                tool_session_id = _create_goose_session()
+                if not tool_session_id:
+                    _voice_log.warning("Tool session creation failed, tools disabled")
+                    tools = []
+                    tool_name_map = {}
+        except Exception as e:
+            _voice_log.warning(f"Tool discovery failed: {e}")
 
         gemini_sock = None
         try:
-            # connect to Gemini Live API (no tools initially, voice-only)
-            gemini_sock = _gemini_connect(api_key, voice_name=voice_name)
+            # connect to Gemini Live API with tools
+            gemini_sock = _gemini_connect(api_key, tools=tools if tools else None, voice_name=voice_name)
 
             # setupComplete was consumed by _gemini_connect, send "ready" to browser
             ws_send_frame(browser_sock, WS_OP_TEXT, json.dumps({"type": "ready"}).encode())
@@ -11948,7 +11957,7 @@ def main():
 
     class BoundedThreadServer(ThreadingHTTPServer):
         """HTTPServer with a bounded thread pool instead of unlimited thread spawning."""
-        _pool = ThreadPoolExecutor(max_workers=48)
+        _pool = ThreadPoolExecutor(max_workers=64)
 
         def process_request(self, request, client_address):
             try:

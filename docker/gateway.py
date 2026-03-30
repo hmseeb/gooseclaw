@@ -11942,13 +11942,13 @@ def main():
 
     class BoundedThreadServer(ThreadingHTTPServer):
         """HTTPServer with a bounded thread pool instead of unlimited thread spawning."""
-        _pool = ThreadPoolExecutor(max_workers=32)
+        _pool = ThreadPoolExecutor(max_workers=48)
 
         def process_request(self, request, client_address):
             try:
                 self._pool.submit(self.process_request_thread, request, client_address)
             except RuntimeError:
-                # pool shut down
+                # pool shut down or exhausted
                 self.close_request(request)
 
     server = BoundedThreadServer(("0.0.0.0", PORT), GatewayHandler)

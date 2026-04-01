@@ -9201,12 +9201,40 @@ def _discover_voice_tools():
     return declarations, name_map
 
 
+def _create_voice_goose_session():
+    """Create a goosed session using Gemini Flash as the LLM (not Claude)."""
+    sid = _create_goose_session()
+    if not sid or not _INTERNAL_GOOSE_TOKEN:
+        return sid
+    # Override provider to Gemini for voice tool execution
+    api_key = _get_gemini_api_key()
+    if not api_key:
+        return sid  # fall back to default provider
+    try:
+        payload = json.dumps({
+            "provider": "google",
+            "model": "gemini-2.5-flash-preview-05-20",
+            "session_id": sid,
+        }).encode("utf-8")
+        conn = _goosed_conn(timeout=10)
+        conn.request("POST", "/agent/update_provider", body=payload, headers={
+            "Content-Type": "application/json",
+            "X-Secret-Key": _INTERNAL_GOOSE_TOKEN,
+        })
+        resp = conn.getresponse()
+        resp.read()
+        conn.close()
+        _vlog(f"voice session {sid}: provider set to google/gemini-2.5-flash")
+    except Exception as e:
+        _vlog(f"voice session {sid}: failed to set gemini provider: {e}")
+    return sid
+
+
 def _voice_execute_tool(tool_name, tool_args, session_id, original_name):
-    """Execute a tool call via goosed and return result dict."""
+    """Execute a tool call via goosed with Gemini Flash as LLM."""
     try:
         request = tool_args.get("request", str(tool_args))
-        prompt = request  # send raw request to goosed, let Claude figure out how
-        response_text, error_string, _media = _do_rest_relay(prompt, session_id, timeout=30)
+        response_text, error_string, _media = _do_rest_relay(request, session_id, timeout=30)
         if error_string:
             return {"error": error_string}
         return {"result": response_text[:2000]}
@@ -9549,9 +9577,9 @@ def _voice_relay_loop(browser_sock, gemini_sock, session_state):
                         try:
                             sid = ss.get("tool_session_id")
                             if not sid:
-                                sid = _create_goose_session()
+                                sid = _create_voice_goose_session()
                                 ss["tool_session_id"] = sid
-                                _vlog(f"tool: created session {sid}")
+                                _vlog(f"tool: created voice session {sid}")
                             _vlog(f"tool: executing {oname}")
                             result = _voice_execute_tool(cname, cargs, sid, oname)
                             response_msg = _voice_build_tool_response(cid, cname, result)

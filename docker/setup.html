@@ -3250,9 +3250,14 @@ function goToStep(n) {
   document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
   document.getElementById(`step-${n}`).classList.add('active');
 
-  if (n === 'success') {
-    /* hide progress bar on success */
+  if (n === 'success' || n === 'recover') {
+    /* hide progress bar for success/recovery */
     document.getElementById('progressBar').style.display = 'none';
+    if (n === 'recover') {
+      /* hide header and dashboard, only show recovery form */
+      var hdr = document.querySelector('.header');
+      if (hdr) hdr.style.display = 'none';
+    }
     hideAlert();
     return;
   }

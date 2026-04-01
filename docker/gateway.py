@@ -9275,8 +9275,34 @@ def _discover_voice_tools():
 
 
 def _create_voice_goose_session():
-    """Create a goosed session for voice tool execution. Uses default provider (fastest)."""
-    return _create_goose_session()
+    """Create a goosed session for voice tool execution.
+    Uses /data/voice-workspace (no .goosehints) so Claude doesn't re-process
+    the full identity context that Gemini already has. Much faster."""
+    if not _INTERNAL_GOOSE_TOKEN:
+        return None
+    # Ensure clean workspace exists (no .goosehints = no identity overhead)
+    voice_ws = os.path.join(DATA_DIR, "voice-workspace")
+    os.makedirs(voice_ws, exist_ok=True)
+    try:
+        payload = json.dumps({"working_dir": voice_ws}).encode("utf-8")
+        conn = _goosed_conn(timeout=10)
+        conn.request("POST", "/agent/start", body=payload, headers={
+            "Content-Type": "application/json",
+            "X-Secret-Key": _INTERNAL_GOOSE_TOKEN,
+        })
+        resp = conn.getresponse()
+        body = resp.read().decode("utf-8", errors="replace")
+        conn.close()
+        if resp.status == 200:
+            session = json.loads(body)
+            sid = session.get("id") or session.get("session_id")
+            if sid:
+                _set_session_default_provider(str(sid))
+                _vlog(f"voice session created: {sid} (clean workspace)")
+                return str(sid)
+    except Exception as e:
+        _vlog(f"voice session creation failed: {e}")
+    return _create_goose_session()  # fallback to normal
 
 
 def _voice_execute_tool(tool_name, tool_args, session_id, original_name):

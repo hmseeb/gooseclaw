@@ -9478,6 +9478,20 @@ class MCPClient:
                 raise RuntimeError(f"MCP server {self.name} closed stdout")
             buf += chunk
 
+    def _drain_stderr(self):
+        """Read any available stderr output for diagnostics."""
+        if not self._proc or not self._proc.stderr:
+            return ""
+        import select as _sel
+        try:
+            ready, _, _ = _sel.select([self._proc.stderr.fileno()], [], [], 0)
+            if ready:
+                data = os.read(self._proc.stderr.fileno(), 4096)
+                return data.decode("utf-8", errors="replace").strip()
+        except Exception:
+            pass
+        return ""
+
     def _initialize(self):
         """MCP initialize handshake. Uses 60s timeout for heavy servers."""
         try:
@@ -9493,10 +9507,12 @@ class MCPClient:
             self._send_notification("notifications/initialized")
             return True
         except TimeoutError:
-            _vlog(f"mcp: {self.name} initialize timed out (60s)")
+            stderr_out = self._drain_stderr()
+            _vlog(f"mcp: {self.name} initialize timed out (60s){' stderr: ' + stderr_out[:200] if stderr_out else ''}")
             return False
         except Exception as e:
-            _vlog(f"mcp: {self.name} initialize failed: {e}")
+            stderr_out = self._drain_stderr()
+            _vlog(f"mcp: {self.name} initialize failed: {e}{' stderr: ' + stderr_out[:200] if stderr_out else ''}")
             return False
 
     def list_tools(self):

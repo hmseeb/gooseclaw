@@ -588,27 +588,40 @@ except Exception as e:
 " 2>/dev/null || true
 fi
 
-# ─── patch auto-generated extensions for direct MCP support ──────────────────
-# Existing generated server.py files may have unconditional sys.stdout redirect
-# which breaks direct MCP stdio communication from gateway. Patch them.
-python3 -c "
-import glob, os
-for f in glob.glob('/data/extensions/*/server.py'):
-    try:
-        content = open(f).read()
-        if 'sys.stdout = sys.stderr' in content and 'MCP_DIRECT' not in content:
-            content = content.replace(
-                'sys.stdout = sys.stderr',
-                'if not os.environ.get(\"MCP_DIRECT\"):\n    sys.stdout = sys.stderr'
+# ─── regenerate auto-generated extensions from updated templates ─────────────
+# Rebuild all auto-generated server.py files from registry using latest templates.
+# This ensures MCP_DIRECT support and any template fixes are applied.
+REGISTRY_FILE="/data/extensions/registry.json"
+if [ -f "$REGISTRY_FILE" ]; then
+    python3 << 'REGEN_EOF'
+import json, sys, os
+sys.path.insert(0, '/app/docker')
+try:
+    from extensions.generator import generate_extension
+    with open('/data/extensions/registry.json') as f:
+        registry = json.load(f)
+    regen = []
+    for name, meta in registry.get('extensions', {}).items():
+        if not meta.get('enabled', True):
+            continue
+        try:
+            path = generate_extension(
+                template_name=meta.get('template', 'rest_api'),
+                extension_name=name,
+                vault_prefix=meta.get('vault_prefix', name),
+                vault_keys=meta.get('vault_keys', []),
+                service_description=meta.get('description', ''),
+                extra_subs=meta.get('extra_subs', {}),
             )
-            # Ensure os is imported
-            if 'import os' not in content:
-                content = content.replace('import sys', 'import sys\nimport os', 1)
-            open(f, 'w').write(content)
-            print(f'[mcp] patched {f} for direct MCP support')
-    except Exception as e:
-        print(f'[mcp] WARN: failed to patch {f}: {e}')
-" 2>&1 || true
+            regen.append(name)
+        except Exception as e:
+            print(f'[mcp] WARN: regen {name} failed: {e}', file=sys.stderr)
+    if regen:
+        print(f'[mcp] regenerated {len(regen)} extensions: {", ".join(regen)}')
+except Exception as e:
+    print(f'[mcp] WARN: extension regen failed: {e}', file=sys.stderr)
+REGEN_EOF
+fi
 
 # ─── sync new template extensions into existing configs ──────────────────────
 # On upgrades, new extensions (like mem0-memory) need to be added to existing

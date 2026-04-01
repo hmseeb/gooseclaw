@@ -258,11 +258,11 @@ def build_mem0_config_for_provider(provider, model):
             "provider": "gemini",
             "config": {
                 "model": "gemini-embedding-001",
-                "embedding_dims": 768,
+                "embedding_dims": 384,
                 "api_key": gemini_key,
             }
         }
-        collection_name = "mem0_memories_gemini"
+        collection_name = "mem0_memories"
     else:
         embedder_config = {
             "provider": "huggingface",
@@ -344,11 +344,11 @@ def build_mem0_config():
             "provider": "gemini",
             "config": {
                 "model": "gemini-embedding-001",
-                "embedding_dims": 768,
+                "embedding_dims": 384,
                 "api_key": gemini_key,
             }
         }
-        collection_name = "mem0_memories_gemini"
+        collection_name = "mem0_memories"
     else:
         embedder_config = {
             "provider": "huggingface",

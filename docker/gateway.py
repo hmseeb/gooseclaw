@@ -9213,7 +9213,7 @@ def _create_voice_goose_session():
     try:
         payload = json.dumps({
             "provider": "google",
-            "model": "gemini-2.5-flash-preview-05-20",
+            "model": "gemini-3-flash-preview",
             "session_id": sid,
         }).encode("utf-8")
         conn = _goosed_conn(timeout=10)

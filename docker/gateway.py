@@ -9205,23 +9205,12 @@ def _discover_voice_tools():
             safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', ext_name)
             if safe_name and safe_name[0].isdigit():
                 safe_name = "ext_" + safe_name
-            # Build a useful description based on extension name
-            desc_map = {
-                "gmail": "Read, search, and draft emails via Gmail",
-                "google_calendar": "View, create, and manage calendar events",
-                "google-calendar": "View, create, and manage calendar events",
-                "calendar": "View, create, and manage calendar events",
-                "memory": "Store and recall facts, preferences, and notes",
-                "mem0": "Store and recall facts, preferences, and notes",
-                "web_search": "Search the web for current information",
-                "web-search": "Search the web for current information",
-                "knowledge": "Search personal knowledge base and documents",
-                "computercontroller": "Control the computer (run commands, open apps)",
-                "developer": "Run code, shell commands, and development tasks",
-                "filesystem": "Read, write, and manage files",
-            }
-            ext_lower = ext_name.lower().replace(" ", "_")
-            desc = desc_map.get(ext_lower, f"Use the {ext_name} tool to perform actions")
+            # Use extension's own description if available, otherwise derive from name
+            desc = ext_cfg.get("description", "").strip()
+            if not desc:
+                # Humanize the extension name: "google-calendar" -> "Google Calendar"
+                human_name = ext_name.replace("_", " ").replace("-", " ").title()
+                desc = f"Use {human_name} to perform actions on the user's behalf"
             declarations.append({
                 "name": safe_name,
                 "description": desc,

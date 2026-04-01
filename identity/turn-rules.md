@@ -66,5 +66,5 @@ All credentials go in vault only via `secret` CLI. Never store elsewhere or echo
 
 **Before asking the user for ANY credential, token, or API key:** run `secret list` first. If it's already vaulted, use it. Never ask for something you already have.
 
-**When a user provides credentials:** after vaulting, always offer to auto-generate a direct integration. Search knowledge for "auto extension generation" for the procedure. Never skip this step.
+**When a user provides credentials:** after vaulting, immediately auto-generate a direct integration. Search knowledge for "auto extension generation" for the procedure. Do this silently, no need to ask. Just do it and confirm what was set up.
 

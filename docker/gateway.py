@@ -8619,6 +8619,88 @@ def _save_vault_key(key, value):
     os.replace(tmp_path, VAULT_FILE)  # atomic on same filesystem
 
 
+def _register_extension_in_config(name, server_path, description=""):
+    """Add a generated extension to config.yaml. Thread-safe via goose_lock."""
+    import yaml
+    config_path = os.path.join(CONFIG_DIR, "config.yaml")
+    with goose_lock:
+        with open(config_path) as f:
+            config = yaml.safe_load(f) or {}
+        exts = config.setdefault("extensions", {})
+        exts[name] = {
+            "enabled": True,
+            "type": "stdio",
+            "name": name,
+            "description": description or f"Auto-generated {name} extension",
+            "cmd": "python3",
+            "args": [server_path],
+            "envs": {},
+            "env_keys": [],
+            "timeout": 300,
+            "bundled": None,
+            "available_tools": [],
+        }
+        tmp_path = config_path + ".tmp"
+        with open(tmp_path, "w") as f:
+            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+        os.replace(tmp_path, config_path)
+    logger.info("Registered extension in config.yaml: %s", name)
+
+
+def register_generated_extension(template_name, extension_name, vault_prefix,
+                                  vault_keys, description="", extra_subs=None):
+    """End-to-end: generate extension, register in registry, update config, restart goosed.
+
+    Args:
+        template_name: Template to use for generation.
+        extension_name: Unique name for the extension.
+        vault_prefix: Prefix for vault key lookups.
+        vault_keys: List of vault key paths.
+        description: Human-readable description.
+        extra_subs: Optional dict of additional template substitution variables.
+
+    Returns:
+        Full path to the generated server.py file.
+    """
+    from extensions.generator import generate_extension
+    from extensions import registry
+
+    # 1. Generate the server.py file
+    server_path = generate_extension(
+        template_name=template_name,
+        extension_name=extension_name,
+        vault_prefix=vault_prefix,
+        vault_keys=vault_keys,
+        service_description=description,
+        extra_subs=extra_subs,
+    )
+
+    # 2. Register in registry.json
+    registry.register(
+        name=extension_name,
+        template=template_name,
+        vault_prefix=vault_prefix,
+        vault_keys=vault_keys,
+        server_path=server_path,
+        description=description,
+    )
+
+    # 3. Add to config.yaml
+    _register_extension_in_config(extension_name, server_path, description)
+
+    # 4. Restart goosed in background to pick up new extension
+    def _restart_after_registration():
+        time.sleep(1)
+        stop_goosed()
+        start_goosed()
+        _session_manager._sessions.clear()
+
+    threading.Thread(target=_restart_after_registration, daemon=True).start()
+    logger.info("Extension registration complete: %s (restart queued)", extension_name)
+
+    return server_path
+
+
 def start_goosed():
     global goosed_process, _INTERNAL_GOOSE_TOKEN
     _check_stale_pid("goosed")

@@ -10233,7 +10233,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             tools, tool_name_map = [], {}
             try:
                 tools, tool_name_map = _discover_voice_tools()
-                _vlog(f"[{conn_id}] tools: {len(tools)} discovered")
+                _vlog(f"[{conn_id}] tools: {len(tools)} discovered: {list(tool_name_map.values())}")
             except Exception as e:
                 _vlog(f"[{conn_id}] tool discovery failed: {e}")
 
@@ -12276,7 +12276,7 @@ def main():
                 tools, tool_name_map = [], {}
                 try:
                     tools, tool_name_map = _discover_voice_tools()
-                    _vlog(f"[{conn_id}] tools: {len(tools)} discovered")
+                    _vlog(f"[{conn_id}] tools: {len(tools)} discovered: {list(tool_name_map.values())}")
                 except Exception as e:
                     _vlog(f"[{conn_id}] tool discovery failed: {e}")
 

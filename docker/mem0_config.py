@@ -257,7 +257,7 @@ def build_mem0_config_for_provider(provider, model):
         embedder_config = {
             "provider": "gemini",
             "config": {
-                "model": "models/text-embedding-004",
+                "model": "text-embedding-004",
                 "embedding_dims": 768,
                 "api_key": gemini_key,
             }
@@ -343,7 +343,7 @@ def build_mem0_config():
         embedder_config = {
             "provider": "gemini",
             "config": {
-                "model": "models/text-embedding-004",
+                "model": "text-embedding-004",
                 "embedding_dims": 768,
                 "api_key": gemini_key,
             }

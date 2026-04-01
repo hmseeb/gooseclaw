@@ -28,16 +28,16 @@
 
 ### Credential Detection
 
-- [ ] **DET-01**: AI detects when user provides credentials in chat (app passwords, API keys, tokens)
-- [ ] **DET-02**: User confirmation before vaulting (never auto-vault without consent)
-- [ ] **DET-03**: AI classifies credential type and selects appropriate template
-- [ ] **DET-04**: End-to-end flow: user drops cred → confirm → vault → generate → register → available
+- [x] **DET-01**: AI detects when user provides credentials in chat (app passwords, API keys, tokens)
+- [x] **DET-02**: User confirmation before vaulting (never auto-vault without consent)
+- [x] **DET-03**: AI classifies credential type and selects appropriate template
+- [x] **DET-04**: End-to-end flow: user drops cred → confirm → vault → generate → register → available
 
 ### Validation
 
-- [ ] **VAL-01**: Generated .py files pass ast.parse() syntax check before registration
-- [ ] **VAL-02**: Health check after registration (extension responds to basic MCP ping)
-- [ ] **VAL-03**: Auto-disable extension after 3 consecutive startup failures
+- [x] **VAL-01**: Generated .py files pass ast.parse() syntax check before registration
+- [x] **VAL-02**: Health check after registration (extension responds to basic MCP ping)
+- [x] **VAL-03**: Auto-disable extension after 3 consecutive startup failures
 
 ## v2 Requirements
 
@@ -79,13 +79,13 @@
 | REG-02 | Phase 2 | Complete |
 | REG-03 | Phase 2 | Complete |
 | REG-04 | Phase 2 | Complete |
-| DET-01 | Phase 3 | Pending |
-| DET-02 | Phase 3 | Pending |
-| DET-03 | Phase 3 | Pending |
-| DET-04 | Phase 3 | Pending |
-| VAL-01 | Phase 3 | Pending |
-| VAL-02 | Phase 3 | Pending |
-| VAL-03 | Phase 3 | Pending |
+| DET-01 | Phase 3 | Complete |
+| DET-02 | Phase 3 | Complete |
+| DET-03 | Phase 3 | Complete |
+| DET-04 | Phase 3 | Complete |
+| VAL-01 | Phase 3 | Complete |
+| VAL-02 | Phase 3 | Complete |
+| VAL-03 | Phase 3 | Complete |
 
 **Coverage:**
 - v1 requirements: 19 total

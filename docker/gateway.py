@@ -10231,6 +10231,11 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 _vlog(f"[{conn_id}] tool discovery failed: {e}")
 
+            # Pre-create goosed session with Gemini provider (avoids first-call delay)
+            _vlog(f"[{conn_id}] pre-creating tool session...")
+            tool_session_id = _create_voice_goose_session()
+            _vlog(f"[{conn_id}] tool session: {tool_session_id}")
+
             # Connect to Gemini Live API directly
             _vlog(f"[{conn_id}] connecting to Gemini...")
             original_names = list(tool_name_map.values()) if tool_name_map else None
@@ -10249,7 +10254,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                 "voice_name": voice_name,
                 "resumption_handle": None,
                 "tool_name_map": tool_name_map,
-                "tool_session_id": None,
+                "tool_session_id": tool_session_id,
                 "transcripts": [],
                 "session_id": session_id,
             }

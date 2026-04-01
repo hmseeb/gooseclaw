@@ -9906,15 +9906,24 @@ def _discover_voice_tools():
     if not _mcp_pool._initialized and not _mcp_pool._initializing:
         _mcp_pool.initialize_background()
 
+    seen_names = set()
     for ext_name, tool_name, tool_schema in _mcp_pool.get_all_tools():
         # Convert MCP schema to Gemini format
         gemini_decl = _mcp_schema_to_gemini(tool_schema)
-        # Prefix tool name with extension to avoid collisions
-        # e.g. "memory_add" from "mem0_memory" stays "memory_add"
         safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', tool_name)
         if safe_name and safe_name[0].isdigit():
             safe_name = "t_" + safe_name
+        # Prefix with extension name if there's a collision (e.g. api_get → gmail_email_api_get)
+        if safe_name in seen_names:
+            safe_ext = re.sub(r'[^a-zA-Z0-9_]', '_', ext_name)
+            safe_name = f"{safe_ext}_{safe_name}"
+        seen_names.add(safe_name)
         gemini_decl["name"] = safe_name
+        # Update description to include extension context for prefixed tools
+        if safe_name != tool_name:
+            orig_desc = gemini_decl.get("description", "")
+            if ext_name not in orig_desc:
+                gemini_decl["description"] = f"[{ext_name}] {orig_desc}"
         declarations.append(gemini_decl)
         name_map[safe_name] = {"source": "mcp", "ext_name": ext_name, "tool_name": tool_name}
 

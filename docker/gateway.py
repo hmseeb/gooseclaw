@@ -9507,15 +9507,20 @@ def _voice_relay_loop(browser_sock, gemini_sock, session_state):
                 ws_send_frame(browser_sock, WS_OP_TEXT,
                     json.dumps({"type": "interrupted"}).encode())
             elif parsed["type"] in ("transcript", "audio"):
-                # Always extract and forward audio if present
+                # Extract audio and accumulate in session buffer (sent after drain)
                 audio_chunks = _voice_extract_audio_chunks(msg)
-                total_audio = sum(len(c) for c in audio_chunks)
                 if audio_chunks:
-                    _vlog(f"gemini->browser: {len(audio_chunks)} audio chunks, {total_audio} bytes")
-                for chunk in audio_chunks:
-                    ws_send_frame(browser_sock, WS_OP_BINARY, chunk)
+                    audio_buf = session_state.setdefault("_audio_buf", bytearray())
+                    for chunk in audio_chunks:
+                        audio_buf.extend(chunk)
                 # Forward transcript if present
                 if parsed["type"] == "transcript":
+                    # Flush accumulated audio before sending transcript
+                    audio_buf = session_state.get("_audio_buf")
+                    if audio_buf and len(audio_buf) > 0:
+                        _vlog(f"gemini->browser: audio flush {len(audio_buf)} bytes")
+                        ws_send_frame(browser_sock, WS_OP_BINARY, bytes(audio_buf))
+                        audio_buf.clear()
                     _vlog(f"gemini->browser: transcript [{parsed.get('speaker')}] {parsed.get('text', '')[:80]}")
                     ws_send_frame(browser_sock, WS_OP_TEXT,
                         json.dumps(parsed).encode())
@@ -9699,6 +9704,13 @@ def _voice_relay_loop(browser_sock, gemini_sock, session_state):
                     _vlog(f"gemini->browser relay ended: {type(e).__name__}: {e}")
                     break
 
+            # Flush accumulated audio after processing one gemini frame
+            audio_buf = session_state.get("_audio_buf")
+            if audio_buf and len(audio_buf) > 0:
+                _vlog(f"gemini->browser: audio flush {len(audio_buf)} bytes")
+                ws_send_frame(browser_sock, WS_OP_BINARY, bytes(audio_buf))
+                audio_buf.clear()
+
             # After processing, drain any remaining SSL-buffered data
             # (one SSL record can contain multiple WS frames)
             gs = session_state["gemini_sock"]
@@ -9713,6 +9725,12 @@ def _voice_relay_loop(browser_sock, gemini_sock, session_state):
                 except (ConnectionError, OSError) as e:
                     _vlog(f"gemini->browser relay ended (drain): {type(e).__name__}: {e}")
                     return
+                # Flush any remaining audio after drain
+                audio_buf = session_state.get("_audio_buf")
+                if audio_buf and len(audio_buf) > 0:
+                    _vlog(f"gemini->browser: audio flush (drain) {len(audio_buf)} bytes")
+                    ws_send_frame(browser_sock, WS_OP_BINARY, bytes(audio_buf))
+                    audio_buf.clear()
 
     except (ConnectionError, OSError, socket.timeout) as e:
         _vlog(f"relay loop ended: {type(e).__name__}: {e}")
@@ -10141,6 +10159,12 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         browser_sock = self.request
         conn_id = uuid.uuid4().hex[:8]
         session_id = uuid.uuid4().hex
+
+        # Disable Nagle's algorithm for immediate frame delivery
+        try:
+            browser_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except Exception:
+            pass
 
         # Complete WebSocket handshake with browser
         accept_key = ws_accept_key(client_key)
@@ -12142,6 +12166,140 @@ def main():
     else:
         _gateway_log.info("no provider configured. serving setup wizard.")
 
+    def _handle_voice_raw(sock, addr):
+        """Handle voice WebSocket on raw socket, bypassing BaseHTTPRequestHandler entirely."""
+        conn_id = uuid.uuid4().hex[:8]
+        try:
+            # Read HTTP request manually
+            sock.settimeout(10)
+            buf = b""
+            while b"\r\n\r\n" not in buf:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    return
+                buf += chunk
+                if len(buf) > 65536:
+                    return
+
+            header_part = buf.split(b"\r\n\r\n")[0].decode(errors="replace")
+            lines = header_part.split("\r\n")
+            request_line = lines[0]  # "GET /ws/voice?... HTTP/1.1"
+
+            headers = {}
+            for line in lines[1:]:
+                if ":" in line:
+                    k, v = line.split(":", 1)
+                    headers[k.strip().lower()] = v.strip()
+
+            # Validate WebSocket upgrade
+            if headers.get("upgrade", "").lower() != "websocket":
+                sock.sendall(b"HTTP/1.1 400 Bad Request\r\n\r\n")
+                return
+            client_key = headers.get("sec-websocket-key", "")
+            if not client_key:
+                sock.sendall(b"HTTP/1.1 400 Bad Request\r\n\r\n")
+                return
+
+            # Parse query params
+            path = request_line.split(" ")[1] if " " in request_line else "/"
+            parsed = urllib.parse.urlparse(path)
+            query = urllib.parse.parse_qs(parsed.query)
+            token = query.get("token", [None])[0]
+            if not token:
+                sock.sendall(b"HTTP/1.1 403 Forbidden\r\n\r\n")
+                return
+            api_key = _voice_session_token_validate(token)
+            if not api_key:
+                sock.sendall(b"HTTP/1.1 403 Forbidden\r\n\r\n")
+                return
+
+            voice_name = query.get("voice", ["Aoede"])[0]
+
+            # Send 101 Switching Protocols
+            accept = ws_accept_key(client_key)
+            resp = (
+                "HTTP/1.1 101 Switching Protocols\r\n"
+                "Upgrade: websocket\r\n"
+                "Connection: Upgrade\r\n"
+                f"Sec-WebSocket-Accept: {accept}\r\n"
+                "\r\n"
+            ).encode()
+            sock.sendall(resp)
+
+            _vlog(f"[{conn_id}] RAW voice WS handshake complete, voice={voice_name}")
+
+            # Now sock is a clean WebSocket - no BufferedReader wrapping
+            gemini_sock = None
+            session_id = uuid.uuid4().hex
+            try:
+                tools, tool_name_map = [], {}
+                try:
+                    tools, tool_name_map = _discover_voice_tools()
+                    _vlog(f"[{conn_id}] tools: {len(tools)} discovered")
+                except Exception as e:
+                    _vlog(f"[{conn_id}] tool discovery failed: {e}")
+
+                _vlog(f"[{conn_id}] connecting to Gemini...")
+                gemini_sock = _gemini_connect(api_key, tools=tools if tools else None, voice_name=voice_name)
+                _vlog(f"[{conn_id}] Gemini connected, sending ready")
+
+                ws_send_frame(sock, WS_OP_TEXT, json.dumps({"type": "ready"}).encode())
+                _vlog(f"[{conn_id}] ready sent, entering relay loop")
+
+                session_state = {
+                    "gemini_sock": gemini_sock,
+                    "api_key": api_key,
+                    "voice_name": voice_name,
+                    "resumption_handle": None,
+                    "tool_name_map": tool_name_map,
+                    "tool_session_id": None,
+                    "transcripts": [],
+                    "session_id": session_id,
+                }
+                _voice_relay_loop(sock, gemini_sock, session_state)
+                _vlog(f"[{conn_id}] relay loop ended normally")
+
+                if session_state["transcripts"]:
+                    session_data = {
+                        "id": session_id,
+                        "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        "transcript": session_state["transcripts"],
+                        "voice": voice_name,
+                        "preview": _voice_build_preview(session_state["transcripts"]),
+                    }
+                    try:
+                        _voice_save_session(session_data)
+                        threading.Thread(target=_voice_extract_memory, args=(session_data,), daemon=True).start()
+                    except Exception:
+                        pass
+
+            except Exception as e:
+                _vlog(f"[{conn_id}] EXCEPTION: {type(e).__name__}: {e}")
+                try:
+                    ws_send_frame(sock, WS_OP_TEXT, json.dumps({"type": "error", "message": str(e)}).encode())
+                except Exception:
+                    pass
+            finally:
+                if gemini_sock:
+                    try:
+                        ws_send_close(gemini_sock, mask=True)
+                        gemini_sock.close()
+                    except Exception:
+                        pass
+                try:
+                    ws_send_close(sock)
+                    sock.close()
+                except Exception:
+                    pass
+                _vlog(f"[{conn_id}] session ended")
+
+        except Exception as e:
+            _vlog(f"[voice_raw] error: {type(e).__name__}: {e}")
+            try:
+                sock.close()
+            except Exception:
+                pass
+
     class BoundedThreadServer(ThreadingHTTPServer):
         """HTTPServer with a bounded thread pool instead of unlimited thread spawning."""
         _pool = ThreadPoolExecutor(max_workers=32)
@@ -12150,7 +12308,6 @@ def main():
             try:
                 self._pool.submit(self.process_request_thread, request, client_address)
             except RuntimeError:
-                # pool shut down or exhausted
                 self.close_request(request)
 
     server = BoundedThreadServer(("0.0.0.0", PORT), GatewayHandler)

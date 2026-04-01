@@ -1085,6 +1085,7 @@
 
     let ws = null;
     let _gotReadyState = false;
+    let _reconnectAttempts = 0;
 
     async function connectVoice() {
       if (currentState !== STATE.DISCONNECTED) return;
@@ -1096,6 +1097,7 @@
       lastTranscriptSpeaker = null;
       lastTranscriptEl = null;
       _gotReadyState = false;
+      _reconnectAttempts = 0;
 
       // Fetch session token
       let token;
@@ -1142,13 +1144,24 @@
 
       ws.onclose = function(event) {
         console.log('[voice] WebSocket closed, code:', event.code, 'reason:', event.reason);
+        ws = null;
+        // Auto-reconnect on abnormal close (Safari TCP drops)
+        if (event.code !== 1000 && _gotReadyState && _reconnectAttempts < 3) {
+          _reconnectAttempts++;
+          console.log('[voice] auto-reconnecting attempt', _reconnectAttempts);
+          showError('Reconnecting... (' + _reconnectAttempts + '/3)');
+          // Clean up audio but keep transcript
+          if (isCapturing) { stopCapture(); }
+          if (playback) { playback.clearQueue(); playback = null; }
+          setTimeout(function() { connectVoice(); }, 500);
+          return;
+        }
         setState(STATE.DISCONNECTED);
         if (event.code === 1000 && !_gotReadyState) {
           showError('Voice setup failed. Check your Gemini API key in settings.');
         } else if (event.code !== 1000) {
           showError('Connection lost (code ' + event.code + '). Tap mic to reconnect.');
         }
-        ws = null;
       };
 
       ws.onerror = function() {
@@ -1190,9 +1203,10 @@
       switch (msg.type) {
         case 'ready':
           _gotReadyState = true;
-          // Show connecting state until capture starts (avoid "Tap to speak" flash)
           setState(STATE.CONNECTING);
-          startCapture().catch(function(e) {
+          startCapture().then(function() {
+            // capture started successfully (state set to LISTENING inside startCapture)
+          }, function(e) {
             console.warn('[voice] auto-capture failed:', e);
             setState(STATE.READY);
           });
@@ -1373,7 +1387,8 @@
         } else {
           showError('Microphone error: ' + err.message);
         }
-        return;
+        setState(STATE.READY);
+        throw err;
       }
 
       // Load AudioWorklet via Blob URL

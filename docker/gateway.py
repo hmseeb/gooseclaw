@@ -8675,6 +8675,13 @@ def register_generated_extension(template_name, extension_name, vault_prefix,
         extra_subs=extra_subs,
     )
 
+    # 1.5 Validate syntax before registration
+    from extensions.validator import validate_syntax
+    valid, err_msg = validate_syntax(server_path)
+    if not valid:
+        logger.error("Extension %s failed syntax validation: %s", extension_name, err_msg)
+        raise ValueError(f"Generated extension failed syntax validation: {err_msg}")
+
     # 2. Register in registry.json
     registry.register(
         name=extension_name,
@@ -8695,10 +8702,55 @@ def register_generated_extension(template_name, extension_name, vault_prefix,
         start_goosed()
         _session_manager._sessions.clear()
 
+        # 4.5 Health check after restart
+        time.sleep(3)  # wait for goosed to finish restarting
+        from extensions.validator import health_check, check_and_disable, clear_failures
+        ok, hc_err = health_check(server_path, timeout=15)
+        if ok:
+            clear_failures(extension_name)
+            logger.info("Extension %s passed health check", extension_name)
+        else:
+            logger.warning("Extension %s failed health check: %s", extension_name, hc_err)
+            check_and_disable(extension_name)
+
     threading.Thread(target=_restart_after_registration, daemon=True).start()
     logger.info("Extension registration complete: %s (restart queued)", extension_name)
 
     return server_path
+
+
+def handle_credential_setup(data):
+    """Handle credential setup request from AI.
+
+    Called when the AI detects a credential and user has confirmed.
+    data: {"credential_value": str, "credential_type": str, "user_hint": str,
+           "vault_prefix": str (optional), "template": str (optional)}
+
+    Returns dict with success/error status.
+    """
+    from extensions.detector import classify_credential, credential_to_extension
+
+    cred_value = data.get("credential_value", "").strip()
+    if not cred_value:
+        return {"success": False, "error": "No credential value provided"}
+
+    # If classification explicitly provided, use it
+    classification = data.get("classification")
+    if not classification:
+        cred_dict = {
+            "value": cred_value,
+            "type": data.get("credential_type", "api_key"),
+            "confidence": 1.0,
+        }
+        classification = classify_credential(cred_dict, data.get("user_hint", ""))
+
+    # Override vault_prefix if user specified
+    if data.get("vault_prefix"):
+        classification["vault_prefix"] = data["vault_prefix"]
+    if data.get("template"):
+        classification["template"] = data["template"]
+
+    return credential_to_extension(cred_value, classification)
 
 
 def start_goosed():
@@ -10138,6 +10190,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.handle_create_watcher()
         elif path == "/api/voice/preference":
             self.handle_voice_preference_set()
+        elif path == "/api/credential-setup":
+            self.handle_credential_setup_request()
         elif path.startswith("/api/webhooks/"):
             webhook_name = path[len("/api/webhooks/"):]
             if webhook_name:
@@ -10311,6 +10365,22 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             return
         _set_voice_preference(voice_name)
         self.send_json(200, {"voice_name": voice_name})
+
+    def handle_credential_setup_request(self):
+        """POST /api/credential-setup - credential detection pipeline."""
+        if not check_auth(self):
+            return
+        body = self._read_body()
+        if body is None:
+            return
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            self.send_json(400, {"error": "Invalid JSON"})
+            return
+        result = handle_credential_setup(data)
+        status = 200 if result.get("success") else 400
+        self.send_json(status, result)
 
     def handle_voice_ws(self):
         """Direct WebSocket relay: browser <-> gateway <-> Gemini Live API.

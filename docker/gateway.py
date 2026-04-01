@@ -9593,13 +9593,19 @@ class MCPClient:
             _vlog(f"mcp: {self.name} tools/list failed: {e}")
             return []
 
-    def call_tool(self, tool_name, arguments):
+    def call_tool(self, tool_name, arguments, timeout=30):
         """Call a tool directly. Returns result dict."""
         try:
+            # Check process is alive before calling
+            if self._proc and self._proc.poll() is not None:
+                stderr_out = self._drain_stderr()
+                _vlog(f"mcp: {self.name} process died (exit {self._proc.returncode}){' stderr: ' + stderr_out[:200] if stderr_out else ''}")
+                self._ready = False
+                return {"error": f"MCP server {self.name} crashed"}
             resp = self._send_jsonrpc("tools/call", {
                 "name": tool_name,
                 "arguments": arguments,
-            })
+            }, read_timeout=timeout)
             if "error" in resp:
                 return {"error": str(resp["error"])}
             result = resp.get("result", {})
@@ -9610,6 +9616,9 @@ class MCPClient:
                 if isinstance(item, dict) and item.get("type") == "text":
                     texts.append(item.get("text", ""))
             return {"result": "\n".join(texts) if texts else json.dumps(result)}
+        except TimeoutError:
+            _vlog(f"mcp: {self.name}.{tool_name} timed out ({timeout}s)")
+            return {"error": f"Tool {tool_name} timed out ({timeout}s)"}
         except Exception as e:
             return {"error": str(e)}
 

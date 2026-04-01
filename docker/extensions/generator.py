@@ -96,6 +96,16 @@ def generate_extension(
     combined = base_content + "\n" + template_content
     rendered = Template(combined).safe_substitute(subs)
 
+    # Validate: check _vault_get() calls reference keys in vault_keys list
+    import re as _re
+    vault_refs = _re.findall(r'_vault_get\("([^"]+)"\)', rendered)
+    for ref in vault_refs:
+        if ref not in vault_keys:
+            logger.warning(
+                "Extension %s: vault key '%s' referenced in template but not in vault_keys %s",
+                extension_name, ref, vault_keys,
+            )
+
     # Create output directory
     output_dir = Path(OUTPUT_BASE_DIR) / extension_name
     output_dir.mkdir(parents=True, exist_ok=True)

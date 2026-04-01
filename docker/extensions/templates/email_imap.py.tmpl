@@ -25,7 +25,7 @@ def _decode_header_value(value):
 def _get_imap_connection():
     """Create and return an authenticated IMAP4_SSL connection."""
     host = _vault_get("${vault_prefix}.imap_host")
-    user = _vault_get("${vault_prefix}.username")
+    user = _vault_get("${vault_prefix}.imap_user")
     password = _vault_get("${vault_prefix}.app_password")
     conn = imaplib.IMAP4_SSL(host, 993)
     conn.login(user, password)
@@ -35,8 +35,8 @@ def _get_imap_connection():
 def _get_smtp_connection():
     """Create and return an authenticated SMTP_SSL connection."""
     host = _vault_get("${vault_prefix}.smtp_host")
-    user = _vault_get("${vault_prefix}.username")
-    password = _vault_get("${vault_prefix}.app_password")
+    user = _vault_get("${vault_prefix}.smtp_user")
+    password = _vault_get("${vault_prefix}.smtp_password")
     conn = smtplib.SMTP_SSL(host, 465)
     conn.login(user, password)
     return conn
@@ -186,7 +186,7 @@ def email_send(to: str, subject: str, body: str) -> str:
     """
     conn = None
     try:
-        sender = _vault_get("${vault_prefix}.username")
+        sender = _vault_get("${vault_prefix}.smtp_user")
 
         msg = MIMEText(body, "plain")
         msg["Subject"] = subject

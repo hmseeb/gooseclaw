@@ -9912,6 +9912,13 @@ def _discover_voice_tools():
     declarations = []
     name_map = {}  # tool_name -> {"source": "mcp"|"goosed", "ext_name": str}
 
+    # Voice tool whitelist - only expose extensions useful for voice conversations.
+    # Generic REST API wrappers (api_get/api_post) confuse Gemini. Keep purpose-built tools.
+    _VOICE_MCP_WHITELIST = {
+        "knowledge", "mem0-memory", "context7", "exa",  # core tools
+        "gmail_email",  # email (purpose-built template)
+    }
+
     # 1. Direct MCP tools (stdio extensions - the fast path)
     # Pool initializes in background at gateway startup. Trigger if not started yet.
     if not _mcp_pool._initialized and not _mcp_pool._initializing:
@@ -9919,6 +9926,9 @@ def _discover_voice_tools():
 
     seen_names = set()
     for ext_name, tool_name, tool_schema in _mcp_pool.get_all_tools():
+        # Skip extensions not in voice whitelist
+        if ext_name not in _VOICE_MCP_WHITELIST:
+            continue
         # Convert MCP schema to Gemini format
         gemini_decl = _mcp_schema_to_gemini(tool_schema)
         safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', tool_name)

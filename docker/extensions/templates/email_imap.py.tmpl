@@ -22,10 +22,20 @@ def _decode_header_value(value):
     return " ".join(result)
 
 
+def _vault_get_any(*keys):
+    """Try multiple vault keys, return first that exists."""
+    for key in keys:
+        try:
+            return _vault_get(key)
+        except RuntimeError:
+            continue
+    raise RuntimeError(f"None of these vault keys found: {keys}")
+
+
 def _get_imap_connection():
     """Create and return an authenticated IMAP4_SSL connection."""
     host = _vault_get("${vault_prefix}.imap_host")
-    user = _vault_get("${vault_prefix}.imap_user")
+    user = _vault_get_any("${vault_prefix}.imap_user", "${vault_prefix}.username", "${vault_prefix}.email")
     password = _vault_get("${vault_prefix}.app_password")
     conn = imaplib.IMAP4_SSL(host, 993)
     conn.login(user, password)
@@ -35,8 +45,8 @@ def _get_imap_connection():
 def _get_smtp_connection():
     """Create and return an authenticated SMTP_SSL connection."""
     host = _vault_get("${vault_prefix}.smtp_host")
-    user = _vault_get("${vault_prefix}.smtp_user")
-    password = _vault_get("${vault_prefix}.smtp_password")
+    user = _vault_get_any("${vault_prefix}.smtp_user", "${vault_prefix}.imap_user", "${vault_prefix}.username", "${vault_prefix}.email")
+    password = _vault_get_any("${vault_prefix}.smtp_password", "${vault_prefix}.app_password")
     conn = smtplib.SMTP_SSL(host, 465)
     conn.login(user, password)
     return conn
@@ -186,7 +196,7 @@ def email_send(to: str, subject: str, body: str) -> str:
     """
     conn = None
     try:
-        sender = _vault_get("${vault_prefix}.smtp_user")
+        sender = _vault_get_any("${vault_prefix}.smtp_user", "${vault_prefix}.imap_user", "${vault_prefix}.username", "${vault_prefix}.email")
 
         msg = MIMEText(body, "plain")
         msg["Subject"] = subject

@@ -9912,11 +9912,13 @@ def _discover_voice_tools():
     declarations = []
     name_map = {}  # tool_name -> {"source": "mcp"|"goosed", "ext_name": str}
 
-    # Voice tool whitelist - only expose extensions useful for voice conversations.
-    # Generic REST API wrappers (api_get/api_post) confuse Gemini. Keep purpose-built tools.
-    _VOICE_MCP_WHITELIST = {
-        "knowledge", "mem0-memory", "context7", "exa",  # core tools
-        "gmail_email",  # email (purpose-built template)
+    # Voice tool blocklist - exclude extensions that don't work well with voice.
+    # Generic REST API wrappers confuse Gemini (it doesn't know API paths/params).
+    _VOICE_MCP_BLOCKLIST = {
+        "brave_search_api",  # exa handles search, brave's raw REST is unusable
+        "groq_api", "openrouter_api",  # LLM provider APIs, not voice-useful
+        "browserbase_api",  # browser automation, not voice-useful
+        "ensue_api",  # not voice-useful
     }
 
     # 1. Direct MCP tools (stdio extensions - the fast path)
@@ -9926,8 +9928,8 @@ def _discover_voice_tools():
 
     seen_names = set()
     for ext_name, tool_name, tool_schema in _mcp_pool.get_all_tools():
-        # Skip extensions not in voice whitelist
-        if ext_name not in _VOICE_MCP_WHITELIST:
+        # Skip blocked extensions
+        if ext_name in _VOICE_MCP_BLOCKLIST:
             continue
         # Convert MCP schema to Gemini format
         gemini_decl = _mcp_schema_to_gemini(tool_schema)

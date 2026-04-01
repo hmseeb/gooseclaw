@@ -9569,6 +9569,11 @@ def _voice_relay_loop(browser_sock, gemini_sock, session_state):
                     call_name = fc.get("name", "")
                     call_args = fc.get("args", {})
                     original_name = session_state.get("tool_name_map", {}).get(call_name, call_name)
+                    # Send transcript so user sees acknowledgment
+                    human_name = original_name.replace("_", " ").replace("-", " ").title()
+                    ws_send_frame(browser_sock, WS_OP_TEXT,
+                        json.dumps({"type": "transcript", "speaker": "ai",
+                                    "text": f"Using {human_name}..."}).encode())
                     # Notify browser: tool running
                     ws_send_frame(browser_sock, WS_OP_TEXT,
                         json.dumps({"type": "tool_status", "name": call_name, "status": "running"}).encode())

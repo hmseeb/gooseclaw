@@ -540,6 +540,54 @@ EXTENSIONS
 fi
 rm -f "$EXTENSIONS_STATE_FILE"
 
+# --- auto-generated extensions (from registry.json) ----------------------------------------
+REGISTRY_FILE="/data/extensions/registry.json"
+if [ -f "$REGISTRY_FILE" ]; then
+    echo "[mcp] loading auto-generated extensions from registry..."
+    python3 -c "
+import yaml, json, os, sys
+try:
+    with open('$REGISTRY_FILE') as f:
+        registry = json.load(f)
+    with open('$CONFIG_DIR/config.yaml') as f:
+        config = yaml.safe_load(f) or {}
+    exts = config.setdefault('extensions', {})
+    added = []
+    skipped = []
+    for name, meta in registry.get('extensions', {}).items():
+        if not meta.get('enabled', True):
+            skipped.append(f'{name} (disabled)')
+            continue
+        sp = meta.get('server_path', '')
+        if not os.path.isfile(sp):
+            skipped.append(f'{name} (server.py missing)')
+            continue
+        exts[name] = {
+            'enabled': True,
+            'type': 'stdio',
+            'name': name,
+            'description': meta.get('description', f'Auto-generated {name} extension'),
+            'cmd': 'python3',
+            'args': [sp],
+            'envs': {},
+            'env_keys': [],
+            'timeout': 300,
+            'bundled': None,
+            'available_tools': [],
+        }
+        added.append(name)
+    if added:
+        config['extensions'] = exts
+        with open('$CONFIG_DIR/config.yaml', 'w') as f:
+            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+        print(f'[mcp] auto-generated extensions loaded: {\", \".join(added)}')
+    if skipped:
+        print(f'[mcp] auto-generated extensions skipped: {\", \".join(skipped)}', file=sys.stderr)
+except Exception as e:
+    print(f'[mcp] WARN: registry load failed: {e}', file=sys.stderr)
+" 2>/dev/null || true
+fi
+
 # ─── sync new template extensions into existing configs ──────────────────────
 # On upgrades, new extensions (like mem0-memory) need to be added to existing
 # config.yaml files. This merges any missing template extensions without

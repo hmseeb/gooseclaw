@@ -10043,8 +10043,12 @@ def _discover_voice_tools():
                 if ext_type in ("stdio", "streamable_http") and ext_name not in _VOICE_MCP_BLOCKLIST:
                     continue
                 # Platform/builtin extensions go through goosed
-                # Skip platform extensions that aren't useful for voice
+                # Skip extensions that aren't useful for voice
                 if ext_name in ("todo", "memory", "tom"):
+                    continue
+                # Also skip blocklisted stdio extensions from goosed path
+                # (they're blocklisted from direct MCP AND goosed for voice)
+                if ext_name in _VOICE_MCP_BLOCKLIST and ext_name not in user_allowlist:
                     continue
                 safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', ext_name)
                 if safe_name and safe_name[0].isdigit():

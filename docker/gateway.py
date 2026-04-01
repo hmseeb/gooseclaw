@@ -9202,32 +9202,8 @@ def _discover_voice_tools():
 
 
 def _create_voice_goose_session():
-    """Create a goosed session using Gemini Flash as the LLM (not Claude)."""
-    sid = _create_goose_session()
-    if not sid or not _INTERNAL_GOOSE_TOKEN:
-        return sid
-    # Override provider to Gemini for voice tool execution
-    api_key = _get_gemini_api_key()
-    if not api_key:
-        return sid  # fall back to default provider
-    try:
-        payload = json.dumps({
-            "provider": "google",
-            "model": "gemini-3-flash-preview",
-            "session_id": sid,
-        }).encode("utf-8")
-        conn = _goosed_conn(timeout=10)
-        conn.request("POST", "/agent/update_provider", body=payload, headers={
-            "Content-Type": "application/json",
-            "X-Secret-Key": _INTERNAL_GOOSE_TOKEN,
-        })
-        resp = conn.getresponse()
-        resp.read()
-        conn.close()
-        _vlog(f"voice session {sid}: provider set to google/gemini-2.5-flash")
-    except Exception as e:
-        _vlog(f"voice session {sid}: failed to set gemini provider: {e}")
-    return sid
+    """Create a goosed session for voice tool execution. Uses default provider (fastest)."""
+    return _create_goose_session()
 
 
 def _voice_execute_tool(tool_name, tool_args, session_id, original_name):

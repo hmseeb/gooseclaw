@@ -9051,7 +9051,7 @@ def _voice_session_token_validate(token):
 def _voice_load_identity():
     """Load identity files (soul.md, user.md) for voice system prompt."""
     identity = ""
-    for fname in ["system-core.md", "soul.md", "user.md"]:
+    for fname in ["system-core.md", "soul.md", "user.md", "turn-rules.md"]:
         fpath = os.path.join(DATA_DIR, "identity", fname)
         try:
             with open(fpath) as f:

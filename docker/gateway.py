@@ -9353,6 +9353,7 @@ class MCPClient:
         self._req_id = 0
         self._tools = []  # cached tool list
         self._ready = False
+        self._read_buf = b""  # leftover bytes from previous reads
 
     def start(self):
         """Spawn the MCP server subprocess."""
@@ -9360,6 +9361,8 @@ class MCPClient:
             return True
         env = os.environ.copy()
         env.update(self.envs)
+        # MCP_DIRECT=1 tells servers to skip sys.stdout redirect
+        env["MCP_DIRECT"] = "1"
         try:
             self._proc = subprocess.Popen(
                 [self.cmd] + self.args,
@@ -9415,10 +9418,10 @@ class MCPClient:
         }
         if params is not None:
             msg["params"] = params
-        payload = json.dumps(msg)
-        line = f"Content-Length: {len(payload)}\r\n\r\n{payload}"
+        # MCP SDK uses newline-delimited JSON (one JSON per line, no Content-Length)
+        payload = json.dumps(msg) + "\n"
         with self._lock:
-            self._proc.stdin.write(line.encode("utf-8"))
+            self._proc.stdin.write(payload.encode("utf-8"))
             self._proc.stdin.flush()
             return self._read_response(timeout=read_timeout or self.timeout)
 
@@ -9429,60 +9432,50 @@ class MCPClient:
         msg = {"jsonrpc": "2.0", "method": method}
         if params is not None:
             msg["params"] = params
-        payload = json.dumps(msg)
-        line = f"Content-Length: {len(payload)}\r\n\r\n{payload}"
+        payload = json.dumps(msg) + "\n"
         with self._lock:
-            self._proc.stdin.write(line.encode("utf-8"))
+            self._proc.stdin.write(payload.encode("utf-8"))
             self._proc.stdin.flush()
 
     def _read_response(self, timeout=30):
-        """Read a JSON-RPC response from stdout with timeout. Must be called under _lock."""
+        """Read a newline-delimited JSON-RPC response from stdout with timeout.
+        Skips notification messages (no 'id') and returns the actual response."""
         import select as _sel
         stdout_fd = self._proc.stdout.fileno()
         deadline = time.time() + timeout
+        buf = self._read_buf if hasattr(self, '_read_buf') else b""
 
-        # Read headers byte by byte using select for timeout
-        header_buf = b""
         while True:
+            # Check buffer first for complete lines
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    msg = json.loads(line.decode("utf-8", errors="replace"))
+                    # Skip server-sent notifications (no 'id' field)
+                    if "id" in msg:
+                        self._read_buf = buf
+                        return msg
+                except json.JSONDecodeError:
+                    continue  # skip malformed lines
+
             remaining = deadline - time.time()
             if remaining <= 0:
+                self._read_buf = buf
                 raise TimeoutError(f"MCP server {self.name} read timeout ({timeout}s)")
             ready, _, _ = _sel.select([stdout_fd], [], [], min(remaining, 1.0))
             if not ready:
                 if self._proc.poll() is not None:
+                    self._read_buf = buf
                     raise RuntimeError(f"MCP server {self.name} exited during read")
                 continue
-            chunk = os.read(stdout_fd, 1)
+            chunk = os.read(stdout_fd, 4096)
             if not chunk:
+                self._read_buf = buf
                 raise RuntimeError(f"MCP server {self.name} closed stdout")
-            header_buf += chunk
-            if header_buf.endswith(b"\r\n\r\n"):
-                break
-
-        # Parse Content-Length from headers
-        content_length = None
-        for hline in header_buf.decode("utf-8", errors="replace").split("\r\n"):
-            if hline.lower().startswith("content-length:"):
-                content_length = int(hline.split(":", 1)[1].strip())
-        if content_length is None:
-            raise RuntimeError(f"MCP server {self.name} sent no Content-Length")
-
-        # Read body with timeout
-        body = b""
-        while len(body) < content_length:
-            remaining = deadline - time.time()
-            if remaining <= 0:
-                raise TimeoutError(f"MCP server {self.name} body read timeout")
-            ready, _, _ = _sel.select([stdout_fd], [], [], min(remaining, 1.0))
-            if not ready:
-                if self._proc.poll() is not None:
-                    raise RuntimeError(f"MCP server {self.name} exited during body read")
-                continue
-            chunk = os.read(stdout_fd, content_length - len(body))
-            if not chunk:
-                raise RuntimeError(f"MCP server {self.name} closed stdout during body read")
-            body += chunk
-        return json.loads(body.decode("utf-8", errors="replace"))
+            buf += chunk
 
     def _initialize(self):
         """MCP initialize handshake. Uses 60s timeout for heavy servers."""
@@ -9929,6 +9922,9 @@ def _discover_voice_tools():
                 if ext_type in ("stdio", "streamable_http"):
                     continue
                 # Platform/builtin extensions go through goosed
+                # Skip platform extensions that aren't useful for voice
+                if ext_name in ("todo", "memory", "tom"):
+                    continue
                 safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', ext_name)
                 if safe_name and safe_name[0].isdigit():
                     safe_name = "ext_" + safe_name

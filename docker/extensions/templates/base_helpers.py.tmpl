@@ -4,9 +4,12 @@ Template: ${template_name}
 Vault keys: ${vault_keys_display}
 """
 import sys
+import os
 
 # Redirect stdout to stderr so print() never corrupts MCP JSON-RPC on stdout
-sys.stdout = sys.stderr
+# Skip redirect when spawned by gateway's direct MCP client (MCP_DIRECT=1)
+if not os.environ.get("MCP_DIRECT"):
+    sys.stdout = sys.stderr
 
 import os
 import subprocess

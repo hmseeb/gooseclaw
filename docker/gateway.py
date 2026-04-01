@@ -10943,7 +10943,7 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                     safe.pop(key, None)
 
             # telegram_bot_token: only expose whether it is set, never the value
-            tbt = safe.pop("telegram_bot_token", "")
+            tbt = safe.pop("telegram_bot_token", "") or os.environ.get("TELEGRAM_BOT_TOKEN", "")
             safe["telegram_bot_token_set"] = bool(tbt)
 
             # gemini voice key: only expose whether it is set (lives in vault, not setup.json)

@@ -44,11 +44,11 @@ Plans:
   2. A registry.json file on /data/extensions/ tracks all generated extensions with their metadata
   3. After container restart, all previously generated extensions are restored and available as tools without any user action
   4. Goosed is restarted (or config reloaded) after registration so the new extension is immediately usable
-**Plans**: TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] 02-01: TBD
-- [ ] 02-02: TBD
+- [ ] 02-01-PLAN.md -- Registry module: CRUD operations for /data/extensions/registry.json with atomic writes, unit tests
+- [ ] 02-02-PLAN.md -- Config writer + boot loader: gateway.py registration flow, entrypoint.sh registry injection, integration tests
 
 ### Phase 3: Credential Detection, Validation, and End-to-End Flow
 **Goal**: Users paste credentials in chat and the system detects, confirms, vaults, generates, validates, and registers a working extension automatically
@@ -75,5 +75,5 @@ Phases execute in numeric order: 1 → 2 → 3
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Template Engine and Code Generation | 3/3 | Complete | 2026-04-01 |
-| 2. Extension Registration and Boot Lifecycle | 0/? | Not started | - |
+| 2. Extension Registration and Boot Lifecycle | 0/2 | Planning complete | - |
 | 3. Credential Detection, Validation, and End-to-End Flow | 0/? | Not started | - |

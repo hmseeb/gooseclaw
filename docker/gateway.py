@@ -9417,13 +9417,14 @@ def _gemini_connect(api_key, resumption_handle=None, tools=None, voice_name="Aoe
 
 
 def _voice_relay_loop(browser_sock, gemini_sock, session_state):
-    """Single-threaded relay using select.select() to multiplex both sockets.
-    No threads, no locks, no race conditions. Handles all protocol messages."""
+    """Relay loop using select.select() to multiplex both sockets.
+    Write lock protects socket writes from tool execution threads."""
 
     session_start = time.time()
     max_duration = 9 * 60  # 9 minutes
     last_ping = time.time()
     ping_interval = 10
+    write_lock = session_state.setdefault("_write_lock", threading.Lock())
 
     def _has_ssl_pending(sock):
         """Check if an SSL socket has buffered data that select won't see."""
@@ -9452,11 +9453,13 @@ def _voice_relay_loop(browser_sock, gemini_sock, session_state):
             msg = _voice_pcm_to_gemini_json(payload)
             gs = session_state["gemini_sock"]
             if gs:
-                ws_send_frame(gs, WS_OP_TEXT, json.dumps(msg).encode(), mask=True)
+                with write_lock:
+                    ws_send_frame(gs, WS_OP_TEXT, json.dumps(msg).encode(), mask=True)
         elif opcode == WS_OP_TEXT:
             gs = session_state["gemini_sock"]
             if gs:
-                ws_send_frame(gs, WS_OP_TEXT, payload, mask=True)
+                with write_lock:
+                    ws_send_frame(gs, WS_OP_TEXT, payload, mask=True)
         return True
 
     def _handle_gemini_frame(opcode, payload):
@@ -9571,49 +9574,57 @@ def _voice_relay_loop(browser_sock, gemini_sock, session_state):
                     session_state["transcripts"].append({
                         "speaker": "tool", "name": original_name, "status": "running", "ts": time.time(),
                     })
-                    # Tool execution still needs a thread (blocking I/O to goosed)
-                    # but it writes back via the sockets which is safe from the
-                    # tool thread since the main loop won't write to gemini_sock
-                    # at the same time (select will just read, tool thread writes)
-                    def _exec_tool(cid, cname, cargs, oname, ss):
+                    # Tool execution in thread. Use write lock to prevent frame
+                    # corruption when tool thread and relay loop write simultaneously.
+                    write_lock = session_state.setdefault("_write_lock", threading.Lock())
+                    def _exec_tool(cid, cname, cargs, oname, ss, wlock):
                         try:
                             sid = ss.get("tool_session_id")
                             if not sid:
                                 sid = _create_goose_session()
                                 ss["tool_session_id"] = sid
-                                _voice_log.info(f"Created tool session: {sid}")
+                                _vlog(f"tool: created session {sid}")
+                            _vlog(f"tool: executing {oname}")
                             result = _voice_execute_tool(cname, cargs, sid, oname)
                             response_msg = _voice_build_tool_response(cid, cname, result)
-                            gs2 = ss["gemini_sock"]
-                            if gs2:
-                                ws_send_frame(gs2, WS_OP_TEXT,
-                                    json.dumps(response_msg).encode(), mask=True)
+                            with wlock:
+                                gs2 = ss["gemini_sock"]
+                                if gs2:
+                                    ws_send_frame(gs2, WS_OP_TEXT,
+                                        json.dumps(response_msg).encode(), mask=True)
                             summary = result.get("result", result.get("error", ""))[:200]
                             status = "done" if "result" in result else "error"
-                            ws_send_frame(browser_sock, WS_OP_TEXT,
-                                json.dumps({"type": "tool_status", "name": cname,
-                                            "status": status, "result": summary}).encode())
+                            _vlog(f"tool: {oname} -> {status}")
+                            with wlock:
+                                ws_send_frame(browser_sock, WS_OP_TEXT,
+                                    json.dumps({"type": "tool_status", "name": cname,
+                                                "status": status, "result": summary}).encode())
                             ss["transcripts"].append({
                                 "speaker": "tool", "name": oname, "status": status, "ts": time.time(),
                             })
                         except Exception as e:
-                            _voice_log.error(f"Tool exec error: {e}")
+                            _vlog(f"tool: {oname} error: {e}")
                             err_response = _voice_build_tool_response(cid, cname, {"error": str(e)})
                             try:
-                                gs2 = ss["gemini_sock"]
-                                if gs2:
-                                    ws_send_frame(gs2, WS_OP_TEXT,
-                                        json.dumps(err_response).encode(), mask=True)
+                                with wlock:
+                                    gs2 = ss["gemini_sock"]
+                                    if gs2:
+                                        ws_send_frame(gs2, WS_OP_TEXT,
+                                            json.dumps(err_response).encode(), mask=True)
                             except Exception:
                                 pass
-                            ws_send_frame(browser_sock, WS_OP_TEXT,
-                                json.dumps({"type": "tool_status", "name": cname,
-                                            "status": "error", "result": str(e)[:200]}).encode())
+                            try:
+                                with wlock:
+                                    ws_send_frame(browser_sock, WS_OP_TEXT,
+                                        json.dumps({"type": "tool_status", "name": cname,
+                                                    "status": "error", "result": str(e)[:200]}).encode())
+                            except Exception:
+                                pass
 
                     t = threading.Thread(
                         target=_exec_tool,
                         args=(call_id, call_name, call_args, original_name,
-                              session_state),
+                              session_state, write_lock),
                         daemon=True)
                     t.start()
             elif parsed["type"] == "tool_cancelled":

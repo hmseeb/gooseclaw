@@ -9333,16 +9333,370 @@ def _vlog(msg):
             _voice_debug_log.pop(0)
 
 
+# ── Direct MCP Client (bypass goosed) ────────────────────────────────────────
+
+class MCPClient:
+    """Direct JSON-RPC 2.0 client for stdio MCP servers.
+    Spawns a subprocess and communicates over stdin/stdout.
+    No LLM hop. No goosed. Just raw tool calls."""
+
+    def __init__(self, name, cmd, args=None, envs=None, timeout=30):
+        self.name = name
+        self.cmd = cmd
+        self.args = args or []
+        self.envs = envs or {}
+        self.timeout = timeout
+        self._proc = None
+        self._lock = threading.Lock()
+        self._req_id = 0
+        self._tools = []  # cached tool list
+        self._ready = False
+
+    def start(self):
+        """Spawn the MCP server subprocess."""
+        if self._proc and self._proc.poll() is None:
+            return True
+        env = os.environ.copy()
+        env.update(self.envs)
+        try:
+            self._proc = subprocess.Popen(
+                [self.cmd] + self.args,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+                bufsize=0,
+            )
+            _vlog(f"mcp: spawned {self.name} (pid {self._proc.pid})")
+            # Initialize handshake
+            if self._initialize():
+                self._ready = True
+                return True
+            else:
+                self.stop()
+                return False
+        except Exception as e:
+            _vlog(f"mcp: failed to spawn {self.name}: {e}")
+            return False
+
+    def stop(self):
+        """Kill the subprocess."""
+        self._ready = False
+        self._tools = []
+        if self._proc:
+            try:
+                self._proc.terminate()
+                self._proc.wait(timeout=5)
+            except Exception:
+                try:
+                    self._proc.kill()
+                except Exception:
+                    pass
+            self._proc = None
+            _vlog(f"mcp: stopped {self.name}")
+
+    def is_alive(self):
+        return self._proc is not None and self._proc.poll() is None and self._ready
+
+    def _next_id(self):
+        self._req_id += 1
+        return self._req_id
+
+    def _send_jsonrpc(self, method, params=None):
+        """Send a JSON-RPC request and read the response. Thread-safe."""
+        if not self._proc or self._proc.poll() is not None:
+            raise RuntimeError(f"MCP server {self.name} not running")
+        msg = {
+            "jsonrpc": "2.0",
+            "id": self._next_id(),
+            "method": method,
+        }
+        if params is not None:
+            msg["params"] = params
+        payload = json.dumps(msg)
+        line = f"Content-Length: {len(payload)}\r\n\r\n{payload}"
+        with self._lock:
+            self._proc.stdin.write(line.encode("utf-8"))
+            self._proc.stdin.flush()
+            return self._read_response()
+
+    def _send_notification(self, method, params=None):
+        """Send a JSON-RPC notification (no id, no response expected)."""
+        if not self._proc or self._proc.poll() is not None:
+            return
+        msg = {"jsonrpc": "2.0", "method": method}
+        if params is not None:
+            msg["params"] = params
+        payload = json.dumps(msg)
+        line = f"Content-Length: {len(payload)}\r\n\r\n{payload}"
+        with self._lock:
+            self._proc.stdin.write(line.encode("utf-8"))
+            self._proc.stdin.flush()
+
+    def _read_response(self):
+        """Read a JSON-RPC response from stdout. Must be called under _lock."""
+        # Read Content-Length header
+        content_length = None
+        while True:
+            header_line = self._proc.stdout.readline()
+            if not header_line:
+                raise RuntimeError(f"MCP server {self.name} closed stdout")
+            header_str = header_line.decode("utf-8", errors="replace").strip()
+            if header_str == "":
+                break  # end of headers
+            if header_str.lower().startswith("content-length:"):
+                content_length = int(header_str.split(":", 1)[1].strip())
+        if content_length is None:
+            raise RuntimeError(f"MCP server {self.name} sent no Content-Length")
+        body = self._proc.stdout.read(content_length)
+        return json.loads(body.decode("utf-8", errors="replace"))
+
+    def _initialize(self):
+        """MCP initialize handshake."""
+        try:
+            resp = self._send_jsonrpc("initialize", {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "gooseclaw-gateway", "version": "1.0"},
+            })
+            if "error" in resp:
+                _vlog(f"mcp: {self.name} initialize error: {resp['error']}")
+                return False
+            _vlog(f"mcp: {self.name} initialized: {resp.get('result', {}).get('serverInfo', {})}")
+            # Send initialized notification
+            self._send_notification("notifications/initialized")
+            return True
+        except Exception as e:
+            _vlog(f"mcp: {self.name} initialize failed: {e}")
+            return False
+
+    def list_tools(self):
+        """Get available tools from the MCP server."""
+        if self._tools:
+            return self._tools
+        try:
+            resp = self._send_jsonrpc("tools/list")
+            if "error" in resp:
+                _vlog(f"mcp: {self.name} tools/list error: {resp['error']}")
+                return []
+            self._tools = resp.get("result", {}).get("tools", [])
+            _vlog(f"mcp: {self.name} has {len(self._tools)} tools")
+            return self._tools
+        except Exception as e:
+            _vlog(f"mcp: {self.name} tools/list failed: {e}")
+            return []
+
+    def call_tool(self, tool_name, arguments):
+        """Call a tool directly. Returns result dict."""
+        try:
+            resp = self._send_jsonrpc("tools/call", {
+                "name": tool_name,
+                "arguments": arguments,
+            })
+            if "error" in resp:
+                return {"error": str(resp["error"])}
+            result = resp.get("result", {})
+            # MCP returns content array, extract text
+            content = result.get("content", [])
+            texts = []
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    texts.append(item.get("text", ""))
+            return {"result": "\n".join(texts) if texts else json.dumps(result)}
+        except Exception as e:
+            return {"error": str(e)}
+
+
+class MCPPool:
+    """Manages a pool of direct MCP server connections.
+    Reads config.yaml for stdio extensions, spawns them, caches tool lists."""
+
+    def __init__(self):
+        self._clients = {}  # ext_name -> MCPClient
+        self._tool_map = {}  # "ext_name.tool_name" -> (MCPClient, tool_schema)
+        self._lock = threading.Lock()
+        self._initialized = False
+
+    def initialize(self):
+        """Read config.yaml and spawn all stdio MCP servers."""
+        import yaml
+        config_path = os.path.join(CONFIG_DIR, "config.yaml")
+        if not os.path.exists(config_path):
+            _vlog("mcp-pool: no config.yaml found")
+            return
+        with open(config_path) as f:
+            config = yaml.safe_load(f) or {}
+        extensions = config.get("extensions", {})
+
+        # Only spawn stdio extensions (not platform, not streamable_http)
+        for ext_name, ext_cfg in extensions.items():
+            if not isinstance(ext_cfg, dict):
+                continue
+            if ext_cfg.get("enabled") is False:
+                continue
+            ext_type = ext_cfg.get("type", "")
+            if ext_type != "stdio":
+                continue
+            cmd = ext_cfg.get("cmd", "")
+            args = ext_cfg.get("args", [])
+            envs = ext_cfg.get("envs", {})
+            if not cmd:
+                continue
+            client = MCPClient(
+                name=ext_name,
+                cmd=cmd,
+                args=args,
+                envs=envs,
+                timeout=ext_cfg.get("timeout", 30),
+            )
+            self._clients[ext_name] = client
+
+        # Start all clients in parallel
+        threads = []
+        for name, client in self._clients.items():
+            t = threading.Thread(target=self._start_and_discover, args=(name, client), daemon=True)
+            threads.append(t)
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
+        self._initialized = True
+        _vlog(f"mcp-pool: initialized {len(self._clients)} clients, {len(self._tool_map)} tools")
+
+    def _start_and_discover(self, name, client):
+        """Start a client and discover its tools."""
+        if not client.start():
+            _vlog(f"mcp-pool: failed to start {name}")
+            return
+        tools = client.list_tools()
+        with self._lock:
+            for tool in tools:
+                tool_name = tool.get("name", "")
+                if tool_name:
+                    key = f"{name}.{tool_name}"
+                    self._tool_map[key] = (client, tool)
+
+    def get_all_tools(self):
+        """Return all available tools across all MCP servers.
+        Returns: list of (ext_name, tool_name, tool_schema) tuples."""
+        result = []
+        with self._lock:
+            for key, (client, schema) in self._tool_map.items():
+                if client.is_alive():
+                    ext_name = key.split(".", 1)[0]
+                    result.append((ext_name, schema.get("name", ""), schema))
+        return result
+
+    def call_tool(self, ext_name, tool_name, arguments):
+        """Call a tool on a specific extension. Returns result dict."""
+        key = f"{ext_name}.{tool_name}"
+        with self._lock:
+            entry = self._tool_map.get(key)
+        if not entry:
+            return {"error": f"Tool not found: {key}"}
+        client, _schema = entry
+        if not client.is_alive():
+            # Try restart once
+            _vlog(f"mcp-pool: {ext_name} dead, restarting")
+            if client.start():
+                client.list_tools()  # re-discover
+            else:
+                return {"error": f"MCP server {ext_name} failed to restart"}
+        return client.call_tool(tool_name, arguments)
+
+    def find_tool(self, tool_name):
+        """Find which extension owns a tool by name.
+        Returns (ext_name, tool_schema) or (None, None)."""
+        with self._lock:
+            for key, (client, schema) in self._tool_map.items():
+                if schema.get("name") == tool_name and client.is_alive():
+                    ext_name = key.split(".", 1)[0]
+                    return ext_name, schema
+        return None, None
+
+    def shutdown(self):
+        """Stop all MCP servers."""
+        for name, client in self._clients.items():
+            client.stop()
+        self._clients.clear()
+        self._tool_map.clear()
+        self._initialized = False
+        _vlog("mcp-pool: shutdown complete")
+
+
+# Global MCP pool instance
+_mcp_pool = MCPPool()
+
+
+def _mcp_schema_to_gemini(tool_schema):
+    """Convert MCP tool inputSchema to Gemini function declaration format."""
+    input_schema = tool_schema.get("inputSchema", {})
+    properties = input_schema.get("properties", {})
+    required = input_schema.get("required", [])
+
+    # Convert JSON Schema types to Gemini types
+    type_map = {
+        "string": "STRING",
+        "integer": "INTEGER",
+        "number": "NUMBER",
+        "boolean": "BOOLEAN",
+        "array": "ARRAY",
+        "object": "OBJECT",
+    }
+
+    gemini_props = {}
+    for prop_name, prop_schema in properties.items():
+        json_type = prop_schema.get("type", "string")
+        gemini_type = type_map.get(json_type, "STRING")
+        prop_def = {
+            "type": gemini_type,
+            "description": prop_schema.get("description", f"Parameter: {prop_name}"),
+        }
+        gemini_props[prop_name] = prop_def
+
+    result = {
+        "name": tool_schema.get("name", "unknown"),
+        "description": tool_schema.get("description", ""),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": gemini_props,
+        },
+    }
+    if required:
+        result["parameters"]["required"] = required
+    return result
+
+
 def _discover_voice_tools():
-    """Query goosed for enabled extensions + add assistant catch-all.
+    """Discover tools from direct MCP connections + goosed platform extensions.
 
     Returns:
-        tuple: (list of function declaration dicts, dict mapping sanitized_name -> original_name)
+        tuple: (list of Gemini function declarations, dict mapping tool_name -> (source, ext_name))
+              source is "mcp" for direct calls, "goosed" for platform extensions
     """
     declarations = []
-    name_map = {}
+    name_map = {}  # tool_name -> {"source": "mcp"|"goosed", "ext_name": str}
 
-    # Discover individual goosed extensions
+    # 1. Direct MCP tools (stdio extensions - the fast path)
+    if not _mcp_pool._initialized:
+        _vlog("mcp-pool: initializing on first voice tool discovery")
+        _mcp_pool.initialize()
+
+    for ext_name, tool_name, tool_schema in _mcp_pool.get_all_tools():
+        # Convert MCP schema to Gemini format
+        gemini_decl = _mcp_schema_to_gemini(tool_schema)
+        # Prefix tool name with extension to avoid collisions
+        # e.g. "memory_add" from "mem0_memory" stays "memory_add"
+        safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', tool_name)
+        if safe_name and safe_name[0].isdigit():
+            safe_name = "t_" + safe_name
+        gemini_decl["name"] = safe_name
+        declarations.append(gemini_decl)
+        name_map[safe_name] = {"source": "mcp", "ext_name": ext_name, "tool_name": tool_name}
+
+    _vlog(f"voice tools: {len(declarations)} direct MCP tools")
+
+    # 2. Goosed platform extensions (developer, etc.) - kept as generic wrappers
     try:
         conn = _goosed_conn(timeout=5)
         conn.request("GET", "/config", headers={"X-Secret-Key": _INTERNAL_GOOSE_TOKEN})
@@ -9356,9 +9710,17 @@ def _discover_voice_tools():
                     continue
                 if ext_cfg.get("enabled") is False:
                     continue
+                ext_type = ext_cfg.get("type", "")
+                # Skip stdio extensions (already handled directly above)
+                if ext_type == "stdio":
+                    continue
+                # Platform/builtin extensions go through goosed
                 safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', ext_name)
                 if safe_name and safe_name[0].isdigit():
                     safe_name = "ext_" + safe_name
+                # Skip if name already taken by direct MCP tool
+                if safe_name in name_map:
+                    continue
                 desc = ext_cfg.get("description", "").strip()
                 if not desc:
                     human_name = ext_name.replace("_", " ").replace("-", " ").title()
@@ -9377,20 +9739,19 @@ def _discover_voice_tools():
                         "required": ["request"],
                     },
                 })
-                name_map[safe_name] = ext_name
+                name_map[safe_name] = {"source": "goosed", "ext_name": ext_name, "tool_name": None}
         else:
             resp.read()
             conn.close()
     except Exception as e:
-        _voice_log.warning(f"Tool discovery failed: {e}")
+        _voice_log.warning(f"Goosed tool discovery failed: {e}")
 
-    # Add catch-all assistant for tasks not covered by specific extensions
+    # 3. Assistant catch-all (always through goosed)
     declarations.append({
         "name": "assistant",
         "description": (
-            "General-purpose assistant for tasks not covered by other tools. "
-            "Can check emails, manage calendar, run scripts, access vault credentials, "
-            "and perform any complex multi-step task. Use this when no specific tool fits."
+            "General-purpose assistant for complex multi-step tasks, "
+            "running shell commands, writing files, or anything not covered by specific tools."
         ),
         "parameters": {
             "type": "OBJECT",
@@ -9403,18 +9764,17 @@ def _discover_voice_tools():
             "required": ["request"],
         },
     })
-    name_map["assistant"] = "assistant"
+    name_map["assistant"] = {"source": "goosed", "ext_name": "assistant", "tool_name": None}
 
+    _vlog(f"voice tools: {len(declarations)} total ({len([v for v in name_map.values() if v['source'] == 'mcp'])} direct, {len([v for v in name_map.values() if v['source'] == 'goosed'])} goosed)")
     return declarations, name_map
 
 
 def _create_voice_goose_session():
-    """Create a goosed session for voice tool execution.
-    Uses /data/voice-workspace (no .goosehints) so Claude doesn't re-process
-    the full identity context that Gemini already has. Much faster."""
+    """Create a goosed session for voice tool execution (fallback path only).
+    Used for platform extensions and assistant catch-all."""
     if not _INTERNAL_GOOSE_TOKEN:
         return None
-    # Ensure clean workspace exists (no .goosehints = no identity overhead)
     voice_ws = os.path.join(DATA_DIR, "voice-workspace")
     os.makedirs(voice_ws, exist_ok=True)
     try:
@@ -9431,7 +9791,6 @@ def _create_voice_goose_session():
             session = json.loads(body)
             sid = session.get("id") or session.get("session_id")
             if sid:
-                # Use Gemini Flash for voice tool execution
                 api_key = _get_gemini_api_key()
                 if api_key:
                     try:
@@ -9448,22 +9807,41 @@ def _create_voice_goose_session():
                         gresp = gconn.getresponse()
                         gresp.read()
                         gconn.close()
-                        _vlog(f"voice session {sid}: provider set to google/gemini-3-flash-preview")
-                    except Exception as e:
-                        _vlog(f"voice session {sid}: gemini provider failed, using default: {e}")
+                    except Exception:
                         _set_session_default_provider(str(sid))
                 else:
                     _set_session_default_provider(str(sid))
-                _vlog(f"voice session created: {sid} (clean workspace)")
                 return str(sid)
     except Exception as e:
-        _vlog(f"voice session creation failed: {e}")
-    return _create_goose_session()  # fallback to normal
+        _vlog(f"voice goosed session creation failed: {e}")
+    return _create_goose_session()
 
 
-def _voice_execute_tool(tool_name, tool_args, session_id, original_name):
-    """Execute a tool call via goosed."""
+def _voice_execute_tool(tool_name, tool_args, session_id, tool_info):
+    """Execute a tool call. Routes to direct MCP or goosed based on tool_info.
+
+    Args:
+        tool_name: The sanitized tool name from Gemini
+        tool_args: Dict of arguments from Gemini
+        session_id: Goosed session ID (for goosed fallback path)
+        tool_info: Dict with source/ext_name/tool_name from name_map
+    """
+    source = tool_info.get("source", "goosed")
+
+    # Direct MCP path - no LLM hop
+    if source == "mcp":
+        ext_name = tool_info["ext_name"]
+        real_tool_name = tool_info["tool_name"]
+        _vlog(f"tool: DIRECT MCP -> {ext_name}.{real_tool_name}")
+        result = _mcp_pool.call_tool(ext_name, real_tool_name, tool_args)
+        # Truncate result
+        if "result" in result:
+            result["result"] = result["result"][:2000]
+        return result
+
+    # Goosed fallback path (platform extensions + assistant)
     try:
+        original_name = tool_info.get("ext_name", tool_name)
         request = tool_args.get("request", str(tool_args))
         if original_name == "assistant":
             prompt = request
@@ -9798,25 +10176,35 @@ def _voice_relay_loop(browser_sock, gemini_sock, session_state):
                     call_id = fc.get("id", "")
                     call_name = fc.get("name", "")
                     call_args = fc.get("args", {})
-                    original_name = session_state.get("tool_name_map", {}).get(call_name, call_name)
+                    tool_info = session_state.get("tool_name_map", {}).get(call_name)
+                    if not tool_info:
+                        tool_info = {"source": "goosed", "ext_name": call_name, "tool_name": None}
+                    display_name = tool_info.get("ext_name", call_name)
+                    is_direct = tool_info.get("source") == "mcp"
                     # Notify browser: tool running
                     ws_send_frame(browser_sock, WS_OP_TEXT,
                         json.dumps({"type": "tool_status", "name": call_name, "status": "running"}).encode())
                     session_state["transcripts"].append({
-                        "speaker": "tool", "name": original_name, "status": "running", "ts": time.time(),
+                        "speaker": "tool", "name": display_name, "status": "running", "ts": time.time(),
                     })
                     # Tool execution in thread. Use write lock to prevent frame
                     # corruption when tool thread and relay loop write simultaneously.
                     write_lock = session_state.setdefault("_write_lock", threading.Lock())
-                    def _exec_tool(cid, cname, cargs, oname, ss, wlock):
+                    def _exec_tool(cid, cname, cargs, tinfo, ss, wlock):
+                        dname = tinfo.get("ext_name", cname)
+                        is_mcp = tinfo.get("source") == "mcp"
                         try:
-                            sid = ss.get("tool_session_id")
-                            if not sid:
-                                sid = _create_voice_goose_session()
-                                ss["tool_session_id"] = sid
-                                _vlog(f"tool: created voice session {sid}")
-                            _vlog(f"tool: executing {oname}")
-                            result = _voice_execute_tool(cname, cargs, sid, oname)
+                            # Only create goosed session for goosed-path tools
+                            sid = None
+                            if not is_mcp:
+                                sid = ss.get("tool_session_id")
+                                if not sid:
+                                    sid = _create_voice_goose_session()
+                                    ss["tool_session_id"] = sid
+                                    _vlog(f"tool: created voice session {sid}")
+                            path_label = "DIRECT" if is_mcp else "GOOSED"
+                            _vlog(f"tool: [{path_label}] executing {dname}")
+                            result = _voice_execute_tool(cname, cargs, sid, tinfo)
                             response_msg = _voice_build_tool_response(cid, cname, result)
                             with wlock:
                                 gs2 = ss["gemini_sock"]
@@ -9825,16 +10213,16 @@ def _voice_relay_loop(browser_sock, gemini_sock, session_state):
                                         json.dumps(response_msg).encode(), mask=True)
                             summary = result.get("result", result.get("error", ""))[:200]
                             status = "done" if "result" in result else "error"
-                            _vlog(f"tool: {oname} -> {status}")
+                            _vlog(f"tool: [{path_label}] {dname} -> {status}")
                             with wlock:
                                 ws_send_frame(browser_sock, WS_OP_TEXT,
                                     json.dumps({"type": "tool_status", "name": cname,
                                                 "status": status, "result": summary}).encode())
                             ss["transcripts"].append({
-                                "speaker": "tool", "name": oname, "status": status, "ts": time.time(),
+                                "speaker": "tool", "name": dname, "status": status, "ts": time.time(),
                             })
                         except Exception as e:
-                            _vlog(f"tool: {oname} error: {e}")
+                            _vlog(f"tool: {dname} error: {e}")
                             err_response = _voice_build_tool_response(cid, cname, {"error": str(e)})
                             try:
                                 with wlock:
@@ -9854,7 +10242,7 @@ def _voice_relay_loop(browser_sock, gemini_sock, session_state):
 
                     t = threading.Thread(
                         target=_exec_tool,
-                        args=(call_id, call_name, call_args, original_name,
+                        args=(call_id, call_name, call_args, tool_info,
                               session_state, write_lock),
                         daemon=True)
                     t.start()
@@ -10478,21 +10866,25 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         try:
             # Discover tools from goosed
             tools, tool_name_map = [], {}
+            tool_display_names = []
             try:
                 tools, tool_name_map = _discover_voice_tools()
-                _vlog(f"[{conn_id}] tools: {len(tools)} discovered: {list(tool_name_map.values())}")
+                tool_display_names = [v.get("ext_name", k) for k, v in tool_name_map.items()]
+                _vlog(f"[{conn_id}] tools: {len(tools)} discovered: {tool_display_names}")
             except Exception as e:
                 _vlog(f"[{conn_id}] tool discovery failed: {e}")
 
-            # Pre-create goosed session with Gemini provider (avoids first-call delay)
-            _vlog(f"[{conn_id}] pre-creating tool session...")
-            tool_session_id = _create_voice_goose_session()
-            _vlog(f"[{conn_id}] tool session: {tool_session_id}")
+            # Pre-create goosed session for platform extensions / assistant fallback
+            has_goosed_tools = any(v.get("source") == "goosed" for v in tool_name_map.values())
+            tool_session_id = None
+            if has_goosed_tools:
+                _vlog(f"[{conn_id}] pre-creating goosed session for platform tools...")
+                tool_session_id = _create_voice_goose_session()
+                _vlog(f"[{conn_id}] goosed session: {tool_session_id}")
 
             # Connect to Gemini Live API directly
             _vlog(f"[{conn_id}] connecting to Gemini...")
-            original_names = list(tool_name_map.values()) if tool_name_map else None
-            gemini_sock = _gemini_connect(api_key, tools=tools if tools else None, voice_name=voice_name, tool_names=original_names)
+            gemini_sock = _gemini_connect(api_key, tools=tools if tools else None, voice_name=voice_name, tool_names=tool_display_names)
             _vlog(f"[{conn_id}] Gemini connected, sending ready")
 
             # Send ready to browser
@@ -12526,15 +12918,22 @@ def main():
             session_id = uuid.uuid4().hex
             try:
                 tools, tool_name_map = [], {}
+                tool_display_names = []
                 try:
                     tools, tool_name_map = _discover_voice_tools()
-                    _vlog(f"[{conn_id}] tools: {len(tools)} discovered: {list(tool_name_map.values())}")
+                    tool_display_names = [v.get("ext_name", k) for k, v in tool_name_map.items()]
+                    _vlog(f"[{conn_id}] tools: {len(tools)} discovered: {tool_display_names}")
                 except Exception as e:
                     _vlog(f"[{conn_id}] tool discovery failed: {e}")
 
+                # Pre-create goosed session only if we have goosed-path tools
+                has_goosed_tools = any(v.get("source") == "goosed" for v in tool_name_map.values())
+                tool_session_id = None
+                if has_goosed_tools:
+                    tool_session_id = _create_voice_goose_session()
+
                 _vlog(f"[{conn_id}] connecting to Gemini...")
-                original_names = list(tool_name_map.values()) if tool_name_map else None
-                gemini_sock = _gemini_connect(api_key, tools=tools if tools else None, voice_name=voice_name, tool_names=original_names)
+                gemini_sock = _gemini_connect(api_key, tools=tools if tools else None, voice_name=voice_name, tool_names=tool_display_names)
                 _vlog(f"[{conn_id}] Gemini connected, sending ready")
 
                 ws_send_frame(sock, WS_OP_TEXT, json.dumps({"type": "ready"}).encode())
@@ -12546,7 +12945,7 @@ def main():
                     "voice_name": voice_name,
                     "resumption_handle": None,
                     "tool_name_map": tool_name_map,
-                    "tool_session_id": None,
+                    "tool_session_id": tool_session_id,
                     "transcripts": [],
                     "session_id": session_id,
                 }
@@ -12635,6 +13034,8 @@ def main():
             channel_names = list(_loaded_channels.keys())
         for ch_name in channel_names:
             _unload_channel(ch_name)
+        # shutdown direct MCP pool
+        _mcp_pool.shutdown()
         # terminate goosed and clean up PID
         stop_goosed()
         _remove_pid("goosed")

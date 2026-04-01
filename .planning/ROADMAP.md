@@ -12,7 +12,7 @@ Transform GooseClaw from a platform where integrations require manual extension 
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Template Engine and Code Generation** - string.Template engine produces valid, secure MCP server files from vault credential references
+- [x] **Phase 1: Template Engine and Code Generation** - string.Template engine produces valid, secure MCP server files from vault credential references (completed 2026-04-01)
 - [ ] **Phase 2: Extension Registration and Boot Lifecycle** - Generated extensions register with goosed and survive container restarts
 - [ ] **Phase 3: Credential Detection, Validation, and End-to-End Flow** - Users drop credentials in chat and get working tool extensions back automatically
 
@@ -31,9 +31,9 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans:** 3 plans
 
 Plans:
-- [ ] 01-01-PLAN.md -- Generator engine: string.Template renderer, base_helpers boilerplate, vault helper, unit tests
-- [ ] 01-02-PLAN.md -- Email IMAP/SMTP template: search, read, send tools with vault credential reads
-- [ ] 01-03-PLAN.md -- REST API template: generic authenticated HTTP (GET/POST/PUT/DELETE) with bearer/API key auth
+- [x] 01-01-PLAN.md -- Generator engine: string.Template renderer, base_helpers boilerplate, vault helper, unit tests
+- [x] 01-02-PLAN.md -- Email IMAP/SMTP template: search, read, send tools with vault credential reads
+- [x] 01-03-PLAN.md -- REST API template: generic authenticated HTTP (GET/POST/PUT/DELETE) with bearer/API key auth
 
 ### Phase 2: Extension Registration and Boot Lifecycle
 **Goal**: Generated MCP server files become live goosed extensions that persist across container restarts without user intervention

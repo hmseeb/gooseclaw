@@ -805,7 +805,10 @@ if [ -f "/root/.local/bin/claude" ] || [ -L "/root/.local/bin/claude" ]; then
     mkdir -p "$GCLAW_HOME/.local/bin"
     # symlink the actual binary (could be large, avoid copying)
     ln -sf "$CLAUDE_REAL" "$GCLAW_HOME/.local/bin/claude"
-    echo "[runtime] claude CLI linked to $GCLAW_HOME/.local/bin/"
+    # also symlink to /usr/bin so goosed extensions can find it
+    ln -sf "$CLAUDE_REAL" /usr/bin/claude 2>/dev/null || true
+    chmod +x "$CLAUDE_REAL" 2>/dev/null || true
+    echo "[runtime] claude CLI linked to $GCLAW_HOME/.local/bin/ and /usr/bin/"
 fi
 
 # claude config files

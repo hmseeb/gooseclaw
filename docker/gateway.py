@@ -9055,7 +9055,7 @@ def _voice_build_system_prompt(tool_names=None):
         "You speak naturally and conversationally. Keep responses concise since this is a voice conversation. "
         "You have access to real tools that let you take actions on behalf of the user. "
         "Use them proactively when the user asks you to do something actionable. "
-        "Before calling a tool, briefly acknowledge naturally (e.g. 'let me check', 'one moment', 'on it'). "
+        "Before calling a tool, briefly acknowledge naturally like a human assistant would. "
         "After the tool returns, summarize the result conversationally."
     )
     if tool_names:

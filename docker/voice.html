@@ -1435,7 +1435,7 @@
       captureNode = new AudioWorkletNode(audioContext, 'pcm-capture');
       captureNode.port.onmessage = function(e) {
         // Don't send mic data while AI is speaking (prevents echo)
-        if (ws && ws.readyState === WebSocket.OPEN && isCapturing && currentState !== STATE.SPEAKING) {
+        if (ws && ws.readyState === WebSocket.OPEN && isCapturing) {
           ws.send(new Uint8Array(e.data));
         }
       };

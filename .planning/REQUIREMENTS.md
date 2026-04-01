@@ -1,117 +1,96 @@
-# Requirements: GooseClaw v6.0 Voice Dashboard
+# Requirements: Auto-Generated MCP Extensions
 
-**Defined:** 2026-03-27
-**Core Value:** A user with zero DevOps knowledge can deploy and configure GooseClaw correctly on the first try
+**Defined:** 2026-04-01
+**Core Value:** Credentials in vault automatically become fast, direct tool access
 
-## v6.0 Requirements
+## v1 Requirements
 
-### Voice Pipeline
+### Template Engine
 
-- [x] **VOICE-01**: User can open voice dashboard (voice.html) in any modern browser on phone or desktop
-- [x] **VOICE-02**: Browser establishes WebSocket connection to gateway.py which proxies to Gemini Live API
-- [x] **VOICE-03**: User can tap a push-to-talk button to start speaking, audio streams in real-time to Gemini
-- [x] **VOICE-04**: User hears AI responses played back as streaming audio chunks (not buffered full response)
-- [x] **VOICE-05**: User can interrupt the AI mid-sentence (barge-in) and AI stops speaking and listens
-- [x] **VOICE-06**: Voice Activity Detection automatically detects when user stops speaking (Gemini built-in VAD)
-- [x] **VOICE-07**: User sees live transcript of both their speech and AI responses as scrolling chat
-- [x] **VOICE-08**: User sees clear connection state indicators (disconnected, connecting, listening, thinking, speaking)
-- [x] **VOICE-09**: User gets clear error messages for mic denied, WebSocket drop, API errors, quota exceeded
-- [ ] **VOICE-10**: WebSocket proxy sends ping/pong keepalives to survive Railway's 10-min timeout
-- [x] **VOICE-11**: Session handles Gemini's connection limits via context window compression and session resumption
+- [ ] **TMPL-01**: Jinja2-based template system renders single-file Python MCP servers
+- [ ] **TMPL-02**: Email template (IMAP/SMTP) - read, search, send emails
+- [ ] **TMPL-03**: REST API template - generic authenticated API calls (API key, bearer token)
+- [ ] **TMPL-04**: Templates read credentials from vault at runtime via `secret get` CLI
+- [ ] **TMPL-05**: All generated servers redirect stdout to stderr (MCP protocol safety)
 
-### Dashboard UI
+### Code Generation
 
-- [x] **UI-01**: Voice dashboard is a single self-contained HTML file (voice.html) with no build tooling
-- [x] **UI-02**: Voice visualizer (reactive orb/waveform) responds to audio input/output volume in real-time
-- [x] **UI-03**: Spacebar hold-to-talk, Escape to disconnect keyboard shortcuts work on desktop
-- [x] **UI-04**: User can type messages in same interface when voice isn't convenient (text-to-voice switching)
-- [x] **UI-05**: Dashboard layout is mobile-first, works great on phone browsers with touch-friendly controls
-- [x] **UI-06**: Screen stays awake during active voice session on mobile (Screen Wake Lock API)
-- [x] **UI-07**: Dashboard is only accessible when Gemini API key is configured, shows setup link otherwise
+- [ ] **GEN-01**: Generator takes template name + vault credential keys and produces a working MCP server .py file
+- [ ] **GEN-02**: Generated files stored on /data/extensions/ volume (survive redeploys)
+- [ ] **GEN-03**: Each generated extension is a standalone file with no external dependencies beyond stdlib + mcp SDK
 
-### Tool Calling
+### Registration
 
-- [x] **TOOL-01**: Gateway dynamically discovers ALL available MCP tools/extensions from goosed and maps them as Gemini function declarations
-- [x] **TOOL-02**: When Gemini calls any function mid-conversation, gateway routes it to the correct MCP tool and feeds the result back
-- [x] **TOOL-03**: Tool discovery refreshes on session start so newly installed extensions are immediately available to voice
-- [x] **TOOL-04**: Tool execution shows visual feedback in transcript (tool name, "running..." spinner, result summary)
-- [x] **TOOL-05**: Tool responses use SILENT scheduling so Gemini speaks naturally about results (no double-speech)
-- [x] **TOOL-06**: Voice channel has feature parity with text channels for tool access (everything goosed can do, voice can do)
+- [ ] **REG-01**: Generated extensions registered in goosed config.yaml automatically
+- [ ] **REG-02**: Registry file (/data/extensions/registry.json) tracks all generated extensions
+- [ ] **REG-03**: Boot loader in entrypoint.sh restores generated extensions from registry on container start
+- [ ] **REG-04**: Goosed restart after registration to load new extension
 
-### Intelligence
+### Credential Detection
 
-- [ ] **INTEL-01**: Voice conversation transcripts auto-feed into mem0 memory pipeline after session ends
-- [ ] **INTEL-02**: User can view list of past voice sessions with timestamps and transcript previews
-- [ ] **INTEL-03**: User can tap a past session to view full transcript
-- [ ] **INTEL-04**: User can select from available Gemini voices in voice dashboard settings
+- [ ] **DET-01**: AI detects when user provides credentials in chat (app passwords, API keys, tokens)
+- [ ] **DET-02**: User confirmation before vaulting (never auto-vault without consent)
+- [ ] **DET-03**: AI classifies credential type and selects appropriate template
+- [ ] **DET-04**: End-to-end flow: user drops cred → confirm → vault → generate → register → available
 
-### Setup & Auth
+### Validation
 
-- [x] **SETUP-01**: Gemini API key is an optional provider in the setup wizard
-- [x] **SETUP-02**: Voice dashboard reuses existing PBKDF2 cookie-based auth (no separate login)
-- [x] **SETUP-03**: Gateway generates session-scoped tokens for WebSocket auth (API key never reaches browser)
-- [x] **SETUP-04**: Gemini API key stored in vault alongside other provider keys
+- [ ] **VAL-01**: Generated .py files pass ast.parse() syntax check before registration
+- [ ] **VAL-02**: Health check after registration (extension responds to basic MCP ping)
+- [ ] **VAL-03**: Auto-disable extension after 3 consecutive startup failures
 
-## Future Requirements (v6.x / v7+)
+## v2 Requirements
 
-- **NOTIF-01**: Voice channel receives notifications from job engine during sessions
-- **VIDEO-01**: Camera/video input to Gemini during voice sessions
-- **MULTI-01**: Multi-language voice selection UI
-- **WAKE-01**: Wake word activation ("Hey Goose")
+### Advanced Templates
+
+- **ADV-01**: Calendar template (CalDAV) - list/create events (requires caldav pip package)
+- **ADV-02**: OAuth device flow template for Google, GitHub, Slack
+- **ADV-03**: OpenAPI-to-MCP auto-generation from API specs
+
+### Management
+
+- **MGT-01**: List/delete/regenerate extensions via chat commands
+- **MGT-02**: Hot-reload extensions without full goosed restart
+- **MGT-03**: Extension version tracking and rollback
 
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
-| Wake word / always-on listening | Browser tabs can't run persistent background listeners. Battery killer. Privacy concern. |
-| WebRTC direct connection | API key would be exposed to browser. Bypasses tool calling. |
-| Multiple simultaneous voice sessions | GooseClaw is single-user. Single active voice session. |
-| Voice cloning / custom TTS | Gemini handles TTS internally. 30 HD voices is plenty. |
-| Offline voice mode | Entire architecture depends on Gemini Live API (cloud). |
-| React / framework-based dashboard | Constraint: single HTML file, no build tooling. |
+| Browser-based OAuth consent UI | Complex frontend, device flow sufficient for v1 |
+| Extension marketplace/sharing | Single-user system |
+| LLM-generated arbitrary code | Security risk, templates only |
+| Auto pip install at runtime | Container security, pre-install in Dockerfile |
+| Multi-user credential isolation | Single-user platform |
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| VOICE-01 | Phase 30 | Complete |
-| VOICE-02 | Phase 28 | Complete |
-| VOICE-03 | Phase 30 | Complete |
-| VOICE-04 | Phase 30 | Complete |
-| VOICE-05 | Phase 30 | Complete |
-| VOICE-06 | Phase 30 | Complete |
-| VOICE-07 | Phase 30 | Complete |
-| VOICE-08 | Phase 30 | Complete |
-| VOICE-09 | Phase 30 | Complete |
-| VOICE-10 | Phase 27 | Pending |
-| VOICE-11 | Phase 28 | Complete |
-| UI-01 | Phase 30 | Complete |
-| UI-02 | Phase 30 | Complete |
-| UI-03 | Phase 31 | Complete |
-| UI-04 | Phase 31 | Complete |
-| UI-05 | Phase 31 | Complete |
-| UI-06 | Phase 31 | Complete |
-| UI-07 | Phase 29 | Complete |
-| TOOL-01 | Phase 32 | Complete |
-| TOOL-02 | Phase 32 | Complete |
-| TOOL-03 | Phase 32 | Complete |
-| TOOL-04 | Phase 32 | Complete |
-| TOOL-05 | Phase 32 | Complete |
-| TOOL-06 | Phase 32 | Complete |
-| INTEL-01 | Phase 33 | Pending |
-| INTEL-02 | Phase 33 | Pending |
-| INTEL-03 | Phase 33 | Pending |
-| INTEL-04 | Phase 33 | Pending |
-| SETUP-01 | Phase 29 | Complete |
-| SETUP-02 | Phase 29 | Complete |
-| SETUP-03 | Phase 28 | Complete |
-| SETUP-04 | Phase 29 | Complete |
+| TMPL-01 | Phase 1 | Pending |
+| TMPL-02 | Phase 1 | Pending |
+| TMPL-03 | Phase 1 | Pending |
+| TMPL-04 | Phase 1 | Pending |
+| TMPL-05 | Phase 1 | Pending |
+| GEN-01 | Phase 1 | Pending |
+| GEN-02 | Phase 1 | Pending |
+| GEN-03 | Phase 1 | Pending |
+| REG-01 | Phase 2 | Pending |
+| REG-02 | Phase 2 | Pending |
+| REG-03 | Phase 2 | Pending |
+| REG-04 | Phase 2 | Pending |
+| DET-01 | Phase 3 | Pending |
+| DET-02 | Phase 3 | Pending |
+| DET-03 | Phase 3 | Pending |
+| DET-04 | Phase 3 | Pending |
+| VAL-01 | Phase 3 | Pending |
+| VAL-02 | Phase 3 | Pending |
+| VAL-03 | Phase 3 | Pending |
 
 **Coverage:**
-- v6.0 requirements: 32 total
-- Mapped to phases: 32
+- v1 requirements: 19 total
+- Mapped to phases: 19
 - Unmapped: 0
 
 ---
-*Requirements defined: 2026-03-27*
-*Last updated: 2026-03-27 after roadmap creation*
+*Requirements defined: 2026-04-01*

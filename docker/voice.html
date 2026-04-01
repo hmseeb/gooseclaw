@@ -1223,6 +1223,25 @@
           break;
         case 'tool_status':
           addToolStatus(msg.name, msg.status, msg.result || '');
+          if (msg.status === 'running') {
+            // Speak a brief acknowledgment so the user isn't left in silence
+            var phrases = [
+              'Working on it.',
+              'One moment.',
+              'Let me check.',
+              'On it.',
+              'Give me a sec.',
+              'Looking into that.',
+            ];
+            var phrase = phrases[Math.floor(Math.random() * phrases.length)];
+            if (window.speechSynthesis) {
+              var utter = new SpeechSynthesisUtterance(phrase);
+              utter.rate = 1.1;
+              utter.volume = 0.7;
+              window.speechSynthesis.speak(utter);
+            }
+            setState(STATE.THINKING);
+          }
           break;
         case 'error':
           showError('Server: ' + (msg.message || 'Unknown error'));

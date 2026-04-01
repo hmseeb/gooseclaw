@@ -43,11 +43,11 @@ def _get_smtp_connection():
 
 
 @mcp.tool()
-def email_search(query: str, folder: str = "INBOX", limit: int = 10) -> str:
-    """Search emails by subject, sender, or keyword.
+def email_search(query: str = "", folder: str = "INBOX", limit: int = 10) -> str:
+    """Search emails. Leave query empty to get recent/unread emails.
 
     Args:
-        query: Search term to look for in subject, sender, or body text.
+        query: Search term (subject, sender, keyword). Empty = recent unread emails.
         folder: IMAP folder to search (default: INBOX).
         limit: Maximum number of results to return.
     """
@@ -56,9 +56,14 @@ def email_search(query: str, folder: str = "INBOX", limit: int = 10) -> str:
         conn = _get_imap_connection()
         conn.select(folder, readonly=True)
 
-        # Try searching by subject first, then from, then full text
-        search_criteria = f'(OR (SUBJECT "{query}") (OR (FROM "{query}") (TEXT "{query}")))'
-        status, msg_ids = conn.search(None, search_criteria)
+        # Empty/generic query = fetch recent unread, then recent all
+        if not query or query.strip().lower() in ("all", "recent", "inbox", "check", "check my emails", "unread"):
+            status, msg_ids = conn.search(None, "UNSEEN")
+            if status != "OK" or not msg_ids[0]:
+                status, msg_ids = conn.search(None, "ALL")
+        else:
+            search_criteria = f'(OR (SUBJECT "{query}") (OR (FROM "{query}") (TEXT "{query}")))'
+            status, msg_ids = conn.search(None, search_criteria)
 
         if status != "OK" or not msg_ids[0]:
             return json.dumps([])

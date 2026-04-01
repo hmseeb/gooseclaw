@@ -7,17 +7,17 @@
 
 ### Template Engine
 
-- [ ] **TMPL-01**: Jinja2-based template system renders single-file Python MCP servers
+- [x] **TMPL-01**: Jinja2-based template system renders single-file Python MCP servers
 - [ ] **TMPL-02**: Email template (IMAP/SMTP) - read, search, send emails
 - [ ] **TMPL-03**: REST API template - generic authenticated API calls (API key, bearer token)
-- [ ] **TMPL-04**: Templates read credentials from vault at runtime via `secret get` CLI
-- [ ] **TMPL-05**: All generated servers redirect stdout to stderr (MCP protocol safety)
+- [x] **TMPL-04**: Templates read credentials from vault at runtime via `secret get` CLI
+- [x] **TMPL-05**: All generated servers redirect stdout to stderr (MCP protocol safety)
 
 ### Code Generation
 
-- [ ] **GEN-01**: Generator takes template name + vault credential keys and produces a working MCP server .py file
-- [ ] **GEN-02**: Generated files stored on /data/extensions/ volume (survive redeploys)
-- [ ] **GEN-03**: Each generated extension is a standalone file with no external dependencies beyond stdlib + mcp SDK
+- [x] **GEN-01**: Generator takes template name + vault credential keys and produces a working MCP server .py file
+- [x] **GEN-02**: Generated files stored on /data/extensions/ volume (survive redeploys)
+- [x] **GEN-03**: Each generated extension is a standalone file with no external dependencies beyond stdlib + mcp SDK
 
 ### Registration
 
@@ -67,14 +67,14 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| TMPL-01 | Phase 1 | Pending |
+| TMPL-01 | Phase 1 | Complete |
 | TMPL-02 | Phase 1 | Pending |
 | TMPL-03 | Phase 1 | Pending |
-| TMPL-04 | Phase 1 | Pending |
-| TMPL-05 | Phase 1 | Pending |
-| GEN-01 | Phase 1 | Pending |
-| GEN-02 | Phase 1 | Pending |
-| GEN-03 | Phase 1 | Pending |
+| TMPL-04 | Phase 1 | Complete |
+| TMPL-05 | Phase 1 | Complete |
+| GEN-01 | Phase 1 | Complete |
+| GEN-02 | Phase 1 | Complete |
+| GEN-03 | Phase 1 | Complete |
 | REG-01 | Phase 2 | Pending |
 | REG-02 | Phase 2 | Pending |
 | REG-03 | Phase 2 | Pending |

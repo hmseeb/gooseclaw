@@ -74,6 +74,6 @@ Phases execute in numeric order: 1 → 2 → 3
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Template Engine and Code Generation | 0/3 | Planning complete | - |
+| 1. Template Engine and Code Generation | 1/3 | In Progress | - |
 | 2. Extension Registration and Boot Lifecycle | 0/? | Not started | - |
 | 3. Credential Detection, Validation, and End-to-End Flow | 0/? | Not started | - |

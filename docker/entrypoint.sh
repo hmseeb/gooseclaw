@@ -588,6 +588,28 @@ except Exception as e:
 " 2>/dev/null || true
 fi
 
+# ─── patch auto-generated extensions for direct MCP support ──────────────────
+# Existing generated server.py files may have unconditional sys.stdout redirect
+# which breaks direct MCP stdio communication from gateway. Patch them.
+python3 -c "
+import glob, os
+for f in glob.glob('/data/extensions/*/server.py'):
+    try:
+        content = open(f).read()
+        if 'sys.stdout = sys.stderr' in content and 'MCP_DIRECT' not in content:
+            content = content.replace(
+                'sys.stdout = sys.stderr',
+                'if not os.environ.get(\"MCP_DIRECT\"):\n    sys.stdout = sys.stderr'
+            )
+            # Ensure os is imported
+            if 'import os' not in content:
+                content = content.replace('import sys', 'import sys\nimport os', 1)
+            open(f, 'w').write(content)
+            print(f'[mcp] patched {f} for direct MCP support')
+    except Exception as e:
+        print(f'[mcp] WARN: failed to patch {f}: {e}')
+" 2>&1 || true
+
 # ─── sync new template extensions into existing configs ──────────────────────
 # On upgrades, new extensions (like mem0-memory) need to be added to existing
 # config.yaml files. This merges any missing template extensions without

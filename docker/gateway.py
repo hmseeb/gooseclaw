@@ -9048,8 +9048,29 @@ def _voice_session_token_validate(token):
         return entry["api_key"]
 
 
-def _gemini_build_config(resumption_handle=None, voice_name="Aoede", tools=None):
+def _voice_build_system_prompt(tool_names=None):
+    """Build system prompt for voice sessions with tool awareness."""
+    prompt = (
+        "You are GooseClaw, a personal AI assistant with voice and tool capabilities. "
+        "You speak naturally and conversationally. Keep responses concise since this is a voice conversation. "
+        "You have access to real tools that let you take actions on behalf of the user. "
+        "Use them proactively when the user asks you to do something actionable."
+    )
+    if tool_names:
+        tool_list = ", ".join(tool_names)
+        prompt += (
+            f"\n\nYou have access to these tools: {tool_list}. "
+            "When the user asks you to do something that requires a tool, call it. "
+            "For example: 'send an email' -> use Gmail. 'what's on my calendar' -> use Google Calendar. "
+            "'remember this' -> use memory. 'search for' -> use web search. "
+            "After using a tool, summarize the result briefly in speech."
+        )
+    return prompt
+
+
+def _gemini_build_config(resumption_handle=None, voice_name="Aoede", tools=None, tool_names=None):
     """Build Gemini Live API setup config JSON."""
+    system_prompt = _voice_build_system_prompt(tool_names)
     cfg = {
         "setup": {
             "model": "models/gemini-3.1-flash-live-preview",
@@ -9064,7 +9085,7 @@ def _gemini_build_config(resumption_handle=None, voice_name="Aoede", tools=None)
                 }
             },
             "systemInstruction": {
-                "parts": [{"text": "You are a helpful AI assistant."}]
+                "parts": [{"text": system_prompt}]
             },
             "sessionResumption": (
                 {"handle": resumption_handle} if resumption_handle else {}
@@ -9184,15 +9205,32 @@ def _discover_voice_tools():
             safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', ext_name)
             if safe_name and safe_name[0].isdigit():
                 safe_name = "ext_" + safe_name
+            # Build a useful description based on extension name
+            desc_map = {
+                "gmail": "Read, search, and draft emails via Gmail",
+                "google_calendar": "View, create, and manage calendar events",
+                "google-calendar": "View, create, and manage calendar events",
+                "calendar": "View, create, and manage calendar events",
+                "memory": "Store and recall facts, preferences, and notes",
+                "mem0": "Store and recall facts, preferences, and notes",
+                "web_search": "Search the web for current information",
+                "web-search": "Search the web for current information",
+                "knowledge": "Search personal knowledge base and documents",
+                "computercontroller": "Control the computer (run commands, open apps)",
+                "developer": "Run code, shell commands, and development tasks",
+                "filesystem": "Read, write, and manage files",
+            }
+            ext_lower = ext_name.lower().replace(" ", "_")
+            desc = desc_map.get(ext_lower, f"Use the {ext_name} tool to perform actions")
             declarations.append({
                 "name": safe_name,
-                "description": f"Use the {ext_name} extension/tool",
+                "description": desc,
                 "parameters": {
                     "type": "OBJECT",
                     "properties": {
                         "request": {
                             "type": "STRING",
-                            "description": "What to do with this tool",
+                            "description": f"Natural language description of what to do with {ext_name}",
                         }
                     },
                     "required": ["request"],
@@ -9345,7 +9383,7 @@ def _voice_extract_memory(session_data):
         _voice_log.error(f"Voice memory extraction failed: {e}")
 
 
-def _gemini_connect(api_key, resumption_handle=None, tools=None, voice_name="Aoede"):
+def _gemini_connect(api_key, resumption_handle=None, tools=None, voice_name="Aoede", tool_names=None):
     """Open WebSocket to Gemini Live API and send setup config. Returns socket."""
     _voice_log.info(f"Connecting to Gemini Live API... (key prefix: {api_key[:8]}..., len: {len(api_key)})")
     sock = ws_client_connect(
@@ -9354,7 +9392,7 @@ def _gemini_connect(api_key, resumption_handle=None, tools=None, voice_name="Aoe
         query_params={"key": api_key}
     )
     _voice_log.info("Gemini WebSocket handshake complete")
-    config = _gemini_build_config(resumption_handle=resumption_handle, voice_name=voice_name, tools=tools)
+    config = _gemini_build_config(resumption_handle=resumption_handle, voice_name=voice_name, tools=tools, tool_names=tool_names)
     config_json = json.dumps(config)
     _voice_log.info(f"Sending Gemini config ({len(config_json)} bytes, tools={bool(tools)})")
     ws_send_frame(sock, WS_OP_TEXT, config_json.encode(), mask=True)
@@ -10199,7 +10237,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
 
             # Connect to Gemini Live API directly
             _vlog(f"[{conn_id}] connecting to Gemini...")
-            gemini_sock = _gemini_connect(api_key, tools=tools if tools else None, voice_name=voice_name)
+            original_names = list(tool_name_map.values()) if tool_name_map else None
+            gemini_sock = _gemini_connect(api_key, tools=tools if tools else None, voice_name=voice_name, tool_names=original_names)
             _vlog(f"[{conn_id}] Gemini connected, sending ready")
 
             # Send ready to browser
@@ -12240,7 +12279,8 @@ def main():
                     _vlog(f"[{conn_id}] tool discovery failed: {e}")
 
                 _vlog(f"[{conn_id}] connecting to Gemini...")
-                gemini_sock = _gemini_connect(api_key, tools=tools if tools else None, voice_name=voice_name)
+                original_names = list(tool_name_map.values()) if tool_name_map else None
+                gemini_sock = _gemini_connect(api_key, tools=tools if tools else None, voice_name=voice_name, tool_names=original_names)
                 _vlog(f"[{conn_id}] Gemini connected, sending ready")
 
                 ws_send_frame(sock, WS_OP_TEXT, json.dumps({"type": "ready"}).encode())

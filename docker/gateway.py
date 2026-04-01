@@ -8827,6 +8827,8 @@ def start_goosed():
                     _sync_vault_to_goosed_secrets()
                     # configure provider via API (goosed ignores env vars for provider)
                     _configure_goosed_provider()
+                    # start direct MCP pool in background (non-blocking)
+                    _mcp_pool.initialize_background()
                     return True
                 conn.close()
             except Exception:
@@ -9368,7 +9370,7 @@ class MCPClient:
                 bufsize=0,
             )
             _vlog(f"mcp: spawned {self.name} (pid {self._proc.pid})")
-            # Initialize handshake
+            # Initialize handshake (with timeout for slow servers)
             if self._initialize():
                 self._ready = True
                 return True
@@ -9402,7 +9404,7 @@ class MCPClient:
         self._req_id += 1
         return self._req_id
 
-    def _send_jsonrpc(self, method, params=None):
+    def _send_jsonrpc(self, method, params=None, read_timeout=None):
         """Send a JSON-RPC request and read the response. Thread-safe."""
         if not self._proc or self._proc.poll() is not None:
             raise RuntimeError(f"MCP server {self.name} not running")
@@ -9418,7 +9420,7 @@ class MCPClient:
         with self._lock:
             self._proc.stdin.write(line.encode("utf-8"))
             self._proc.stdin.flush()
-            return self._read_response()
+            return self._read_response(timeout=read_timeout or self.timeout)
 
     def _send_notification(self, method, params=None):
         """Send a JSON-RPC notification (no id, no response expected)."""
@@ -9433,39 +9435,72 @@ class MCPClient:
             self._proc.stdin.write(line.encode("utf-8"))
             self._proc.stdin.flush()
 
-    def _read_response(self):
-        """Read a JSON-RPC response from stdout. Must be called under _lock."""
-        # Read Content-Length header
-        content_length = None
+    def _read_response(self, timeout=30):
+        """Read a JSON-RPC response from stdout with timeout. Must be called under _lock."""
+        import select as _sel
+        stdout_fd = self._proc.stdout.fileno()
+        deadline = time.time() + timeout
+
+        # Read headers byte by byte using select for timeout
+        header_buf = b""
         while True:
-            header_line = self._proc.stdout.readline()
-            if not header_line:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                raise TimeoutError(f"MCP server {self.name} read timeout ({timeout}s)")
+            ready, _, _ = _sel.select([stdout_fd], [], [], min(remaining, 1.0))
+            if not ready:
+                if self._proc.poll() is not None:
+                    raise RuntimeError(f"MCP server {self.name} exited during read")
+                continue
+            chunk = os.read(stdout_fd, 1)
+            if not chunk:
                 raise RuntimeError(f"MCP server {self.name} closed stdout")
-            header_str = header_line.decode("utf-8", errors="replace").strip()
-            if header_str == "":
-                break  # end of headers
-            if header_str.lower().startswith("content-length:"):
-                content_length = int(header_str.split(":", 1)[1].strip())
+            header_buf += chunk
+            if header_buf.endswith(b"\r\n\r\n"):
+                break
+
+        # Parse Content-Length from headers
+        content_length = None
+        for hline in header_buf.decode("utf-8", errors="replace").split("\r\n"):
+            if hline.lower().startswith("content-length:"):
+                content_length = int(hline.split(":", 1)[1].strip())
         if content_length is None:
             raise RuntimeError(f"MCP server {self.name} sent no Content-Length")
-        body = self._proc.stdout.read(content_length)
+
+        # Read body with timeout
+        body = b""
+        while len(body) < content_length:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                raise TimeoutError(f"MCP server {self.name} body read timeout")
+            ready, _, _ = _sel.select([stdout_fd], [], [], min(remaining, 1.0))
+            if not ready:
+                if self._proc.poll() is not None:
+                    raise RuntimeError(f"MCP server {self.name} exited during body read")
+                continue
+            chunk = os.read(stdout_fd, content_length - len(body))
+            if not chunk:
+                raise RuntimeError(f"MCP server {self.name} closed stdout during body read")
+            body += chunk
         return json.loads(body.decode("utf-8", errors="replace"))
 
     def _initialize(self):
-        """MCP initialize handshake."""
+        """MCP initialize handshake. Uses 60s timeout for heavy servers."""
         try:
             resp = self._send_jsonrpc("initialize", {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
                 "clientInfo": {"name": "gooseclaw-gateway", "version": "1.0"},
-            })
+            }, read_timeout=60)
             if "error" in resp:
                 _vlog(f"mcp: {self.name} initialize error: {resp['error']}")
                 return False
             _vlog(f"mcp: {self.name} initialized: {resp.get('result', {}).get('serverInfo', {})}")
-            # Send initialized notification
             self._send_notification("notifications/initialized")
             return True
+        except TimeoutError:
+            _vlog(f"mcp: {self.name} initialize timed out (60s)")
+            return False
         except Exception as e:
             _vlog(f"mcp: {self.name} initialize failed: {e}")
             return False
@@ -9515,14 +9550,26 @@ class MCPPool:
         self._clients = {}  # ext_name -> MCPClient
         self._tool_map = {}  # "ext_name.tool_name" -> (MCPClient, tool_schema)
         self._lock = threading.Lock()
+        self._init_lock = threading.Lock()
         self._initialized = False
+        self._initializing = False
 
-    def initialize(self):
+    def initialize_background(self):
+        """Start pool initialization in background. Non-blocking."""
+        with self._init_lock:
+            if self._initialized or self._initializing:
+                return
+            self._initializing = True
+        threading.Thread(target=self._do_initialize, daemon=True).start()
+
+    def _do_initialize(self):
         """Read config.yaml and spawn all stdio MCP servers."""
         import yaml
         config_path = os.path.join(CONFIG_DIR, "config.yaml")
         if not os.path.exists(config_path):
             _vlog("mcp-pool: no config.yaml found")
+            self._initialized = True
+            self._initializing = False
             return
         with open(config_path) as f:
             config = yaml.safe_load(f) or {}
@@ -9551,17 +9598,14 @@ class MCPPool:
             )
             self._clients[ext_name] = client
 
-        # Start all clients in parallel
-        threads = []
+        _vlog(f"mcp-pool: spawning {len(self._clients)} stdio servers in background...")
+
+        # Start all clients in parallel, don't block
         for name, client in self._clients.items():
-            t = threading.Thread(target=self._start_and_discover, args=(name, client), daemon=True)
-            threads.append(t)
-            t.start()
-        for t in threads:
-            t.join(timeout=30)
+            threading.Thread(target=self._start_and_discover, args=(name, client), daemon=True).start()
 
         self._initialized = True
-        _vlog(f"mcp-pool: initialized {len(self._clients)} clients, {len(self._tool_map)} tools")
+        self._initializing = False
 
     def _start_and_discover(self, name, client):
         """Start a client and discover its tools."""
@@ -9575,6 +9619,7 @@ class MCPPool:
                 if tool_name:
                     key = f"{name}.{tool_name}"
                     self._tool_map[key] = (client, tool)
+        _vlog(f"mcp-pool: {name} ready ({len(tools)} tools)")
 
     def get_all_tools(self):
         """Return all available tools across all MCP servers.
@@ -9678,9 +9723,9 @@ def _discover_voice_tools():
     name_map = {}  # tool_name -> {"source": "mcp"|"goosed", "ext_name": str}
 
     # 1. Direct MCP tools (stdio extensions - the fast path)
-    if not _mcp_pool._initialized:
-        _vlog("mcp-pool: initializing on first voice tool discovery")
-        _mcp_pool.initialize()
+    # Pool initializes in background at gateway startup. Trigger if not started yet.
+    if not _mcp_pool._initialized and not _mcp_pool._initializing:
+        _mcp_pool.initialize_background()
 
     for ext_name, tool_name, tool_schema in _mcp_pool.get_all_tools():
         # Convert MCP schema to Gemini format

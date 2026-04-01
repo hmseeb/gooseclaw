@@ -1,0 +1,207 @@
+
+import imaplib
+import smtplib
+import email
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.header import decode_header
+import json
+
+
+def _decode_header_value(value):
+    """Safely decode an email header value handling charset."""
+    if value is None:
+        return ""
+    decoded_parts = decode_header(value)
+    result = []
+    for part, charset in decoded_parts:
+        if isinstance(part, bytes):
+            result.append(part.decode(charset or "utf-8", errors="replace"))
+        else:
+            result.append(str(part))
+    return " ".join(result)
+
+
+def _get_imap_connection():
+    """Create and return an authenticated IMAP4_SSL connection."""
+    host = _vault_get("${vault_prefix}.imap_host")
+    user = _vault_get("${vault_prefix}.username")
+    password = _vault_get("${vault_prefix}.app_password")
+    conn = imaplib.IMAP4_SSL(host, 993)
+    conn.login(user, password)
+    return conn
+
+
+def _get_smtp_connection():
+    """Create and return an authenticated SMTP_SSL connection."""
+    host = _vault_get("${vault_prefix}.smtp_host")
+    user = _vault_get("${vault_prefix}.username")
+    password = _vault_get("${vault_prefix}.app_password")
+    conn = smtplib.SMTP_SSL(host, 465)
+    conn.login(user, password)
+    return conn
+
+
+@mcp.tool()
+def email_search(query: str, folder: str = "INBOX", limit: int = 10) -> str:
+    """Search emails by subject, sender, or keyword.
+
+    Args:
+        query: Search term to look for in subject, sender, or body text.
+        folder: IMAP folder to search (default: INBOX).
+        limit: Maximum number of results to return.
+    """
+    conn = None
+    try:
+        conn = _get_imap_connection()
+        conn.select(folder, readonly=True)
+
+        # Try searching by subject first, then from, then full text
+        search_criteria = f'(OR (SUBJECT "{query}") (OR (FROM "{query}") (TEXT "{query}")))'
+        status, msg_ids = conn.search(None, search_criteria)
+
+        if status != "OK" or not msg_ids[0]:
+            return json.dumps([])
+
+        id_list = msg_ids[0].split()
+        # Take the most recent messages up to limit
+        id_list = id_list[-limit:]
+
+        results = []
+        for msg_id in reversed(id_list):
+            status, msg_data = conn.fetch(msg_id, "(RFC822)")
+            if status != "OK":
+                continue
+            msg = email.message_from_bytes(msg_data[0][1])
+
+            # Extract body snippet
+            body = ""
+            if msg.is_multipart():
+                for part in msg.walk():
+                    if part.get_content_type() == "text/plain":
+                        payload = part.get_payload(decode=True)
+                        if payload:
+                            body = payload.decode("utf-8", errors="replace")
+                        break
+            else:
+                payload = msg.get_payload(decode=True)
+                if payload:
+                    body = payload.decode("utf-8", errors="replace")
+
+            results.append({
+                "uid": msg_id.decode() if isinstance(msg_id, bytes) else str(msg_id),
+                "subject": _decode_header_value(msg.get("Subject", "")),
+                "from": _decode_header_value(msg.get("From", "")),
+                "date": msg.get("Date", ""),
+                "snippet": body[:200].strip(),
+            })
+
+        return json.dumps(results, indent=2)
+
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+    finally:
+        if conn:
+            try:
+                conn.close()
+                conn.logout()
+            except Exception:
+                pass
+
+
+@mcp.tool()
+def email_read(uid: str, folder: str = "INBOX") -> str:
+    """Read a specific email by its message ID. Returns the full body text.
+
+    Args:
+        uid: The message ID from email_search results.
+        folder: IMAP folder containing the email (default: INBOX).
+    """
+    conn = None
+    try:
+        conn = _get_imap_connection()
+        conn.select(folder, readonly=True)
+
+        status, msg_data = conn.fetch(uid.encode() if isinstance(uid, str) else uid, "(RFC822)")
+        if status != "OK":
+            return json.dumps({"error": f"Could not fetch message {uid}"})
+
+        msg = email.message_from_bytes(msg_data[0][1])
+
+        # Extract body, prefer text/plain
+        body = ""
+        if msg.is_multipart():
+            for part in msg.walk():
+                content_type = part.get_content_type()
+                if content_type == "text/plain":
+                    payload = part.get_payload(decode=True)
+                    if payload:
+                        body = payload.decode("utf-8", errors="replace")
+                    break
+                elif content_type == "text/html" and not body:
+                    payload = part.get_payload(decode=True)
+                    if payload:
+                        # Basic HTML stripping as fallback
+                        import re
+                        html = payload.decode("utf-8", errors="replace")
+                        body = re.sub(r"<[^>]+>", "", html)
+        else:
+            payload = msg.get_payload(decode=True)
+            if payload:
+                body = payload.decode("utf-8", errors="replace")
+
+        result = {
+            "subject": _decode_header_value(msg.get("Subject", "")),
+            "from": _decode_header_value(msg.get("From", "")),
+            "to": _decode_header_value(msg.get("To", "")),
+            "date": msg.get("Date", ""),
+            "body": body.strip(),
+        }
+        return json.dumps(result, indent=2)
+
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+    finally:
+        if conn:
+            try:
+                conn.close()
+                conn.logout()
+            except Exception:
+                pass
+
+
+@mcp.tool()
+def email_send(to: str, subject: str, body: str) -> str:
+    """Send an email.
+
+    Args:
+        to: Recipient email address.
+        subject: Email subject line.
+        body: Email body text (plain text).
+    """
+    conn = None
+    try:
+        sender = _vault_get("${vault_prefix}.username")
+
+        msg = MIMEText(body, "plain")
+        msg["Subject"] = subject
+        msg["From"] = sender
+        msg["To"] = to
+
+        conn = _get_smtp_connection()
+        conn.sendmail(sender, [to], msg.as_string())
+
+        return f"Email sent to {to} with subject: {subject}"
+
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+    finally:
+        if conn:
+            try:
+                conn.quit()
+            except Exception:
+                pass
+
+
+if __name__ == "__main__":
+    mcp.run()

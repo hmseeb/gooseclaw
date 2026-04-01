@@ -9542,9 +9542,168 @@ class MCPClient:
             return {"error": str(e)}
 
 
+class MCPHttpClient:
+    """JSON-RPC 2.0 client for MCP servers over HTTP (streamable_http).
+    Used for services like Exa that expose MCP over HTTPS."""
+
+    def __init__(self, name, uri, headers=None, env_keys=None, timeout=30):
+        self.name = name
+        self.uri = uri
+        self.headers = headers or {}
+        self.env_keys = env_keys or []
+        self.timeout = timeout
+        self._lock = threading.Lock()
+        self._req_id = 0
+        self._tools = []
+        self._ready = False
+        self._session_id = None
+
+    def start(self):
+        """Initialize the HTTP MCP connection."""
+        try:
+            if self._initialize():
+                self._ready = True
+                return True
+            return False
+        except Exception as e:
+            _vlog(f"mcp-http: {self.name} start failed: {e}")
+            return False
+
+    def stop(self):
+        self._ready = False
+        self._tools = []
+        self._session_id = None
+
+    def is_alive(self):
+        return self._ready
+
+    def _next_id(self):
+        self._req_id += 1
+        return self._req_id
+
+    def _build_headers(self):
+        """Build HTTP headers including auth from env vars."""
+        hdrs = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        }
+        hdrs.update(self.headers)
+        # Auto-inject API key from well-known env vars
+        name_lower = self.name.lower()
+        for env_prefix in [name_lower.upper(), name_lower.replace("-", "_").upper()]:
+            api_key = os.environ.get(f"{env_prefix}_API_KEY")
+            if api_key:
+                hdrs["Authorization"] = f"Bearer {api_key}"
+                break
+        if self._session_id:
+            hdrs["Mcp-Session-Id"] = self._session_id
+        return hdrs
+
+    def _send_jsonrpc(self, method, params=None):
+        """Send JSON-RPC request over HTTP POST."""
+        import urllib.request
+        import urllib.error
+        msg = {
+            "jsonrpc": "2.0",
+            "id": self._next_id(),
+            "method": method,
+        }
+        if params is not None:
+            msg["params"] = params
+        payload = json.dumps(msg).encode("utf-8")
+        req = urllib.request.Request(self.uri, data=payload, headers=self._build_headers(), method="POST")
+        with self._lock:
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    # Capture session ID from response headers
+                    sid = resp.headers.get("Mcp-Session-Id")
+                    if sid:
+                        self._session_id = sid
+                    body = resp.read().decode("utf-8", errors="replace")
+                    # Handle SSE responses (text/event-stream)
+                    content_type = resp.headers.get("Content-Type", "")
+                    if "event-stream" in content_type:
+                        # Parse SSE, extract last JSON-RPC response
+                        for line in body.split("\n"):
+                            line = line.strip()
+                            if line.startswith("data:"):
+                                data_str = line[5:].strip()
+                                if data_str:
+                                    return json.loads(data_str)
+                        return {"error": "No data in SSE response"}
+                    return json.loads(body)
+            except urllib.error.HTTPError as e:
+                err_body = e.read().decode("utf-8", errors="replace")[:200]
+                return {"error": f"HTTP {e.code}: {err_body}"}
+
+    def _initialize(self):
+        """MCP initialize handshake over HTTP."""
+        try:
+            resp = self._send_jsonrpc("initialize", {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "gooseclaw-gateway", "version": "1.0"},
+            })
+            if "error" in resp:
+                _vlog(f"mcp-http: {self.name} initialize error: {resp['error']}")
+                return False
+            _vlog(f"mcp-http: {self.name} initialized: {resp.get('result', {}).get('serverInfo', {})}")
+            # Send initialized notification (no id, no response)
+            self._send_jsonrpc.__func__  # just to verify it exists
+            notif = {"jsonrpc": "2.0", "method": "notifications/initialized"}
+            import urllib.request
+            req = urllib.request.Request(
+                self.uri,
+                data=json.dumps(notif).encode("utf-8"),
+                headers=self._build_headers(),
+                method="POST",
+            )
+            try:
+                urllib.request.urlopen(req, timeout=5)
+            except Exception:
+                pass  # notifications don't require response
+            return True
+        except Exception as e:
+            _vlog(f"mcp-http: {self.name} initialize failed: {e}")
+            return False
+
+    def list_tools(self):
+        if self._tools:
+            return self._tools
+        try:
+            resp = self._send_jsonrpc("tools/list")
+            if "error" in resp:
+                _vlog(f"mcp-http: {self.name} tools/list error: {resp['error']}")
+                return []
+            self._tools = resp.get("result", {}).get("tools", [])
+            _vlog(f"mcp-http: {self.name} has {len(self._tools)} tools")
+            return self._tools
+        except Exception as e:
+            _vlog(f"mcp-http: {self.name} tools/list failed: {e}")
+            return []
+
+    def call_tool(self, tool_name, arguments):
+        try:
+            resp = self._send_jsonrpc("tools/call", {
+                "name": tool_name,
+                "arguments": arguments,
+            })
+            if "error" in resp:
+                return {"error": str(resp["error"])}
+            result = resp.get("result", {})
+            content = result.get("content", [])
+            texts = []
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    texts.append(item.get("text", ""))
+            return {"result": "\n".join(texts) if texts else json.dumps(result)}
+        except Exception as e:
+            return {"error": str(e)}
+
+
 class MCPPool:
-    """Manages a pool of direct MCP server connections.
-    Reads config.yaml for stdio extensions, spawns them, caches tool lists."""
+    """Manages a pool of direct MCP server connections (stdio + HTTP).
+    Reads config.yaml, spawns stdio servers, connects HTTP servers, caches tool lists."""
 
     def __init__(self):
         self._clients = {}  # ext_name -> MCPClient
@@ -9575,30 +9734,40 @@ class MCPPool:
             config = yaml.safe_load(f) or {}
         extensions = config.get("extensions", {})
 
-        # Only spawn stdio extensions (not platform, not streamable_http)
+        # Spawn stdio and HTTP MCP clients
         for ext_name, ext_cfg in extensions.items():
             if not isinstance(ext_cfg, dict):
                 continue
             if ext_cfg.get("enabled") is False:
                 continue
             ext_type = ext_cfg.get("type", "")
-            if ext_type != "stdio":
-                continue
-            cmd = ext_cfg.get("cmd", "")
-            args = ext_cfg.get("args", [])
-            envs = ext_cfg.get("envs", {})
-            if not cmd:
-                continue
-            client = MCPClient(
-                name=ext_name,
-                cmd=cmd,
-                args=args,
-                envs=envs,
-                timeout=ext_cfg.get("timeout", 30),
-            )
-            self._clients[ext_name] = client
+            if ext_type == "stdio":
+                cmd = ext_cfg.get("cmd", "")
+                args = ext_cfg.get("args", [])
+                envs = ext_cfg.get("envs", {})
+                if not cmd:
+                    continue
+                client = MCPClient(
+                    name=ext_name,
+                    cmd=cmd,
+                    args=args,
+                    envs=envs,
+                    timeout=ext_cfg.get("timeout", 30),
+                )
+                self._clients[ext_name] = client
+            elif ext_type == "streamable_http":
+                uri = ext_cfg.get("uri", "")
+                if not uri:
+                    continue
+                client = MCPHttpClient(
+                    name=ext_name,
+                    uri=uri,
+                    headers=ext_cfg.get("headers", {}),
+                    timeout=ext_cfg.get("timeout", 30),
+                )
+                self._clients[ext_name] = client
 
-        _vlog(f"mcp-pool: spawning {len(self._clients)} stdio servers in background...")
+        _vlog(f"mcp-pool: spawning {len(self._clients)} MCP servers in background...")
 
         # Start all clients in parallel, don't block
         for name, client in self._clients.items():
@@ -9756,8 +9925,8 @@ def _discover_voice_tools():
                 if ext_cfg.get("enabled") is False:
                     continue
                 ext_type = ext_cfg.get("type", "")
-                # Skip stdio extensions (already handled directly above)
-                if ext_type == "stdio":
+                # Skip stdio and HTTP extensions (already handled directly above)
+                if ext_type in ("stdio", "streamable_http"):
                     continue
                 # Platform/builtin extensions go through goosed
                 safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', ext_name)

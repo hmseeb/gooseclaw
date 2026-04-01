@@ -21,10 +21,10 @@
 
 ### Registration
 
-- [ ] **REG-01**: Generated extensions registered in goosed config.yaml automatically
-- [ ] **REG-02**: Registry file (/data/extensions/registry.json) tracks all generated extensions
-- [ ] **REG-03**: Boot loader in entrypoint.sh restores generated extensions from registry on container start
-- [ ] **REG-04**: Goosed restart after registration to load new extension
+- [x] **REG-01**: Generated extensions registered in goosed config.yaml automatically
+- [x] **REG-02**: Registry file (/data/extensions/registry.json) tracks all generated extensions
+- [x] **REG-03**: Boot loader in entrypoint.sh restores generated extensions from registry on container start
+- [x] **REG-04**: Goosed restart after registration to load new extension
 
 ### Credential Detection
 
@@ -75,10 +75,10 @@
 | GEN-01 | Phase 1 | Complete |
 | GEN-02 | Phase 1 | Complete |
 | GEN-03 | Phase 1 | Complete |
-| REG-01 | Phase 2 | Pending |
-| REG-02 | Phase 2 | Pending |
-| REG-03 | Phase 2 | Pending |
-| REG-04 | Phase 2 | Pending |
+| REG-01 | Phase 2 | Complete |
+| REG-02 | Phase 2 | Complete |
+| REG-03 | Phase 2 | Complete |
+| REG-04 | Phase 2 | Complete |
 | DET-01 | Phase 3 | Pending |
 | DET-02 | Phase 3 | Pending |
 | DET-03 | Phase 3 | Pending |

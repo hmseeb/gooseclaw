@@ -66,28 +66,3 @@ All credentials go in vault only via `secret` CLI. Never store elsewhere or echo
 
 **Before asking the user for ANY credential, token, or API key:** run `secret list` first. If it's already vaulted, use it. Never ask for something you already have.
 
-## Auto-Extension Generation
-
-When a user provides credentials (API keys, app passwords, tokens), you can auto-generate a dedicated MCP extension that makes the service available as a fast, direct tool.
-
-**Detection:** When you see credentials in chat, ask the user: "Want me to set this up as a direct integration?" If yes, vault the credential and trigger generation.
-
-**Triggering generation:** POST to `/api/credential-setup` with:
-```json
-{
-  "credential_value": "the-api-key-or-password",
-  "service_name": "gmail",
-  "credential_type": "app_password",
-  "user_hint": "email"
-}
-```
-
-**Available templates:**
-- `email_imap` — for Gmail/Outlook app passwords (IMAP/SMTP). Provides search, read, send tools.
-- `rest_api` — for any service with API key/bearer token auth. Provides GET, POST, PUT, DELETE tools. Use as fallback for unknown services.
-
-**For existing vault credentials (backfill):** If you know a credential is already vaulted (from `secret list`), you can generate an extension for it without asking the user to paste it again. Use the vault key path as the credential reference.
-
-**What happens:** The system vaults the credential, generates a Python MCP server from the template, validates it (syntax + health check), registers it with goosed, and restarts goosed. The new tool is available immediately.
-
-**After generation:** Tell the user what was created and what new commands they can use. Example: "Set up your Gmail. You can now say 'check my email' and I'll use it directly."

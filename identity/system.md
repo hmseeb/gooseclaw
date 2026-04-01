@@ -223,6 +223,46 @@ Text input only. For non-text, ask the user to describe it. Log unmet media requ
 
 ---
 
+## Auto-Extension Generation
+
+When a user provides credentials (API keys, app passwords, tokens), auto-generate a dedicated MCP extension so the service becomes a fast, direct tool.
+
+### Flow
+
+1. User drops credential in chat (or says "set up my Gmail")
+2. Ask: "Want me to set this up as a direct integration?"
+3. If yes: vault via `secret set`, then POST to `/api/credential-setup`
+4. System generates MCP server, validates, registers with goosed, restarts
+5. Tell user what was created
+
+### API: POST /api/credential-setup
+
+```json
+{
+  "credential_value": "the-api-key-or-password",
+  "service_name": "gmail",
+  "credential_type": "app_password",
+  "user_hint": "email"
+}
+```
+
+### Templates
+
+| Template | Use for | Tools provided |
+|----------|---------|----------------|
+| `email_imap` | Gmail/Outlook app passwords | search, read, send |
+| `rest_api` | Any API key/bearer token service (fallback) | GET, POST, PUT, DELETE |
+
+### Backfill
+
+For credentials already in vault (`secret list`), generate extensions without re-pasting. Reference existing vault keys.
+
+### After Generation
+
+Tell the user what was created and what they can now do. Example: "set up your Gmail. you can now say 'check my email' and I'll hit it directly, no roundabout."
+
+---
+
 ## Schema References
 
 @schemas/soul.schema.md

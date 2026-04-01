@@ -9987,6 +9987,7 @@ def _discover_voice_tools():
         "groq_api", "openrouter_api",  # LLM provider APIs, not voice-useful
         "browserbase_api",  # browser automation, not voice-useful
         "ensue_api",  # not voice-useful
+        "mem0-memory",  # route through goosed (reuses warm instance, avoids cold embed + file contention)
     }
 
     # 1. Direct MCP tools (stdio extensions - the fast path)
@@ -10035,8 +10036,8 @@ def _discover_voice_tools():
                 if ext_cfg.get("enabled") is False:
                     continue
                 ext_type = ext_cfg.get("type", "")
-                # Skip stdio and HTTP extensions (already handled directly above)
-                if ext_type in ("stdio", "streamable_http"):
+                # Skip stdio/HTTP extensions handled directly, UNLESS they're blocklisted
+                if ext_type in ("stdio", "streamable_http") and ext_name not in _VOICE_MCP_BLOCKLIST:
                     continue
                 # Platform/builtin extensions go through goosed
                 # Skip platform extensions that aren't useful for voice

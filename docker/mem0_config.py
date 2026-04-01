@@ -255,7 +255,7 @@ def build_mem0_config_for_provider(provider, model):
     if gemini_key:
         os.environ.setdefault("GOOGLE_API_KEY", gemini_key)
         embedder_config = {
-            "provider": "google",
+            "provider": "gemini",
             "config": {
                 "model": "models/text-embedding-004",
                 "embedding_dims": 768,
@@ -341,7 +341,7 @@ def build_mem0_config():
     if gemini_key:
         os.environ.setdefault("GOOGLE_API_KEY", gemini_key)
         embedder_config = {
-            "provider": "google",
+            "provider": "gemini",
             "config": {
                 "model": "models/text-embedding-004",
                 "embedding_dims": 768,

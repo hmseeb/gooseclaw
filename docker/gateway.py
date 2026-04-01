@@ -9187,7 +9187,7 @@ def _voice_session_token_validate(token):
 def _voice_load_identity():
     """Load identity files (soul.md, user.md) for voice system prompt."""
     identity = ""
-    for fname in ["system-core.md", "soul.md", "user.md", "turn-rules.md"]:
+    for fname in ["system-core.md", "soul.md", "user.md", "turn-rules.md", "system.md"]:
         fpath = os.path.join(DATA_DIR, "identity", fname)
         try:
             with open(fpath) as f:
@@ -9221,7 +9221,8 @@ def _voice_build_system_prompt(tool_names=None):
             f"\n\nYour tools: {tool_list}. "
             "Use the specific tool when it matches (e.g. knowledge for knowledge base, "
             "exa for web search, memory/mem0 for remembering things). "
-            "Use 'assistant' for anything not covered by a specific tool (emails, calendar, scripts, etc.)."
+            "Use 'assistant' for: reminders (remind CLI), scheduled jobs (job CLI), "
+            "running shell commands, file operations, and anything not covered by a specific tool."
         )
     return prompt
 

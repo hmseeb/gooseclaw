@@ -9053,13 +9053,20 @@ def _voice_build_system_prompt(tool_names=None):
     prompt = (
         "You are GooseClaw, a personal AI assistant with voice and tool capabilities. "
         "You speak naturally and conversationally. Keep responses concise since this is a voice conversation. "
-        "You have one powerful tool called 'assistant' that can do almost anything: "
-        "check emails, manage calendar, search the web, remember things, read/write files, "
-        "run code, manage todos, and much more. The user has their own credentials and integrations set up. "
-        "When the user asks you to DO something (not just chat), call the assistant tool with their request. "
-        "Before calling, briefly acknowledge naturally. After the result, summarize conversationally. "
-        "Never say you can't do something without trying the assistant tool first."
+        "You have access to real tools that let you take actions on behalf of the user. "
+        "Use them proactively when the user asks you to do something actionable. "
+        "Before calling a tool, briefly acknowledge naturally like a human assistant would. "
+        "After the tool returns, summarize the result conversationally. "
+        "Never say you can't do something without trying a tool first."
     )
+    if tool_names:
+        tool_list = ", ".join(tool_names)
+        prompt += (
+            f"\n\nYour tools: {tool_list}. "
+            "Use the specific tool when it matches the task (e.g. knowledge for knowledge base, "
+            "exa for web search, memory/mem0 for remembering things). "
+            "Use 'assistant' for anything not covered by a specific tool (emails, calendar, scripts, etc.)."
+        )
     return prompt
 
 
@@ -9173,31 +9180,77 @@ def _vlog(msg):
 
 
 def _discover_voice_tools():
-    """Return a single 'assistant' tool that routes all requests through goosed/Claude.
+    """Query goosed for enabled extensions + add assistant catch-all.
 
     Returns:
-        tuple: (list with one function declaration, name_map)
+        tuple: (list of function declaration dicts, dict mapping sanitized_name -> original_name)
     """
-    declarations = [{
+    declarations = []
+    name_map = {}
+
+    # Discover individual goosed extensions
+    try:
+        conn = _goosed_conn(timeout=5)
+        conn.request("GET", "/config", headers={"X-Secret-Key": _INTERNAL_GOOSE_TOKEN})
+        resp = conn.getresponse()
+        if resp.status == 200:
+            cfg = json.loads(resp.read().decode("utf-8", errors="replace"))
+            conn.close()
+            extensions = cfg.get("config", {}).get("extensions", {})
+            for ext_name, ext_cfg in extensions.items():
+                if not isinstance(ext_cfg, dict):
+                    continue
+                if ext_cfg.get("enabled") is False:
+                    continue
+                safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', ext_name)
+                if safe_name and safe_name[0].isdigit():
+                    safe_name = "ext_" + safe_name
+                desc = ext_cfg.get("description", "").strip()
+                if not desc:
+                    human_name = ext_name.replace("_", " ").replace("-", " ").title()
+                    desc = f"Use {human_name} to perform actions on the user's behalf"
+                declarations.append({
+                    "name": safe_name,
+                    "description": desc,
+                    "parameters": {
+                        "type": "OBJECT",
+                        "properties": {
+                            "request": {
+                                "type": "STRING",
+                                "description": f"What to do with {ext_name}",
+                            }
+                        },
+                        "required": ["request"],
+                    },
+                })
+                name_map[safe_name] = ext_name
+        else:
+            resp.read()
+            conn.close()
+    except Exception as e:
+        _voice_log.warning(f"Tool discovery failed: {e}")
+
+    # Add catch-all assistant for tasks not covered by specific extensions
+    declarations.append({
         "name": "assistant",
         "description": (
-            "A powerful assistant that can perform any task: check emails, manage calendar, "
-            "search the web, remember things, read/write files, run code, manage todos, "
-            "access knowledge base, and more. The user has their own credentials and "
-            "integrations configured. Pass the user's request as-is."
+            "General-purpose assistant for tasks not covered by other tools. "
+            "Can check emails, manage calendar, run scripts, access vault credentials, "
+            "and perform any complex multi-step task. Use this when no specific tool fits."
         ),
         "parameters": {
             "type": "OBJECT",
             "properties": {
                 "request": {
                     "type": "STRING",
-                    "description": "The user's request in natural language, exactly as they said it",
+                    "description": "The user's request in natural language",
                 }
             },
             "required": ["request"],
         },
-    }]
-    name_map = {"assistant": "assistant"}
+    })
+    name_map["assistant"] = "assistant"
+
     return declarations, name_map
 
 
@@ -9207,10 +9260,14 @@ def _create_voice_goose_session():
 
 
 def _voice_execute_tool(tool_name, tool_args, session_id, original_name):
-    """Execute a tool call via goosed with Gemini Flash as LLM."""
+    """Execute a tool call via goosed."""
     try:
         request = tool_args.get("request", str(tool_args))
-        response_text, error_string, _media = _do_rest_relay(request, session_id, timeout=30)
+        if original_name == "assistant":
+            prompt = request
+        else:
+            prompt = f"Use the {original_name} tool: {request}"
+        response_text, error_string, _media = _do_rest_relay(prompt, session_id, timeout=30)
         if error_string:
             return {"error": error_string}
         return {"result": response_text[:2000]}

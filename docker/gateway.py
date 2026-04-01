@@ -9986,7 +9986,6 @@ def _discover_voice_tools():
         "groq_api", "openrouter_api",  # LLM provider APIs, not voice-useful
         "browserbase_api",  # browser automation, not voice-useful
         "ensue_api",  # not voice-useful
-        "mem0-memory",  # route through goosed (reuses warm instance, avoids cold embed + file contention)
     }
     user_tools = _get_voice_tool_config()
     user_blocklist = set(user_tools.get("blocklist", []))

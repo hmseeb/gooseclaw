@@ -250,21 +250,38 @@ def build_mem0_config_for_provider(provider, model):
         os.environ["OPENAI_BASE_URL"] = "https://openrouter.ai/api/v1"
         os.environ.setdefault("OPENAI_API_KEY", api_key)
 
-    config = {
-        "vector_store": {
-            "provider": "chroma",
+    # Use Gemini API embeddings if available (fast, no CPU inference)
+    gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if gemini_key:
+        os.environ.setdefault("GOOGLE_API_KEY", gemini_key)
+        embedder_config = {
+            "provider": "google",
             "config": {
-                "collection_name": "mem0_memories",
-                "path": os.environ.get("MEM0_CHROMA_PATH", "/data/knowledge/chroma"),
+                "model": "models/text-embedding-004",
+                "embedding_dims": 768,
+                "api_key": gemini_key,
             }
-        },
-        "embedder": {
+        }
+        collection_name = "mem0_memories_gemini"
+    else:
+        embedder_config = {
             "provider": "huggingface",
             "config": {
                 "model": "sentence-transformers/all-MiniLM-L6-v2",
                 "embedding_dims": 384,
             }
+        }
+        collection_name = "mem0_memories"
+
+    config = {
+        "vector_store": {
+            "provider": "chroma",
+            "config": {
+                "collection_name": collection_name,
+                "path": os.environ.get("MEM0_CHROMA_PATH", "/data/knowledge/chroma"),
+            }
         },
+        "embedder": embedder_config,
         "llm": {
             "provider": mem0_provider,
             "config": llm_config,
@@ -318,21 +335,39 @@ def build_mem0_config():
         os.environ["OPENAI_BASE_URL"] = "https://openrouter.ai/api/v1"
         os.environ.setdefault("OPENAI_API_KEY", api_key or "")
 
-    config = {
-        "vector_store": {
-            "provider": "chroma",
+    # Use Gemini API embeddings if GEMINI_API_KEY available (fast, no CPU inference)
+    # Falls back to HuggingFace local if no key
+    gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if gemini_key:
+        os.environ.setdefault("GOOGLE_API_KEY", gemini_key)
+        embedder_config = {
+            "provider": "google",
             "config": {
-                "collection_name": "mem0_memories",
-                "path": os.environ.get("MEM0_CHROMA_PATH", "/data/knowledge/chroma"),
+                "model": "models/text-embedding-004",
+                "embedding_dims": 768,
+                "api_key": gemini_key,
             }
-        },
-        "embedder": {
+        }
+        collection_name = "mem0_memories_gemini"
+    else:
+        embedder_config = {
             "provider": "huggingface",
             "config": {
                 "model": "sentence-transformers/all-MiniLM-L6-v2",
                 "embedding_dims": 384,
             }
+        }
+        collection_name = "mem0_memories"
+
+    config = {
+        "vector_store": {
+            "provider": "chroma",
+            "config": {
+                "collection_name": collection_name,
+                "path": os.environ.get("MEM0_CHROMA_PATH", "/data/knowledge/chroma"),
+            }
         },
+        "embedder": embedder_config,
         "llm": {
             "provider": mem0_provider,
             "config": llm_config,

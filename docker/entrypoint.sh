@@ -14,6 +14,9 @@ HOME_DIR="${HOME:-/root}"
 
 export APP_DIR DATA_DIR CONFIG_DIR IDENTITY_DIR
 
+# Ensure google-genai is installed (Gemini embeddings for mem0)
+python3 -c "from google import genai" 2>/dev/null || pip3 install --no-cache-dir --break-system-packages google-genai >/dev/null 2>&1 || true
+
 # ensure ~/.local/bin is in PATH (claude CLI installs there)
 export PATH="$HOME_DIR/.local/bin:$PATH"
 

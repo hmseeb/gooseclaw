@@ -213,6 +213,26 @@ def classify_credential(credential, user_hint=""):
     else:
         prefix = "custom_api"
 
+    # Well-known base URLs for common services not in the classifier
+    _fallback_urls = {
+        "notion": "https://api.notion.com/v1",
+        "linear": "https://api.linear.app",
+        "jira": "https://api.atlassian.com",
+        "discord": "https://discord.com/api/v10",
+        "stripe": "https://api.stripe.com/v1",
+        "twilio": "https://api.twilio.com",
+        "sendgrid": "https://api.sendgrid.com/v3",
+        "openai": "https://api.openai.com/v1",
+        "anthropic": "https://api.anthropic.com/v1",
+        "supabase": "https://api.supabase.co",
+        "firebase": "https://firebase.googleapis.com/v1",
+        "cloudflare": "https://api.cloudflare.com/client/v4",
+        "digitalocean": "https://api.digitalocean.com/v2",
+        "fly": "https://api.machines.dev/v1",
+        "resend": "https://api.resend.com",
+    }
+    base_url = _fallback_urls.get(prefix, "")
+
     return {
         "template": "rest_api",
         "vault_prefix": prefix,
@@ -222,6 +242,7 @@ def classify_credential(credential, user_hint=""):
         "extra_subs": {
             "auth_type": "bearer",
             "service_description": f"{prefix.replace('_', ' ').title()} API",
+            "base_url": base_url,
         },
     }
 

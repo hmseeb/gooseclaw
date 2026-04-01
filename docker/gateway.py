@@ -8745,11 +8745,13 @@ def handle_credential_setup(data):
         }
         classification = classify_credential(cred_dict, data.get("user_hint", ""))
 
-    # Override vault_prefix if user specified
+    # Override fields if user/AI specified
     if data.get("vault_prefix"):
         classification["vault_prefix"] = data["vault_prefix"]
     if data.get("template"):
         classification["template"] = data["template"]
+    if data.get("base_url"):
+        classification.setdefault("extra_subs", {})["base_url"] = data["base_url"]
 
     return credential_to_extension(cred_value, classification)
 

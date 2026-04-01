@@ -2,32 +2,38 @@
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-03-27)
+See: .planning/PROJECT.md (updated 2026-04-01)
 
-**Core value:** A user with zero DevOps knowledge can deploy and configure GooseClaw correctly on the first try
-**Current focus:** v6.0 Voice Dashboard - Phase 30 (Voice Dashboard)
+**Core value:** Credentials in vault automatically become fast, direct tool access
+**Current focus:** Phase 1: Template Engine and Code Generation
 
 ## Current Position
 
-Phase: 32 of 33 (Tool Calling)
-Plan: 2 of 2 in current phase
-Status: Verifying
-Last activity: 2026-03-27 — Plan 32-02 complete (Integration wiring + UI)
+Phase: 1 of 3 (Template Engine and Code Generation)
+Plan: 0 of ? in current phase
+Status: Ready to plan
+Last activity: 2026-04-01 — Roadmap created
 
-Progress v1.0: [==========] 100% (shipped 2026-03-11)
-Progress v2.0: [==========] 100% (shipped 2026-03-13)
-Progress v3.0: [==========] 100% (shipped 2026-03-15)
-Progress v4.0: [==========] 100% (shipped 2026-03-16)
-Progress v5.0: [==========] 100% (shipped 2026-03-20)
-Progress v5.1: [==========] 100% (shipped 2026-03-25)
-Progress v6.0: [===.......] 29%
+Progress: [░░░░░░░░░░] 0%
 
 ## Performance Metrics
 
-**Velocity (all milestones):**
-- Total plans completed: 65
-- Average duration: ~4.5 min
-- Total execution time: ~4.8 hours
+**Velocity:**
+- Total plans completed: 0
+- Average duration: -
+- Total execution time: 0 hours
+
+**By Phase:**
+
+| Phase | Plans | Total | Avg/Plan |
+|-------|-------|-------|----------|
+| - | - | - | - |
+
+**Recent Trend:**
+- Last 5 plans: -
+- Trend: -
+
+*Updated after each plan completion*
 
 ## Accumulated Context
 
@@ -36,38 +42,20 @@ Progress v6.0: [===.......] 29%
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
-- v6.0: Gemini 3.1 Flash Live as voice brain (not goosed proxy) — lower latency, single model
-- v6.0: Optional Gemini API key in setup wizard, voice dashboard gates on key presence
-- v6.0: Voice channel is independent brain from text channels (Gemini vs user's main provider)
-- v6.0: Server-side WebSocket proxy (API key never reaches browser)
-- v6.0: RFC 6455 from scratch in stdlib Python (~200 lines), no pip dependencies
-- v6.0: Voice session tokens with 5-min TTL for ephemeral WebSocket auth
-- v6.0: Two relay threads (browser-to-Gemini, Gemini-to-browser) with shared stop_event
-- v6.0: GoAway reconnection uses lock-protected socket swap with resumption handle
-
-### Key Research Flags
-
-- Gemini 3.1 Flash Live is preview (day-old). Fallback to 2.5 Flash Live if unstable.
-- Railway kills idle WebSocket at 10 min. Ping/pong every 25s mandatory from Phase 27.
-- Tool calling is synchronous on Gemini Live. Model blocks until tool response. 2-3s timeout needed.
-- Browser autoplay policy: AudioContext must be created inside user click handler.
+- [Roadmap]: 3-phase structure (quick depth). Templates+Generation first, Registration second, Detection+Validation third.
+- [Roadmap]: Validation requirements (VAL-01..03) grouped with Detection (Phase 3) rather than separate phase, since validation is a safety net on the end-to-end flow.
 
 ### Pending Todos
 
-- Lock audit: map all 17 locks and their acquisition paths
-- Queue consecutive messages instead of bouncing with "Still thinking"
-- Hide internal file references and tool usage from user-facing LLM output
-- Revisit memory files idle poll
-- Investigate Goose multi-agent spawning with goosed
-- Generate requirements.lock via generate-lockfile.sh --docker
-- Validate e2e tests in CI pipeline
+None yet.
 
 ### Blockers/Concerns
 
-None.
+- [Research]: goosed may re-read config.yaml without restart (gateway.py comment). Needs empirical validation in Phase 2. Could eliminate restart requirement.
+- [Research]: config.yaml race condition with multiple writers. Phase 2 mitigates via registry.json as source of truth.
 
 ## Session Continuity
 
-Last session: 2026-03-27
-Stopped at: Completed 30-03-PLAN.md (Transcript and Visualizer)
+Last session: 2026-04-01
+Stopped at: Roadmap created, ready to plan Phase 1
 Resume file: None

@@ -12,7 +12,7 @@ Transform GooseClaw from a platform where integrations require manual extension 
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Template Engine and Code Generation** - Jinja2 templates produce valid, secure MCP server files from vault credential references
+- [ ] **Phase 1: Template Engine and Code Generation** - string.Template engine produces valid, secure MCP server files from vault credential references
 - [ ] **Phase 2: Extension Registration and Boot Lifecycle** - Generated extensions register with goosed and survive container restarts
 - [ ] **Phase 3: Credential Detection, Validation, and End-to-End Flow** - Users drop credentials in chat and get working tool extensions back automatically
 
@@ -28,11 +28,12 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. Generated files read credentials from vault at runtime via `secret get` CLI, never contain hardcoded credential values
   4. All generated servers redirect stdout to stderr so MCP JSON-RPC protocol is not corrupted
   5. Generated files have no external dependencies beyond stdlib and the mcp SDK
-**Plans**: TBD
+**Plans:** 3 plans
 
 Plans:
-- [ ] 01-01: TBD
-- [ ] 01-02: TBD
+- [ ] 01-01-PLAN.md -- Generator engine: string.Template renderer, base_helpers boilerplate, vault helper, unit tests
+- [ ] 01-02-PLAN.md -- Email IMAP/SMTP template: search, read, send tools with vault credential reads
+- [ ] 01-03-PLAN.md -- REST API template: generic authenticated HTTP (GET/POST/PUT/DELETE) with bearer/API key auth
 
 ### Phase 2: Extension Registration and Boot Lifecycle
 **Goal**: Generated MCP server files become live goosed extensions that persist across container restarts without user intervention
@@ -73,6 +74,6 @@ Phases execute in numeric order: 1 → 2 → 3
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Template Engine and Code Generation | 0/? | Not started | - |
+| 1. Template Engine and Code Generation | 0/3 | Planning complete | - |
 | 2. Extension Registration and Boot Lifecycle | 0/? | Not started | - |
 | 3. Credential Detection, Validation, and End-to-End Flow | 0/? | Not started | - |

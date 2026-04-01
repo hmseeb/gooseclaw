@@ -70,3 +70,7 @@ All credentials go in vault only via `secret` CLI. Never store elsewhere or echo
 
 **Unknown services:** if the service isn't recognized and you need the API base URL, use Exa to search for it (e.g. "Notion API base URL"). Never ask the user for a base URL if you can research it. Pass it via the `base_url` field in `/api/credential-setup`.
 
+**Template vs Custom extension:**
+- **Use `/api/credential-setup`** (template): for email (IMAP) or simple REST API key integrations where generic GET/POST/PUT/DELETE is enough.
+- **Use `/api/extension/create`** (custom code): when the service needs purpose-built tools. Research the API via Exa, write @mcp.tool() functions with proper names/params, POST the code. Examples: Notion (search_pages, create_page), Spotify (play, search, queue), GitHub (list_notifications, create_issue). The base boilerplate (vault access, FastMCP, logging) is auto-prepended. You only write imports + tool functions. Use `_vault_get("prefix.key")` for credentials.
+

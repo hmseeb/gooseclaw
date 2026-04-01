@@ -8756,6 +8756,65 @@ def handle_credential_setup(data):
     return credential_to_extension(cred_value, classification)
 
 
+def handle_extension_create(data):
+    """Create a custom MCP extension from AI-written tool code.
+
+    data: {"name": str, "code": str, "description": str,
+           "vault_prefix": str, "vault_keys": list}
+
+    The AI writes @mcp.tool() functions + any imports/helpers.
+    Gateway handles boilerplate, validation, registration.
+    """
+    from extensions.generator import generate_from_code
+    from extensions import registry
+    from extensions.validator import validate_syntax
+
+    name = data.get("name", "").strip()
+    code = data.get("code", "").strip()
+    if not name or not code:
+        return {"success": False, "error": "name and code are required"}
+
+    description = data.get("description", f"Custom {name} extension")
+    vault_prefix = data.get("vault_prefix", name)
+    vault_keys = data.get("vault_keys", [])
+
+    try:
+        # Generate server.py from AI code
+        server_path = generate_from_code(
+            extension_name=name,
+            tool_code=code,
+            vault_prefix=vault_prefix,
+            vault_keys=vault_keys,
+            description=description,
+        )
+
+        # Validate syntax
+        valid, err_msg = validate_syntax(server_path)
+        if not valid:
+            return {"success": False, "error": f"Syntax error: {err_msg}", "stage": "validation"}
+
+        # Register
+        registry.register(
+            name=name, template="custom", vault_prefix=vault_prefix,
+            vault_keys=vault_keys, server_path=server_path,
+            description=description,
+        )
+        _register_extension_in_config(name, server_path, description)
+
+        # Restart goosed to pick up new extension
+        def _restart():
+            time.sleep(1)
+            stop_goosed()
+            start_goosed()
+            _session_manager._sessions.clear()
+        threading.Thread(target=_restart, daemon=True).start()
+
+        return {"success": True, "extension_name": name, "server_path": server_path}
+
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 def start_goosed():
     global goosed_process, _INTERNAL_GOOSE_TOKEN
     _check_stale_pid("goosed")
@@ -10861,6 +10920,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.handle_voice_preference_set()
         elif path == "/api/credential-setup":
             self.handle_credential_setup_request()
+        elif path == "/api/extension/create":
+            self.handle_extension_create_request()
         elif path.startswith("/api/webhooks/"):
             webhook_name = path[len("/api/webhooks/"):]
             if webhook_name:
@@ -11048,6 +11109,22 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(400, {"error": "Invalid JSON"})
             return
         result = handle_credential_setup(data)
+        status = 200 if result.get("success") else 400
+        self.send_json(status, result)
+
+    def handle_extension_create_request(self):
+        """POST /api/extension/create - create custom MCP extension from AI code."""
+        if not check_auth(self):
+            return
+        body = self._read_body()
+        if body is None:
+            return
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            self.send_json(400, {"error": "Invalid JSON"})
+            return
+        result = handle_extension_create(data)
         status = 200 if result.get("success") else 400
         self.send_json(status, result)
 

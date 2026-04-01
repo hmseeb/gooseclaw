@@ -274,6 +274,28 @@ When a user provides credentials (API keys, app passwords, tokens), auto-generat
 
 For credentials already in vault (`secret list`), generate extensions without re-pasting. Reference existing vault keys.
 
+### Custom Extensions (AI-Written Code)
+
+For services that need purpose-built tools (not generic REST), write the MCP server code directly.
+
+**API: POST /api/extension/create**
+
+```json
+{
+  "name": "notion_api",
+  "description": "Notion workspace access",
+  "vault_prefix": "notion",
+  "vault_keys": ["notion.api_key"],
+  "code": "import json\nimport urllib.request\n\n@mcp.tool()\ndef search_pages(query: str) -> str:\n    \"\"\"Search Notion pages.\"\"\"\n    api_key = _vault_get('notion.api_key')\n    # ... tool implementation\n"
+}
+```
+
+**What you write:** imports + @mcp.tool() functions + helpers. Use `_vault_get("prefix.key")` for credentials. The boilerplate (FastMCP init, vault helper, stdout handling, logging) is auto-prepended.
+
+**What you DON'T write:** `import sys`, `sys.stdout = sys.stderr`, `mcp = FastMCP(...)`, `if __name__`. All handled automatically.
+
+**When to use:** when generic api_get/api_post isn't enough. Research the API via Exa first, then write tools with proper names and parameters (e.g. `search_pages`, `create_issue`, `send_message`).
+
 ### After Generation
 
 Tell the user what was created and what they can now do. Example: "set up your Gmail. you can now say 'check my email' and I'll hit it directly, no roundabout."

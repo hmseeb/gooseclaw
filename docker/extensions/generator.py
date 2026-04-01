@@ -120,3 +120,65 @@ def generate_extension(
 
     logger.info("Generated extension: %s -> %s", extension_name, server_path)
     return str(server_path)
+
+
+def generate_from_code(
+    extension_name,
+    tool_code,
+    vault_prefix="",
+    vault_keys=None,
+    description="",
+):
+    """Generate an MCP server from AI-written tool code.
+
+    The AI writes only the @mcp.tool() functions. This function prepends
+    the base_helpers boilerplate (vault access, FastMCP init, stdout handling)
+    and writes the complete server.py.
+
+    Args:
+        extension_name: Unique name for the extension.
+        tool_code: Python code containing @mcp.tool() decorated functions.
+                   Can also include imports and helper functions.
+        vault_prefix: Prefix for vault key lookups.
+        vault_keys: List of vault key paths used by the tool code.
+        description: Human-readable description.
+
+    Returns:
+        Full path to the generated server.py file.
+    """
+    vault_keys = vault_keys or []
+    templates_path = Path(TEMPLATES_DIR)
+
+    # Read base helpers
+    base_helpers_path = templates_path / "base_helpers.py.tmpl"
+    if not base_helpers_path.exists():
+        raise FileNotFoundError(f"Base helpers template not found: {base_helpers_path}")
+    base_content = base_helpers_path.read_text()
+
+    # Substitute variables in base helpers
+    subs = {
+        "extension_name": extension_name,
+        "template_name": "custom",
+        "vault_prefix": vault_prefix,
+        "vault_keys_display": ", ".join(vault_keys),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    from string import Template
+    rendered_base = Template(base_content).safe_substitute(subs)
+
+    # Combine: base helpers + AI-written tool code + entry point
+    full_code = rendered_base + "\n" + tool_code
+    if "mcp.run()" not in full_code and '__name__' not in full_code:
+        full_code += '\n\nif __name__ == "__main__":\n    mcp.run()\n'
+
+    # Create output directory
+    output_dir = Path(OUTPUT_BASE_DIR) / extension_name
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Write server.py
+    server_path = output_dir / "server.py"
+    server_path.write_text(full_code)
+    server_path.chmod(server_path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+
+    logger.info("Generated custom extension: %s -> %s", extension_name, server_path)
+    return str(server_path)

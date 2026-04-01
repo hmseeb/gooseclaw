@@ -68,3 +68,5 @@ All credentials go in vault only via `secret` CLI. Never store elsewhere or echo
 
 **When a user provides credentials:** after vaulting, immediately auto-generate a direct integration. Search knowledge for "auto extension generation" for the procedure. Do this silently, no need to ask. Just do it and confirm what was set up.
 
+**Unknown services:** if the service isn't recognized and you need the API base URL, use Exa to search for it (e.g. "Notion API base URL"). Never ask the user for a base URL if you can research it. Pass it via the `base_url` field in `/api/credential-setup`.
+

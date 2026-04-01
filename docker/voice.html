@@ -1936,7 +1936,7 @@
 
     // ── Voice Picker ──────────────────────────────────────────────────────
 
-    var selectedVoice = 'Aoede';
+    var selectedVoice = 'Puck';
 
     function toggleVoicePicker() {
       var picker = document.getElementById('voice-picker');
@@ -1956,7 +1956,7 @@
         var resp = await fetch('/api/voice/preference');
         if (!resp.ok) throw new Error('Failed');
         var data = await resp.json();
-        selectedVoice = data.voice_name || 'Aoede';
+        selectedVoice = data.voice_name || 'Puck';
         (data.voices || []).forEach(function(v) {
           var el = document.createElement('div');
           el.className = 'voice-option' + (v.name === selectedVoice ? ' selected' : '');
@@ -1992,7 +1992,7 @@
 
     // Load voice preference on page load (fire-and-forget)
     fetch('/api/voice/preference').then(function(r) { return r.json(); }).then(function(d) {
-      selectedVoice = d.voice_name || 'Aoede';
+      selectedVoice = d.voice_name || 'Puck';
     }).catch(function() {});
 
     // Start idle visualizer on load

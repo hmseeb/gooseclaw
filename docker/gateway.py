@@ -9306,9 +9306,9 @@ def _get_voice_preference():
     try:
         with open(_VOICE_PREFS_FILE) as f:
             prefs = json.load(f)
-            return prefs.get("voice_name", "Aoede")
+            return prefs.get("voice_name", "Puck")
     except (FileNotFoundError, json.JSONDecodeError):
-        return "Aoede"
+        return "Puck"
 
 
 def _set_voice_preference(voice_name):

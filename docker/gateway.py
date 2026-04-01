@@ -9468,7 +9468,7 @@ def _voice_execute_tool(tool_name, tool_args, session_id, original_name):
         if original_name == "assistant":
             prompt = request
         else:
-            prompt = f"Use the {original_name} tool: {request}"
+            prompt = f"Use ONLY the {original_name} tool right now. Do not reason or explain, just call the tool and return the raw result. Request: {request}"
         response_text, error_string, _media = _do_rest_relay(prompt, session_id, timeout=30)
         if error_string:
             return {"error": error_string}

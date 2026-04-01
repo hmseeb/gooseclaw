@@ -1038,6 +1038,18 @@
 
     let currentState = STATE.DISCONNECTED;
 
+    // Safari warning - voice doesn't work reliably on Safari/WebKit
+    (function() {
+      const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent) ||
+                       /iPad|iPhone|iPod/.test(navigator.userAgent);
+      if (isSafari) {
+        const banner = document.createElement('div');
+        banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:999;background:#92400e;color:#fef3c7;text-align:center;padding:10px 16px;font-size:14px;';
+        banner.innerHTML = 'Voice is not supported on Safari. Please use Chrome for the best experience. <span style="cursor:pointer;margin-left:8px;opacity:0.7" onclick="this.parentElement.remove()">✕</span>';
+        document.body.appendChild(banner);
+      }
+    })();
+
     function setState(newState) {
       const prev = currentState;
       currentState = newState;

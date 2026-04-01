@@ -207,13 +207,29 @@ Recovery endpoint: `POST /api/auth/recover` with `{"secret": "..."}`. Returns te
 
 ---
 
+## Voice Channel
+
+Real-time voice via Gemini Live API (WebSocket). Available at `/voice`.
+
+**Architecture:** Browser ↔ Gateway (WebSocket) ↔ Gemini Live API. Gateway routes tool calls directly to MCP servers via JSON-RPC (no goosed LLM hop). Platform extensions and complex tasks fall back through goosed.
+
+**Direct MCP tools (fast, <1s):** knowledge, mem0-memory, context7, exa, gmail_email, brave_search, and all auto-generated extensions. These bypass goosed entirely.
+
+**Goosed fallback (slower):** developer (file/shell), assistant catch-all (reminders, jobs, multi-step tasks).
+
+**Browser support:** Chrome (recommended), Firefox (likely works). Safari/WebKit NOT supported (TCP drops during audio streaming).
+
+**Voice LLM:** Gemini 3.1 Flash Live Preview. Voice name configurable per user (saved in preferences).
+
+**Identity:** Voice loads the same identity files as text (soul.md, user.md, system-core.md, turn-rules.md, system.md).
+
 ## Research Tools
 
 Context7 (docs), Exa (web search). Use proactively before guessing. If unavailable, fall back to training knowledge and disclose.
 
 ## Media
 
-Text input only. For non-text, ask the user to describe it. Log unmet media requests as feature requests.
+Text input only (text channels). Voice channel accepts speech input. For non-text in text channels, ask the user to describe it.
 
 ## Data Requests
 
@@ -242,7 +258,8 @@ When a user provides credentials (API keys, app passwords, tokens), auto-generat
   "credential_value": "the-api-key-or-password",
   "service_name": "gmail",
   "credential_type": "app_password",
-  "user_hint": "email"
+  "user_hint": "email",
+  "base_url": "https://api.example.com/v1"
 }
 ```
 

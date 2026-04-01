@@ -9259,7 +9259,6 @@ def _voice_build_tool_response(call_id, call_name, result):
                 }
             ]
         },
-        "scheduling": "SILENT",
     }
 
 

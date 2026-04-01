@@ -9053,20 +9053,13 @@ def _voice_build_system_prompt(tool_names=None):
     prompt = (
         "You are GooseClaw, a personal AI assistant with voice and tool capabilities. "
         "You speak naturally and conversationally. Keep responses concise since this is a voice conversation. "
-        "You have access to real tools that let you take actions on behalf of the user. "
-        "Use them proactively when the user asks you to do something actionable. "
-        "Before calling a tool, briefly acknowledge naturally like a human assistant would. "
-        "After the tool returns, summarize the result conversationally."
+        "You have one powerful tool called 'assistant' that can do almost anything: "
+        "check emails, manage calendar, search the web, remember things, read/write files, "
+        "run code, manage todos, and much more. The user has their own credentials and integrations set up. "
+        "When the user asks you to DO something (not just chat), call the assistant tool with their request. "
+        "Before calling, briefly acknowledge naturally. After the result, summarize conversationally. "
+        "Never say you can't do something without trying the assistant tool first."
     )
-    if tool_names:
-        tool_list = ", ".join(tool_names)
-        prompt += (
-            f"\n\nYou have access to these tools: {tool_list}. "
-            "When the user asks you to do something that requires a tool, call it. "
-            "For example: 'send an email' -> use Gmail. 'what's on my calendar' -> use Google Calendar. "
-            "'remember this' -> use memory. 'search for' -> use web search. "
-            "After using a tool, summarize the result briefly in speech."
-        )
     return prompt
 
 
@@ -9180,66 +9173,40 @@ def _vlog(msg):
 
 
 def _discover_voice_tools():
-    """Query goosed for enabled extensions, return (Gemini function declarations, name_map).
+    """Return a single 'assistant' tool that routes all requests through goosed/Claude.
 
     Returns:
-        tuple: (list of function declaration dicts, dict mapping sanitized_name -> original_name)
+        tuple: (list with one function declaration, name_map)
     """
-    try:
-        conn = _goosed_conn(timeout=5)
-        conn.request("GET", "/config", headers={"X-Secret-Key": _INTERNAL_GOOSE_TOKEN})
-        resp = conn.getresponse()
-        if resp.status != 200:
-            resp.read()
-            conn.close()
-            return [], {}
-        cfg = json.loads(resp.read().decode("utf-8", errors="replace"))
-        conn.close()
-
-        extensions = cfg.get("config", {}).get("extensions", {})
-        declarations = []
-        name_map = {}
-        for ext_name, ext_cfg in extensions.items():
-            if not isinstance(ext_cfg, dict):
-                continue
-            if ext_cfg.get("enabled") is False:
-                continue
-            safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', ext_name)
-            if safe_name and safe_name[0].isdigit():
-                safe_name = "ext_" + safe_name
-            # Use extension's own description if available, otherwise derive from name
-            desc = ext_cfg.get("description", "").strip()
-            if not desc:
-                # Humanize the extension name: "google-calendar" -> "Google Calendar"
-                human_name = ext_name.replace("_", " ").replace("-", " ").title()
-                desc = f"Use {human_name} to perform actions on the user's behalf"
-            declarations.append({
-                "name": safe_name,
-                "description": desc,
-                "parameters": {
-                    "type": "OBJECT",
-                    "properties": {
-                        "request": {
-                            "type": "STRING",
-                            "description": f"Natural language description of what to do with {ext_name}",
-                        }
-                    },
-                    "required": ["request"],
-                },
-            })
-            name_map[safe_name] = ext_name
-        return declarations, name_map
-    except Exception as e:
-        _voice_log.warning(f"Tool discovery failed: {e}")
-        return [], {}
+    declarations = [{
+        "name": "assistant",
+        "description": (
+            "A powerful assistant that can perform any task: check emails, manage calendar, "
+            "search the web, remember things, read/write files, run code, manage todos, "
+            "access knowledge base, and more. The user has their own credentials and "
+            "integrations configured. Pass the user's request as-is."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "request": {
+                    "type": "STRING",
+                    "description": "The user's request in natural language, exactly as they said it",
+                }
+            },
+            "required": ["request"],
+        },
+    }]
+    name_map = {"assistant": "assistant"}
+    return declarations, name_map
 
 
 def _voice_execute_tool(tool_name, tool_args, session_id, original_name):
     """Execute a tool call via goosed and return result dict."""
     try:
         request = tool_args.get("request", str(tool_args))
-        prompt = f"Use the {original_name} tool: {request}"
-        response_text, error_string, _media = _do_rest_relay(prompt, session_id, timeout=15)
+        prompt = request  # send raw request to goosed, let Claude figure out how
+        response_text, error_string, _media = _do_rest_relay(prompt, session_id, timeout=30)
         if error_string:
             return {"error": error_string}
         return {"result": response_text[:2000]}

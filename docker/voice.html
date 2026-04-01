@@ -1551,12 +1551,21 @@
       return d.innerHTML;
     }
 
+    var _toolCounter = 0;
+    var _activeToolEls = {};  // name -> element (only while running)
+
     function addToolStatus(name, status, result) {
-      var el = document.getElementById('tool-' + name.replace(/[^a-zA-Z0-9]/g, '-'));
+      var el = _activeToolEls[name];
       if (!el) {
+        _toolCounter++;
         el = document.createElement('div');
-        el.id = 'tool-' + name.replace(/[^a-zA-Z0-9]/g, '-');
+        el.id = 'tool-' + _toolCounter;
         document.getElementById('transcript').appendChild(el);
+        _activeToolEls[name] = el;
+      }
+      // Clear tracking once done/error/cancelled so next call creates new element
+      if (status !== 'running') {
+        delete _activeToolEls[name];
       }
       el.className = 'tool-status' + (status === 'error' ? ' error' : '') +
                      (status === 'cancelled' ? ' cancelled' : '');
@@ -1854,9 +1863,16 @@
 
     document.addEventListener('visibilitychange', function() {
       if (document.visibilityState === 'visible'
-          && currentState !== STATE.DISCONNECTED
-          && wakeLock === null) {
-        requestWakeLock();
+          && currentState !== STATE.DISCONNECTED) {
+        // Resume AudioContext (browsers suspend it on background tabs)
+        if (audioContext && audioContext.state === 'suspended') {
+          audioContext.resume().then(function() {
+            console.log('[voice] AudioContext resumed after tab focus');
+          });
+        }
+        if (wakeLock === null) {
+          requestWakeLock();
+        }
       }
     });
 

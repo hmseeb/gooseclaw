@@ -9048,8 +9048,26 @@ def _voice_session_token_validate(token):
         return entry["api_key"]
 
 
+def _voice_load_identity():
+    """Load identity files (soul.md, user.md) for voice system prompt."""
+    identity = ""
+    for fname in ["soul.md", "user.md"]:
+        fpath = os.path.join(DATA_DIR, "identity", fname)
+        try:
+            with open(fpath) as f:
+                content = f.read().strip()
+            if content:
+                identity += f"\n\n## {fname}\n{content}"
+        except (FileNotFoundError, PermissionError):
+            pass
+    return identity
+
+
 def _voice_build_system_prompt(tool_names=None):
-    """Build system prompt for voice sessions with tool awareness."""
+    """Build system prompt for voice sessions with identity + tool awareness."""
+    # Load identity context (same files text mode uses via .goosehints)
+    identity = _voice_load_identity()
+
     prompt = (
         "You are GooseClaw, a personal AI assistant with voice and tool capabilities. "
         "You speak naturally and conversationally. Keep responses concise since this is a voice conversation. "
@@ -9059,11 +9077,13 @@ def _voice_build_system_prompt(tool_names=None):
         "After the tool returns, summarize the result conversationally. "
         "Never say you can't do something without trying a tool first."
     )
+    if identity:
+        prompt += f"\n\n# Identity & User Context\n{identity}"
     if tool_names:
         tool_list = ", ".join(tool_names)
         prompt += (
             f"\n\nYour tools: {tool_list}. "
-            "Use the specific tool when it matches the task (e.g. knowledge for knowledge base, "
+            "Use the specific tool when it matches (e.g. knowledge for knowledge base, "
             "exa for web search, memory/mem0 for remembering things). "
             "Use 'assistant' for anything not covered by a specific tool (emails, calendar, scripts, etc.)."
         )

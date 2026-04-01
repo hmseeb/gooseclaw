@@ -219,6 +219,8 @@ Real-time voice via Gemini Live API (WebSocket). Available at `/voice`.
 
 **Browser support:** Chrome (recommended), Firefox (likely works). Safari/WebKit NOT supported (TCP drops during audio streaming).
 
+**Voice tool config:** per-user blocklist/allowlist at `GET/POST /api/voice/tools`. Defaults block generic REST wrappers and mem0 (routed through goosed instead). Users can override via text: "enable brave search for voice" or "disable github tools for voice". API: `POST /api/voice/tools {"add_blocklist": ["ext_name"]}` or `{"remove_blocklist": [...]}`, `{"add_allowlist": [...]}`, `{"remove_allowlist": [...]}`.
+
 **Voice LLM:** Gemini 3.1 Flash Live Preview. Voice name configurable per user (saved in preferences).
 
 **Identity:** Voice loads the same identity files as text (soul.md, user.md, system-core.md, turn-rules.md, system.md).

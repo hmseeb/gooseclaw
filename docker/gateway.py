@@ -9980,15 +9980,18 @@ def _discover_voice_tools():
     declarations = []
     name_map = {}  # tool_name -> {"source": "mcp"|"goosed", "ext_name": str}
 
-    # Voice tool blocklist - exclude extensions that don't work well with voice.
-    # Generic REST API wrappers confuse Gemini (it doesn't know API paths/params).
-    _VOICE_MCP_BLOCKLIST = {
+    # Default blocklist + user overrides from voice_prefs.json
+    _DEFAULT_BLOCKLIST = {
         "brave_search_api",  # exa handles search, brave's raw REST is unusable
         "groq_api", "openrouter_api",  # LLM provider APIs, not voice-useful
         "browserbase_api",  # browser automation, not voice-useful
         "ensue_api",  # not voice-useful
         "mem0-memory",  # route through goosed (reuses warm instance, avoids cold embed + file contention)
     }
+    user_tools = _get_voice_tool_config()
+    user_blocklist = set(user_tools.get("blocklist", []))
+    user_allowlist = set(user_tools.get("allowlist", []))  # overrides blocklist
+    _VOICE_MCP_BLOCKLIST = (_DEFAULT_BLOCKLIST | user_blocklist) - user_allowlist
 
     # 1. Direct MCP tools (stdio extensions - the fast path)
     # Pool initializes in background at gateway startup. Trigger if not started yet.
@@ -10237,21 +10240,39 @@ GEMINI_VOICES = [
 ]
 
 
-def _get_voice_preference():
-    """Load saved voice preference, default to Aoede."""
+def _load_voice_prefs():
+    """Load full voice prefs dict."""
     try:
         with open(_VOICE_PREFS_FILE) as f:
-            prefs = json.load(f)
-            return prefs.get("voice_name", "Puck")
+            return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        return "Puck"
+        return {}
+
+
+def _save_voice_prefs(prefs):
+    """Save full voice prefs dict."""
+    os.makedirs(os.path.dirname(_VOICE_PREFS_FILE) or ".", exist_ok=True)
+    with open(_VOICE_PREFS_FILE, "w") as f:
+        json.dump(prefs, f, indent=2)
+
+
+def _get_voice_preference():
+    """Load saved voice name preference."""
+    return _load_voice_prefs().get("voice_name", "Puck")
 
 
 def _set_voice_preference(voice_name):
-    """Save voice preference."""
-    os.makedirs(os.path.dirname(_VOICE_PREFS_FILE) or ".", exist_ok=True)
-    with open(_VOICE_PREFS_FILE, "w") as f:
-        json.dump({"voice_name": voice_name}, f)
+    """Save voice name preference."""
+    prefs = _load_voice_prefs()
+    prefs["voice_name"] = voice_name
+    _save_voice_prefs(prefs)
+
+
+def _get_voice_tool_config():
+    """Get per-user voice tool blocklist/allowlist.
+    Returns dict with 'blocklist' (list of ext names to exclude)."""
+    prefs = _load_voice_prefs()
+    return prefs.get("tools", {})
 
 
 def _voice_save_session(session_data):
@@ -10854,6 +10875,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json(400, {"error": "Missing session ID"})
         elif path == "/api/voice/preference":
             self.handle_voice_preference_get()
+        elif path == "/api/voice/tools":
+            self.handle_voice_tools_get()
         elif path == "/api/voice/debug":
             self.handle_voice_debug()
         elif path.rstrip("/") == "/voice":
@@ -10928,6 +10951,8 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
             self.handle_create_watcher()
         elif path == "/api/voice/preference":
             self.handle_voice_preference_set()
+        elif path == "/api/voice/tools":
+            self.handle_voice_tools_set()
         elif path == "/api/credential-setup":
             self.handle_credential_setup_request()
         elif path == "/api/extension/create":
@@ -11077,6 +11102,62 @@ class GatewayHandler(http.server.BaseHTTPRequestHandler):
         with _voice_debug_lock:
             entries = list(_voice_debug_log)
         self.send_json(200, {"entries": entries, "count": len(entries)})
+
+    def handle_voice_tools_get(self):
+        """GET /api/voice/tools - get voice tool config (blocklist/allowlist)."""
+        if not check_auth(self):
+            return
+        user_tools = _get_voice_tool_config()
+        self.send_json(200, {
+            "defaults": {
+                "blocklist": ["brave_search_api", "groq_api", "openrouter_api",
+                              "browserbase_api", "ensue_api", "mem0-memory"],
+            },
+            "user": user_tools,
+        })
+
+    def handle_voice_tools_set(self):
+        """POST /api/voice/tools - update voice tool config.
+        Body: {"blocklist": ["ext1"], "allowlist": ["ext2"]}
+        Use "add_blocklist"/"remove_blocklist" for incremental changes.
+        """
+        if not check_auth(self):
+            return
+        body = self._read_body()
+        if body is None:
+            return
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            self.send_json(400, {"error": "Invalid JSON"})
+            return
+        prefs = _load_voice_prefs()
+        tools = prefs.get("tools", {})
+        # Full replace
+        if "blocklist" in data:
+            tools["blocklist"] = data["blocklist"]
+        if "allowlist" in data:
+            tools["allowlist"] = data["allowlist"]
+        # Incremental
+        if "add_blocklist" in data:
+            bl = set(tools.get("blocklist", []))
+            bl.update(data["add_blocklist"])
+            tools["blocklist"] = list(bl)
+        if "remove_blocklist" in data:
+            bl = set(tools.get("blocklist", []))
+            bl -= set(data["remove_blocklist"])
+            tools["blocklist"] = list(bl)
+        if "add_allowlist" in data:
+            al = set(tools.get("allowlist", []))
+            al.update(data["add_allowlist"])
+            tools["allowlist"] = list(al)
+        if "remove_allowlist" in data:
+            al = set(tools.get("allowlist", []))
+            al -= set(data["remove_allowlist"])
+            tools["allowlist"] = list(al)
+        prefs["tools"] = tools
+        _save_voice_prefs(prefs)
+        self.send_json(200, {"success": True, "tools": tools})
 
     def handle_voice_preference_get(self):
         """GET /api/voice/preference - get current voice preference."""

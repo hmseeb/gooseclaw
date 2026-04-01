@@ -82,6 +82,7 @@ def generate_extension(
         # Defaults for optional template variables
         "auth_type": "bearer",
         "auth_header": "X-API-Key",
+        "base_url": "",
     }
 
     # Add numbered vault key variables

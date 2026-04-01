@@ -30,9 +30,12 @@ def _build_headers(extra_headers=None):
     return headers
 
 
+_BASE_URL = "${base_url}"
+
+
 def _make_request(method, path, body=None, params=None, headers=None):
     """Make an HTTP request and return the parsed response."""
-    base_url = _vault_get("${vault_prefix}.base_url")
+    base_url = _BASE_URL or _vault_get("${vault_prefix}.base_url")
     url = base_url.rstrip("/") + "/" + path.lstrip("/")
 
     if params:

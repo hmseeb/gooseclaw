@@ -596,6 +596,20 @@ if [ -f "$REGISTRY_FILE" ]; then
     python3 << 'REGEN_EOF'
 import json, sys, os
 sys.path.insert(0, '/app/docker')
+# Well-known base URLs for REST API extensions
+_KNOWN_URLS = {
+    'github': 'https://api.github.com',
+    'slack': 'https://slack.com/api',
+    'gitlab': 'https://gitlab.com/api/v4',
+    'vercel': 'https://api.vercel.com',
+    'railway': 'https://backboard.railway.app/graphql/v2',
+    'brave_search': 'https://api.search.brave.com/res/v1',
+    'groq': 'https://api.groq.com/openai/v1',
+    'openrouter': 'https://openrouter.ai/api/v1',
+    'browserbase': 'https://www.browserbase.com/v1',
+    'agentmail': 'https://api.agentmail.to/v0',
+    'ensue': 'https://api.ensue.io/v1',
+}
 try:
     from extensions.generator import generate_extension
     with open('/data/extensions/registry.json') as f:
@@ -605,13 +619,21 @@ try:
         if not meta.get('enabled', True):
             continue
         try:
+            extra = dict(meta.get('extra_subs', {}))
+            # Backfill base_url from known services if missing
+            if 'base_url' not in extra or not extra['base_url']:
+                prefix = meta.get('vault_prefix', name)
+                for known, url in _KNOWN_URLS.items():
+                    if known in prefix or known in name:
+                        extra['base_url'] = url
+                        break
             path = generate_extension(
                 template_name=meta.get('template', 'rest_api'),
                 extension_name=name,
                 vault_prefix=meta.get('vault_prefix', name),
                 vault_keys=meta.get('vault_keys', []),
                 service_description=meta.get('description', ''),
-                extra_subs=meta.get('extra_subs', {}),
+                extra_subs=extra,
             )
             regen.append(name)
         except Exception as e:

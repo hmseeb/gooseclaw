@@ -52,7 +52,7 @@ def _save_registry(data):
     os.replace(tmp_path, REGISTRY_PATH)
 
 
-def register(name, template, vault_prefix, vault_keys, server_path, description=""):
+def register(name, template, vault_prefix, vault_keys, server_path, description="", extra_subs=None):
     """Add or update an extension in the registry.
 
     Args:
@@ -62,6 +62,7 @@ def register(name, template, vault_prefix, vault_keys, server_path, description=
         vault_keys: List of vault key paths.
         server_path: Absolute path to the generated server.py.
         description: Human-readable description.
+        extra_subs: Optional dict of template substitution overrides (auth_type, base_url, etc.)
 
     Returns:
         The registered entry dict.
@@ -74,6 +75,7 @@ def register(name, template, vault_prefix, vault_keys, server_path, description=
         "vault_keys": vault_keys,
         "server_path": server_path,
         "description": description,
+        "extra_subs": extra_subs or {},
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "enabled": True,
     }

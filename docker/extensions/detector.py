@@ -156,6 +156,7 @@ def classify_credential(credential, user_hint=""):
             "extra_subs": {
                 "auth_type": "bearer",
                 "service_description": "GitHub API",
+                "base_url": "https://api.github.com",
             },
         }
 
@@ -170,6 +171,7 @@ def classify_credential(credential, user_hint=""):
             "extra_subs": {
                 "auth_type": "bearer",
                 "service_description": "Slack API",
+                "base_url": "https://slack.com/api",
             },
         }
 
@@ -184,6 +186,7 @@ def classify_credential(credential, user_hint=""):
             "extra_subs": {
                 "auth_type": "header",
                 "service_description": "AWS API",
+                "base_url": "https://amazonaws.com",
             },
         }
 
@@ -198,6 +201,7 @@ def classify_credential(credential, user_hint=""):
             "extra_subs": {
                 "auth_type": "bearer",
                 "service_description": "GitLab API",
+                "base_url": "https://gitlab.com/api/v4",
             },
         }
 

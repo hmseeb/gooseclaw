@@ -8690,6 +8690,7 @@ def register_generated_extension(template_name, extension_name, vault_prefix,
         vault_keys=vault_keys,
         server_path=server_path,
         description=description,
+        extra_subs=extra_subs,
     )
 
     # 3. Add to config.yaml

@@ -1,194 +1,188 @@
 # Project Research Summary
 
-**Project:** GooseClaw v6.0 Voice Dashboard
-**Domain:** Real-time voice AI web interface (WebSocket audio streaming with Gemini Live API)
-**Researched:** 2026-03-27
-**Confidence:** MEDIUM-HIGH
+**Project:** GooseClaw Auto-Generated MCP Extensions
+**Domain:** AI agent platform extension auto-generation from user credentials
+**Researched:** 2026-04-01
+**Confidence:** HIGH
 
 ## Executive Summary
 
-GooseClaw v6.0 adds a voice channel to an existing self-hosted AI agent platform. The approach is a server-side WebSocket proxy: the browser captures raw PCM audio via Web Audio API, streams it through gateway.py (the existing stdlib-only Python HTTP server), which relays it to Gemini 3.1 Flash Live API for combined STT+LLM+TTS processing. The gateway intercepts Gemini's tool calls to execute MCP tools (memory search, Gmail, calendar) server-side, making this the killer differentiator over ChatGPT voice mode which cannot use tools during voice conversations. Everything is delivered as a single HTML file (voice.html) with no build tooling, matching the existing setup.html pattern.
+GooseClaw needs a system where users drop credentials into chat and get working MCP tool extensions back automatically. The proven approach is template-based code generation, not LLM-written code. Pre-authored Jinja2 templates for each service type (email, calendar, REST API) get rendered with vault key references and registered as stdio MCP servers. The AI's role is narrow: detect credential type, select template, confirm with user. The generated code never touches raw credentials; it reads them from the vault at runtime. This pattern already exists in the codebase (knowledge/server.py, memory/server.py) and extends naturally.
 
-The recommended approach leans heavily into Gemini's native capabilities: built-in VAD, barge-in support, audio transcription, and function calling. This means the gateway is primarily a relay/proxy with selective interception, not a media processor. The hardest engineering challenge is implementing WebSocket protocol (RFC 6455) from scratch in Python stdlib, since gateway.py allows no pip dependencies. This is approximately 200 lines of well-specified protocol code, but audio streams hit every edge case (large binary payloads, extended length fields, masking). Getting the frame parser wrong corrupts audio silently.
+The stack is remarkably lean: only two new pip packages (Jinja2, caldav). Everything else is already installed or stdlib. The architecture adds three new modules to the docker/ directory (detector, generator, registry) without modifying gateway.py's core relay logic. Generated extensions live on the /data persistent volume and survive redeploys via a registry.json manifest that entrypoint.sh reads on boot.
 
-The key risks are: (1) Gemini 3.1 Flash Live is a day-old preview model that may be unstable, with Gemini 2.5 Flash Live as a GA fallback; (2) Railway's proxy kills idle WebSocket connections at 10 minutes, compounding Gemini's own 10-minute connection limit, requiring protocol-level ping/pong and session resumption from day one; (3) synchronous tool calling on 3.1 Flash Live means dead silence during tool execution, requiring aggressive timeouts and "thinking" UI indicators. All three risks have known mitigations but must be designed in from the start, not bolted on later.
+The biggest risks are: (1) credentials leaking into generated source files instead of staying in vault, (2) config.yaml race conditions during extension registration (a documented existing problem), and (3) goosed restarts killing active sessions. All three have proven mitigations in the codebase already. A critical discovery: goosed re-reads config.yaml on every API call, which may eliminate the need for restarts entirely. This needs validation but could remove the worst UX friction.
 
 ## Key Findings
 
 ### Recommended Stack
 
-The entire voice feature ships as additions to two existing files (gateway.py, voice.html) plus vault configuration. No new services, no pip dependencies, no npm, no infrastructure cost beyond Gemini API usage (~$0.15/M input tokens).
+The stack maximizes reuse of existing dependencies. The MCP Python SDK (1.26.0) already provides FastMCP, Pydantic, and httpx. Only two new packages are needed.
 
 **Core technologies:**
-- **Gemini 3.1 Flash Live API** (`gemini-3.1-flash-live-preview`): Single model handles STT + LLM + TTS. 131K context, function calling, audio transcription. Fallback to `gemini-2.5-flash-live-001` (GA) if preview is unstable.
-- **Python stdlib WebSocket (RFC 6455)**: ~200 lines of handshake + frame parsing using hashlib, struct, socket, ssl, base64. Gateway is both WebSocket server (browser-facing) and WebSocket client (Gemini-facing).
-- **Web Audio API (AudioWorklet)**: Browser-native mic capture as raw PCM 16kHz 16-bit mono. Blob URL trick for single-file HTML. No MediaRecorder (wrong tool for real-time streaming).
-- **Server-side proxy architecture**: API key never leaves server. Gateway relays audio and intercepts tool calls. Browser only sees WebSocket frames.
+- **mcp SDK 1.26.0 (FastMCP)**: MCP server runtime for generated extensions. Already in use, zero migration risk.
+- **Jinja2 3.1.6**: Template rendering for code generation. Chosen over string.Template for conditionals/loops, over Cookiecutter/Copier because generation happens at runtime not CLI.
+- **PyYAML 6.0.2**: Config and vault YAML reading. Already installed.
+- **Pydantic 2.12+**: Config validation and credential schemas. Already a transitive dep of mcp SDK.
+- **httpx 0.27+**: HTTP client for REST API template. Already a transitive dep of mcp SDK.
+- **caldav 3.0+**: CalDAV client for calendar template. Only needed for Phase 5 calendar support.
+- **Python stdlib (imaplib, smtplib, re, ast)**: Email template and credential detection. Zero new deps.
 
-**Critical version/format requirements:**
-- Audio input: raw PCM, 16kHz, 16-bit signed, mono, little-endian
-- Audio output: raw PCM, 24kHz, 16-bit signed, mono, little-endian
-- WebSocket frames: browser-to-gateway uses binary; gateway-to-Gemini uses JSON with base64 audio
-- Client WebSocket frames to Gemini MUST be masked per RFC 6455
+**Key stack decision:** Runtime Jinja2 rendering, not static scaffolding. Extensions are single Python files generated during chat, not project structures created via CLI.
 
 ### Expected Features
 
 **Must have (table stakes):**
-- Push-to-talk button with mic permission handling (spacebar hold-to-talk)
-- Real-time bidirectional audio streaming (browser -> gateway -> Gemini -> gateway -> browser)
-- Audio playback of AI responses (streaming, not buffered)
-- Built-in VAD and barge-in support (Gemini handles this natively)
-- Live transcript display (Gemini provides audio transcription)
-- Connection state indicators (disconnected/connecting/listening/thinking/speaking)
-- Ephemeral session auth (reuse existing PBKDF2 cookie auth on WebSocket upgrade)
-- Dashboard gated on Gemini API key presence
-- Graceful error handling (mic denied, WebSocket drop, API errors)
-- Mobile-responsive layout (voice is primarily a mobile use case)
-- Voice visualizer / reactive orb (visual identity, not just a static mic icon)
+- Credential detection in chat (regex for known prefixes + LLM classification)
+- Vault storage with auto-derived service.key paths
+- Template system with email (IMAP/SMTP) and generic REST API templates
+- AI-driven template selection with user confirmation
+- Jinja2 code generation producing FastMCP servers
+- Extension registration in config.yaml with goosed restart
+- Boot-time auto-registration from /data/extensions/
+- Persistent storage on /data volume
+- Works on both voice and text channels (automatic via goosed routing)
 
-**Should have (differentiators -- add after voice pipeline is stable):**
-- Mid-conversation tool calling (the KILLER feature: "check my calendar" actually works, unlike ChatGPT voice)
-- Visual tool execution feedback in transcript
-- Automatic memory extraction from voice sessions (feed transcripts into mem0)
-- Keyboard shortcuts (spacebar hold-to-talk, Escape to disconnect)
-- Conversation history (store and list past voice sessions)
-- Gemini voice selection (30 HD voices available)
-- Screen wake lock for mobile
+**Should have (differentiators):**
+- Zero-config credential detection (paste key, get confirmation, done)
+- Credential validation before generation (IMAP login test, API health check)
+- Extension health checking post-registration
+- Calendar template (CalDAV)
+- Extension management (list, remove, update)
+- Auto service detection from credential format (prefix-to-service mapping)
+- Template preview / dry-run
 
-**Defer (v7+):**
-- Text-to-voice switching (unified typed + spoken thread)
-- Notification bus integration during voice sessions
-- Video/camera input (Gemini supports it, but separate scope)
-- Wake word / always-on listening (browser can't do this well)
-- WebRTC (overkill, breaks tool calling architecture)
+**Defer (v2+):**
+- OAuth device flow (complex, unlocks Google/GitHub/Slack)
+- Hot-reload without restart (investigate goosed config re-read behavior first)
+- OpenAPI-to-MCP generation (powerful but complex)
+- Extension rollback
 
 ### Architecture Approach
 
-Gateway.py acts as a bidirectional WebSocket proxy with selective message interception. It accepts WebSocket connections from the browser on `/ws/voice`, opens an outbound WebSocket client connection to Gemini Live API using stdlib ssl+socket, and relays frames between them in a two-thread relay loop (one thread browser-to-Gemini, one Gemini-to-browser). The only messages it intercepts are `toolCall` from Gemini, which it dispatches to goosed for MCP tool execution. Everything else passes through verbatim. This means the gateway never touches audio data and new Gemini message types automatically work.
+The system adds three new modules alongside existing code, not inside it. Gateway.py (already 12,000+ lines) imports and calls these modules rather than growing further. Each generated extension runs as an isolated stdio MCP server process, matching how knowledge and mem0-memory already work. A registry.json file on the persistent volume is the single source of truth for what auto-generated extensions exist, decoupled from the fragile config.yaml preserve/restore cycle.
 
 **Major components:**
-1. **WebSocket protocol layer** (~200 lines) -- RFC 6455 frame read/write, handshake (server + client), ping/pong, close handling
-2. **Gemini WebSocket client** (~100 lines) -- outbound TLS+WebSocket connection to Gemini, setup config, session management
-3. **Bidirectional relay** (~150 lines) -- two-thread relay loop, shutdown coordination, tool call interception
-4. **voice.html** (~2000 lines) -- mic capture via AudioWorklet, PCM encoding, WebSocket client, audio playback, transcript UI, visualizer, mobile layout
-5. **Tool executor** (~200 lines) -- Gemini function declaration builder, tool dispatch to goosed, timeout handling, cancellation
-6. **Setup wizard integration** (~100 lines) -- Gemini API key field, validation, vault storage, dashboard gating
+1. **Credential Detector** (docker/extensions/detector.py) -- regex pre-filter + LLM classification. Returns structured DetectedCredential, never stores credentials itself.
+2. **Extension Generator** (docker/extensions/generator.py) -- renders Jinja2 templates with vault key references, writes server.py to /data/extensions/{service}/, updates registry.json.
+3. **Extension Registry** (docker/extensions/registry.py) -- JSON-based manifest at /data/extensions/registry.json. Tracks what was generated, from which vault keys, when. Read by entrypoint.sh on boot.
+4. **Template Registry** (docker/extensions/templates/*.py.tmpl) -- pre-authored FastMCP server skeletons. Ship with the container image, versioned with codebase.
+5. **Boot Loader** (entrypoint.sh extension) -- reads registry.json, validates server.py + vault keys exist, injects into config.yaml before goosed starts.
+
+**Key data flows:**
+- Generation: user message -> detector -> vault store -> generator -> registry -> config.yaml -> goosed restart -> tools available
+- Execution: tool call -> goosed -> stdio -> generated server.py -> vault read at runtime -> external service -> response
+- Boot: entrypoint.sh -> read registry.json -> validate -> inject config.yaml -> start goosed
 
 ### Critical Pitfalls
 
-1. **Python http.server not designed for long-lived connections** -- After HTTP 101 handshake, extract the raw socket and hand it to a dedicated WebSocket management loop. Do NOT keep using BaseHTTPRequestHandler methods. Use daemon threads. Cap at 1-2 concurrent WebSocket connections.
+1. **Credentials leaked into generated source code** -- Templates must NEVER interpolate credential values. Use vault env var injection (existing pattern from _inject_vault_secrets_into_env) or runtime `secret get` subprocess. Post-generation lint grep for credential patterns. Fix in Phase 1; getting this wrong means rewriting every template.
 
-2. **Gemini session limits kill calls silently** -- 10-minute connection lifetime (GoAway message), 15-minute audio without compression. Enable context window compression (sliding window) and session resumption from day one. Handle GoAway with auto-reconnect using resumption handle.
+2. **config.yaml race condition on registration** -- Multiple concurrent writers (apply_config, pairings, extension sync) with no file locking. Mitigate with separate registry.json as source of truth, merge into config.yaml only during controlled events (boot, explicit restart). Fix in Phase 2.
 
-3. **Railway proxy kills idle WebSocket connections at 10 minutes** -- Implement WebSocket protocol-level ping/pong every 25 seconds. Application-level heartbeats do NOT satisfy the proxy. This compounds with Gemini's own timeout.
+3. **Goosed restart kills active sessions** -- Registering extensions requires restart, which terminates all MCP servers and in-flight sessions. Mitigate with user confirmation before restart, deferred registration to idle periods, and batch registrations. Fix in Phase 2.
 
-4. **Browser autoplay policy blocks audio playback** -- Create AudioContext inside the mic button click handler, not at page load. Call `audioContext.resume()` and await it. Fails silently on iOS Safari if done wrong.
+4. **AI selects wrong template** -- Credential types are ambiguous (~15-20% misclassification without guardrails). Mitigate with mandatory user confirmation, template manifests declaring required fields, and ast.parse() validation of generated code. Fix in Phase 1 + Phase 4.
 
-5. **Synchronous tool calling blocks voice response** -- On Gemini 3.1 Flash Live, the model literally cannot speak until tool response arrives. Set 2-3 second timeouts on all tool calls. Show "thinking" UI. Track cancelled tool calls from interruptions to avoid orphaned work.
+5. **Stdout corruption in generated extensions** -- Any print() or library logging to stdout breaks MCP JSON-RPC over stdio. Every template must redirect logging to stderr. Fix in Phase 1 (template boilerplate).
+
+6. **Credential detection false positives** -- Hex strings, UUIDs, code variables look like credentials. Use high-specificity patterns for known formats only, always confirm with user before vaulting. Fix in Phase 3.
 
 ## Implications for Roadmap
 
 Based on research, suggested phase structure:
 
-### Phase 1: WebSocket Infrastructure
-**Rationale:** Everything depends on this. Voice, audio, tools -- none of it works without the WebSocket protocol layer and bidirectional relay. Three critical pitfalls (stdlib socket takeover, Railway proxy timeouts, frame parsing bugs) must be solved here.
-**Delivers:** Working WebSocket server (browser-facing) and client (Gemini-facing) in gateway.py with RFC 6455 frame parsing, ping/pong keepalive, and clean session lifecycle.
-**Addresses:** WebSocket proxy in gateway.py (P1 foundation)
-**Avoids:** Pitfalls 1 (http.server long-lived connections), 3 (Railway proxy timeout), 6 (frame parsing bugs)
-**Estimated scope:** ~300-400 lines of Python in gateway.py
+### Phase 1: Template System and Code Generation Pipeline
+**Rationale:** Everything depends on templates existing and generating valid code. This is the foundation. Can be tested entirely without user-facing detection logic by manually triggering generation.
+**Delivers:** Working template engine, email (IMAP/SMTP) template, REST API template, generated server validation (ast.parse + subprocess health check), registry.json schema.
+**Addresses:** Template system, code generation, persistent storage, base template boilerplate (stderr logging, vault reads).
+**Avoids:** Credential leaks (vault-read pattern established day 1), stdout corruption (template boilerplate), template injection (SandboxedEnvironment + input validation).
 
-### Phase 2: Gemini Live API Integration
-**Rationale:** Once WebSocket infra works, connect to Gemini and verify the full audio pipeline end-to-end. Session management (resumption, compression, GoAway handling) must be built in here, not retrofitted.
-**Delivers:** Working outbound connection to Gemini Live API with setup config, session resumption, context window compression, and GoAway auto-reconnect. Ephemeral session auth via existing cookie system.
-**Addresses:** Audio streaming pipeline (P1), ephemeral token auth (P1), session management
-**Avoids:** Pitfall 2 (Gemini session limits)
-**Estimated scope:** ~200 lines of Python in gateway.py
+### Phase 2: Extension Registration and Boot Lifecycle
+**Rationale:** Generated code is useless until it is registered with goosed and survives reboots. This phase makes extensions actually loadable. Depends on Phase 1 producing valid server.py files.
+**Delivers:** Config.yaml writer integration, goosed restart with user confirmation, entrypoint.sh boot loader reading registry.json, extension survive reboot verification.
+**Addresses:** Extension registration, boot-time auto-registration, config.yaml management.
+**Avoids:** Config.yaml race condition (single-writer pattern + registry.json as source of truth), session interruption (deferred/confirmed restart).
 
-### Phase 3: Voice Dashboard UI (voice.html)
-**Rationale:** With the server-side pipeline working, build the browser UI. This is where mic capture, audio playback, transcript display, and visualizer live. AudioWorklet Blob URL trick and iOS autoplay policy must be handled here.
-**Delivers:** Single-file voice.html with push-to-talk, AudioWorklet mic capture (PCM 16kHz), streaming audio playback (24kHz), live transcript, connection state indicators, voice visualizer, and mobile-responsive layout.
-**Addresses:** Push-to-talk (P1), audio playback (P1), live transcript (P1), connection state (P1), voice visualizer (P1), mobile responsive (P1), error handling (P1)
-**Avoids:** Pitfall 4 (autoplay policy), Pitfall 7 (MediaRecorder trap -- use AudioWorklet instead)
-**Estimated scope:** ~2000 lines of HTML/CSS/JS
+### Phase 3: Credential Detection and AI Integration
+**Rationale:** The user-facing piece comes after the pipeline is proven. You can manually test generation + registration in Phases 1-2. Now add the "drop credentials in chat" UX.
+**Delivers:** Regex credential detection for top 20 service prefixes, LLM-based classification for ambiguous cases, vault auto-storage, AI template selection with user confirmation, end-to-end flow from chat message to working extension.
+**Addresses:** Credential detection, AI template selection, vault storage with auto-derived paths, zero-config UX.
+**Avoids:** False positives (high-specificity patterns + mandatory confirmation), wrong template selection (user confirms before generation).
 
-### Phase 4: Tool Calling Integration
-**Rationale:** This is the killer differentiator but sits on top of all previous phases. Debugging tool calling on a flaky voice connection is hell, so the pipeline must be solid first. Synchronous blocking and cancellation handling add significant complexity.
-**Delivers:** Mid-conversation tool execution via goosed MCP tools. Gemini function declarations mapped to available tools. Tool call interception in relay loop. Timeout handling (2-3s max). Cancelled call tracking. Visual feedback in transcript.
-**Addresses:** Mid-conversation tool calling (P2), visual tool execution feedback (P2)
-**Avoids:** Pitfall 5 (synchronous tool calling blocks voice)
-**Estimated scope:** ~200-300 lines of Python, ~200 lines of JS for UI feedback
+### Phase 4: Validation, Health Checks, and Polish
+**Rationale:** Once the core pipeline works end-to-end, add the safety nets. Credential validation catches bad passwords before generating broken extensions. Health checks catch registration failures.
+**Delivers:** Pre-generation credential validation (IMAP login test, API health check), post-registration health verification, extension management tools (list, remove, update), template preview/dry-run, auto service detection from prefix.
+**Addresses:** Credential validation, extension health checking, extension management CRUD, auto service detection, template preview.
+**Avoids:** Wrong template selection (validation catches mismatches), extension crash loops (health check + auto-disable after 3 failures), orphaned extensions (boot-time validation).
 
-### Phase 5: Setup Wizard + Memory + Polish
-**Rationale:** Polish phase. Gemini API key management through setup wizard, conversation history storage, and feeding voice transcripts into mem0 memory pipeline.
-**Delivers:** Gemini key in setup wizard with validation, dashboard gating on key presence, voice session history, automatic memory extraction from voice transcripts, keyboard shortcuts, screen wake lock, voice selection.
-**Addresses:** Setup wizard Gemini key (P1), dashboard gated on key (P1), memory extraction (P2), conversation history (P2), keyboard shortcuts (P2), screen wake lock (P2), voice selection (P2)
+### Phase 5: Additional Templates and Advanced Features
+**Rationale:** New templates are pure content work once the pipeline is stable. CalDAV adds calendar support. OAuth device flow unlocks Google/GitHub/Slack. Each template is independent.
+**Delivers:** Calendar template (CalDAV), multi-credential extension support, OAuth device flow (if pursued), OpenAPI-to-MCP generation (if pursued).
+**Addresses:** Calendar template, multi-credential extensions, OAuth support, service coverage expansion.
+**Avoids:** Dependency issues (caldav pip package added to Docker image with this phase, not before).
 
 ### Phase Ordering Rationale
 
-- **Dependencies flow strictly downward:** WebSocket infra -> Gemini connection -> Browser UI -> Tool calling -> Polish. Each phase requires the previous one to be working.
-- **Pitfall clustering:** Phase 1 addresses 3 of the 7 critical pitfalls because the WebSocket layer is where most things go wrong. Getting this right de-risks everything above it.
-- **Differentiator deferred strategically:** Tool calling (the killer feature) is Phase 4 because it requires a stable voice pipeline. Building the differentiator on a shaky foundation wastes time debugging the wrong layer.
-- **Browser UI is Phase 3 (not Phase 1)** because the server-side pipeline should be testable with a simple WebSocket client (like wscat) before adding the complexity of browser audio APIs.
+- **Templates before detection:** The generation pipeline must produce valid, secure code before any user-facing detection triggers it. Manual testing in Phases 1-2 proves the pipeline works without the complexity of chat-based detection.
+- **Registration before detection:** A generated extension that cannot register is useless. Solving config.yaml management and boot persistence before adding the chat UX avoids shipping a broken end-to-end experience.
+- **Detection after pipeline:** Credential detection is the most complex user-facing piece (regex, LLM classification, false positive handling). Isolating it to Phase 3 lets the team focus on getting the mechanical pipeline right first.
+- **Validation as a separate phase:** Health checks and credential validation are safety nets. They improve reliability but are not required for the core flow to function. Shipping without them is acceptable for early testing.
+- **Templates last:** Adding new service templates is the easiest work once the pipeline exists. Each template is independent and testable in isolation.
 
 ### Research Flags
 
 Phases likely needing deeper research during planning:
-- **Phase 1:** WebSocket RFC 6455 edge cases (fragmentation, close frames, error recovery). Reference: Pithikos/python-websocket-server for stdlib-only implementation patterns.
-- **Phase 2:** Gemini 3.1 Flash Live is a day-old preview model. May need to fall back to 2.5 Flash Live. Session resumption protocol needs validation against live API.
-- **Phase 4:** Tool execution latency through goosed is unknown. May need to bypass goosed for simple tools (direct MCP dispatch) if latency exceeds 2-3 seconds. Gemini cookbook issue #906 suggests tool response format has known issues.
+- **Phase 2:** config.yaml race condition mitigation needs careful analysis of all existing writers (apply_config, pairings, extension sync). The goosed config re-read behavior (does it pick up new extensions without restart?) needs empirical validation.
+- **Phase 3:** Credential detection accuracy vs false positive rate requires testing with real user messages. LLM classification prompt engineering needed.
+- **Phase 5 (OAuth):** OAuth device flow (RFC 8628) is well-documented but integration with vault token refresh requires design work.
 
 Phases with standard patterns (skip research-phase):
-- **Phase 3:** Web Audio API, AudioWorklet, WebSocket client API are all well-documented browser standards. MDN docs are comprehensive.
-- **Phase 5:** Setup wizard integration follows existing patterns in gateway.py. Memory extraction reuses existing mem0 pipeline.
+- **Phase 1:** Jinja2 templating and FastMCP server patterns are well-documented. Existing codebase provides exact patterns to follow (knowledge/server.py, memory/server.py).
+- **Phase 4:** Health checking and extension CRUD are straightforward file/process operations.
 
 ## Confidence Assessment
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | HIGH | All stdlib. RFC 6455 is well-specified. Web Audio API is mature. No dependency risk. |
-| Features | HIGH | Feature landscape well-mapped against competitors. Clear MVP vs. differentiator separation. ChatGPT voice limitations (no tools) validated against official docs. |
-| Architecture | HIGH | Server-side proxy is proven pattern. Data flows verified against Gemini Live API docs. Threading model consistent with existing gateway.py. |
-| Pitfalls | MEDIUM-HIGH | Railway WebSocket timeout confirmed by community reports but not official docs. Gemini 3.1 Flash Live is one day old (preview). Tool calling sync-only limitation confirmed in official docs but workarounds (scheduling parameter) are less documented. |
+| Stack | HIGH | Only 2 new deps. Everything else verified in existing codebase. PyPI versions confirmed. |
+| Features | HIGH | Requirements clear from PROJECT.md. Existing extension pattern is well-understood. |
+| Architecture | HIGH | Follows existing GooseClaw patterns exactly. No novel architecture decisions. |
+| Pitfalls | HIGH | Critical pitfalls grounded in documented codebase issues (config.yaml race condition, goosed restart). Security patterns from MCP ecosystem research. |
 
-**Overall confidence:** MEDIUM-HIGH
+**Overall confidence:** HIGH
 
 ### Gaps to Address
 
-- **Gemini 3.1 Flash Live stability:** Model released 2026-03-26 (yesterday). "Preview" suffix means it could be unstable or change behavior. Must test early and have 2.5 Flash Live fallback ready. This is the biggest unknown.
-- **Ephemeral token REST endpoint:** The REST API for minting ephemeral tokens is reverse-engineered from SDK source, not officially documented. Architecture decision is to use server-side proxy instead, which sidesteps this gap entirely.
-- **Tool execution latency via goosed:** Creating a goosed session + dispatching MCP tool + LLM reasoning could take 2-5 seconds. Unknown until tested with real tools. May need to pre-create goosed sessions or bypass goosed for latency-sensitive tools.
-- **Railway WebSocket behavior:** Timeout confirmed by user reports but not official Railway docs. Need to validate ping/pong keepalive behavior on actual Railway deployment.
-- **Concurrent session limits:** Gemini's per-API-key concurrent session limit is undocumented. Need to test. Single-user app likely means 1 session, but tab-switching behavior needs a policy.
-- **Gemini tool response format:** Cookbook issue #906 suggests the documented `BidiGenerateContentToolResponse` format has issues. Workaround (FunctionResponse Part in clientContent) needs validation.
+- **goosed config re-read without restart:** The comment at gateway.py line 3390-3392 suggests goosed re-reads config.yaml on every API call. If true, this eliminates the restart requirement entirely. Needs empirical validation in Phase 2. Test: add extension to config.yaml while goosed is running, check if tools appear without restart.
+- **caldav library stability in container:** caldav 3.x is marked MEDIUM confidence. Needs testing in the Docker image environment before Phase 5 calendar template work begins.
+- **Credential detection accuracy:** No existing data on false positive rates for the regex approach in real chat messages. Phase 3 should include a test suite with 20+ non-credential strings and 10+ real credential formats.
+- **Extension count scaling:** Architecture assumes 1-15 extensions. No data on goosed behavior with 10+ stdio extension subprocesses. Monitor memory and boot time once real usage data exists.
+- **string.Template vs Jinja2 disagreement:** ARCHITECTURE.md suggests string.Template (stdlib) while STACK.md recommends Jinja2. Recommendation: use Jinja2. Templates will need conditionals (optional SMTP config, optional TLS settings) that string.Template cannot handle. The dependency is already transitively installed via MCP SDK's starlette.
 
 ## Sources
 
 ### Primary (HIGH confidence)
-- [Gemini Live API Overview](https://ai.google.dev/gemini-api/docs/live-api)
-- [Gemini Live API WebSocket Reference](https://ai.google.dev/api/live)
-- [Gemini Live API Getting Started (WebSocket)](https://ai.google.dev/gemini-api/docs/live-api/get-started-websocket)
-- [Gemini Live API Capabilities](https://ai.google.dev/gemini-api/docs/live-api/capabilities)
-- [Gemini Live API Session Management](https://ai.google.dev/gemini-api/docs/live-session)
-- [Gemini Live API Tool Calling](https://ai.google.dev/gemini-api/docs/live-api/tools)
-- [Gemini Ephemeral Tokens](https://ai.google.dev/gemini-api/docs/ephemeral-tokens)
-- [RFC 6455: The WebSocket Protocol](https://www.rfc-editor.org/rfc/rfc6455)
-- [MDN: Writing WebSocket Servers](https://developer.mozilla.org/en-US/docs/Web/API/WebSockets_API/Writing_WebSocket_servers)
-- [MDN: Web Audio API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Audio_API)
-- [MDN: Autoplay Guide](https://developer.mozilla.org/en-US/docs/Web/Media/Guides/Autoplay)
+- GooseClaw codebase: gateway.py (config management, relay, race condition docs), entrypoint.sh (boot sequence, extension registration), knowledge/server.py + memory/server.py (FastMCP patterns), scripts/secret.sh (vault implementation)
+- [MCP Python SDK on PyPI](https://pypi.org/project/mcp/) -- v1.26.0, FastMCP built-in
+- [MCP Python SDK GitHub](https://github.com/modelcontextprotocol/python-sdk) -- dependency tree, pyproject.toml
+- [Jinja2 on PyPI](https://pypi.org/project/Jinja2/) -- v3.1.6
+- [Goose extension docs](https://block.github.io/goose/docs/getting-started/using-extensions/) -- stdio config format
+- [MCP Email Server](https://github.com/ai-zerolab/mcp-email-server) -- reference IMAP/SMTP MCP implementation
 
 ### Secondary (MEDIUM confidence)
-- [Railway WebSocket disconnect reports](https://station.railway.com/questions/socket-disconnects-after-10-minutes-bbceef40)
-- [Gemini Live API Examples (GitHub)](https://github.com/google-gemini/gemini-live-api-examples)
-- [google-gemini/live-api-web-console](https://github.com/google-gemini/live-api-web-console)
-- [Pithikos/python-websocket-server](https://github.com/Pithikos/python-websocket-server)
-- [ChatGPT Voice Mode Unified Interface (TechCrunch)](https://techcrunch.com/2025/11/25/chatgpts-voice-mode-is-no-longer-a-separate-interface/)
-- [python-genai SDK tokens.py](https://github.com/googleapis/python-genai/blob/main/google/genai/tokens.py)
+- [caldav on PyPI](https://pypi.org/project/caldav/) -- v3.x, Python 3.10+
+- [secrets-patterns-db](https://github.com/mazen160/secrets-patterns-db) -- 1600+ credential regex patterns
+- [MCP security best practices - Doppler](https://www.doppler.com/blog/mcp-server-credential-security-best-practices)
+- [MCP Hot-Reload (mcp-hmr)](https://pypi.org/project/mcp-hmr/) -- v0.0.3.3
+- [Goose recipe system](https://www.pulsemcp.com/building-agents-with-goose) -- YAML workflow packaging
+- [Chronos MCP (CalDAV)](https://github.com/democratize-technology/chronos-mcp) -- CalDAV reference implementation
+- [openapi-mcp-generator](https://github.com/harsha-iiiv/openapi-mcp-generator) -- OpenAPI-to-MCP generation
 
 ### Tertiary (LOW confidence)
-- [Gemini cookbook issue #906: tool response format workaround](https://github.com/google-gemini/cookbook/issues/906)
-- [Gemini Live API error 1008 during function calling](https://discuss.google.dev/t/gemini-live-api-apierror-1008-policy-violation-during-function-calling/337832)
-- [python-genai issue #803: function call hangs](https://github.com/googleapis/python-genai/issues/803)
+- goosed config re-read behavior (inferred from gateway.py comment, needs empirical validation)
+- Extension count scaling limits (estimated from Python process memory, no real-world data)
 
 ---
-*Research completed: 2026-03-27*
+*Research completed: 2026-04-01*
 *Ready for roadmap: yes*

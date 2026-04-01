@@ -1,947 +1,494 @@
-# Architecture: Voice Dashboard Integration
+# Architecture Research: Auto-Generated MCP Extensions
 
-**Domain:** Real-time voice AI dashboard for GooseClaw
-**Researched:** 2026-03-27
-**Confidence:** HIGH (verified against Gemini Live API docs, existing gateway.py codebase, RFC 6455)
+**Domain:** MCP extension auto-generation for AI agent platform
+**Researched:** 2026-04-01
+**Confidence:** HIGH (based on codebase analysis of existing patterns + MCP protocol docs)
 
 ## System Overview
 
-### Current Architecture (Relevant Components)
-
 ```
-+-------------------------------------------------------------------+
-|                    Railway Container                                |
-|-------------------------------------------------------------------|
-|                                                                    |
-|  entrypoint.sh                                                     |
-|       |                                                            |
-|       +-- gateway.py (ThreadingHTTPServer, stdlib only, ~10K lines)|
-|       |       |                                                    |
-|       |       +-- do_GET / do_POST routing                         |
-|       |       |   +-- /setup -> setup.html (self-contained)        |
-|       |       |   +-- /admin -> admin.html (self-contained)        |
-|       |       |   +-- /login -> login page                         |
-|       |       |   +-- /api/* -> JSON endpoints                     |
-|       |       |   +-- /* -> proxy_to_goose() (reverse proxy)       |
-|       |       |                                                    |
-|       |       +-- goosed lifecycle (start, restart, health)        |
-|       |       +-- channel plugins (Telegram, etc.)                 |
-|       |       +-- job engine, cron, notification bus               |
-|       |                                                            |
-|       +-- channel plugins (/data/channels/*.py)                    |
-|                                                                    |
-|  /data/secrets/vault.yaml  (API keys)                              |
-|  /data/config/setup.json   (provider config)                       |
-+-------------------------------------------------------------------+
-```
-
-### Target Architecture (Voice Dashboard Added)
-
-```
-+-------------------------------------------------------------------+
-|                    Railway Container                                |
-|-------------------------------------------------------------------|
-|                                                                    |
-|  gateway.py                                                        |
-|       |                                                            |
-|       +-- do_GET routing                                           |
-|       |   +-- /voice -> voice.html (NEW, self-contained)           |
-|       |   +-- /api/voice/token -> mint ephemeral session (NEW)     |
-|       |   +-- /api/voice/tools -> list available tools (NEW)       |
-|       |   +-- /setup, /admin, /login (unchanged)                   |
-|       |                                                            |
-|       +-- WebSocket upgrade detection (NEW)                        |
-|       |   +-- /ws/voice -> voice WebSocket handler                 |
-|       |       +-- Thread-per-connection (matches ThreadingHTTP)    |
-|       |       +-- Bidirectional relay:                              |
-|       |           browser <-> gateway.py <-> Gemini Live API       |
-|       |       +-- Tool call interception and execution             |
-|       |                                                            |
-|       +-- Gemini Live API client (NEW, stdlib ssl+socket)          |
-|       |   +-- WebSocket client to wss://generativelanguage...      |
-|       |   +-- API key from vault (never exposed to browser)        |
-|       |                                                            |
-|       +-- Tool executor (NEW)                                      |
-|       |   +-- Dispatches Gemini function calls to goosed           |
-|       |   +-- Returns results back through WebSocket               |
-|       |                                                            |
-|       +-- goosed lifecycle, channels, jobs (unchanged)             |
-|                                                                    |
-|  /data/secrets/vault.yaml  (+ GEMINI_API_KEY)                      |
-|  /data/config/setup.json   (+ gemini key flag)                     |
-+-------------------------------------------------------------------+
+┌─────────────────────────────────────────────────────────────────────┐
+│                       User Interface Layer                          │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐               │
+│  │  Web Chat     │  │  Telegram     │  │  Voice        │              │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘               │
+│         └──────────────────┼──────────────────┘                      │
+│                            v                                         │
+├──────────────────────────────────────────────────────────────────────┤
+│                       Gateway (gateway.py)                           │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌────────────────────┐  │
+│  │ Credential        │  │ Extension         │  │ Config Writer      │  │
+│  │ Detector          │  │ Generator         │  │ (config.yaml)      │  │
+│  │ (NEW)             │  │ (NEW)             │  │ (EXISTING)         │  │
+│  └────────┬─────────┘  └────────┬─────────┘  └────────┬───────────┘  │
+│           │  detect              │  generate           │  register    │
+│           v                      v                      v             │
+├──────────────────────────────────────────────────────────────────────┤
+│                       Data / Storage Layer                           │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐               │
+│  │ Vault         │  │ Templates    │  │ Generated    │               │
+│  │ vault.yaml    │  │ /app/docker/ │  │ Extensions   │               │
+│  │ /data/secrets │  │ templates/   │  │ /data/       │               │
+│  │ (EXISTING)    │  │ (NEW)        │  │ extensions/  │               │
+│  └──────────────┘  └──────────────┘  │ (NEW)        │               │
+│                                       └──────────────┘               │
+├──────────────────────────────────────────────────────────────────────┤
+│                       Runtime Layer                                  │
+│  ┌──────────────────────────────────────────────────────────────────┐│
+│  │                    goosed (tool runtime)                          ││
+│  │  extensions:                                                      ││
+│  │    developer (builtin)                                            ││
+│  │    context7 (stdio/npx)                                           ││
+│  │    knowledge (stdio/python3)     <-- existing pattern             ││
+│  │    mem0-memory (stdio/python3)   <-- existing pattern             ││
+│  │    email (stdio/python3)         <-- AUTO-GENERATED               ││
+│  │    calendar (stdio/python3)      <-- AUTO-GENERATED               ││
+│  └──────────────────────────────────────────────────────────────────┘│
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
-## Core Architectural Decision: Server-Side WebSocket Proxy
+## Component Responsibilities
 
-**Decision: gateway.py acts as a WebSocket proxy between browser and Gemini Live API. The browser never sees the Gemini API key.**
+| Component | Responsibility | Communicates With |
+|-----------|---------------|-------------------|
+| **Credential Detector** | Recognizes API keys, app passwords, OAuth tokens in chat messages. Classifies credential type (IMAP, CalDAV, REST API, OAuth). Stores to vault via `secret` CLI. | Gateway relay, Vault, Extension Generator |
+| **Extension Generator** | Selects correct template for credential type. Renders template with vault references (not raw creds). Writes generated MCP server .py file to /data/extensions/. | Templates, Vault (read-only references), Config Writer |
+| **Template Registry** | Stores template files for each service type. Each template is a complete FastMCP server skeleton with placeholder credential reads. | Extension Generator (consumed by) |
+| **Config Writer** | Adds generated extension entry to config.yaml. Handles the preserve/restore cycle that entrypoint.sh already uses. | goosed config.yaml, Extension Generator |
+| **Boot Loader** | On container restart, re-registers all /data/extensions/*.py into config.yaml. Validates extensions still have valid vault credentials. | entrypoint.sh, config.yaml, Vault |
+| **Vault** (existing) | Stores credentials at /data/secrets/vault.yaml. Read via `secret get service.key`. | All components that need credentials |
 
-### Why Server-Side Proxy (Not Direct Browser-to-Gemini)
-
-| Approach | Security | Complexity | Stdlib Compatible |
-|----------|----------|------------|-------------------|
-| Browser direct to Gemini (API key in JS) | BAD: key exposed | Low | N/A |
-| Ephemeral token (browser direct with short-lived token) | Good | Medium | NO: requires `google-genai` SDK for token minting, REST endpoint undocumented |
-| Server-side WebSocket proxy | Good: key stays server-side | Medium | YES: stdlib socket + ssl |
-
-**Ephemeral tokens are the "right" approach per Google's docs, but the REST API for minting tokens is undocumented.** Google only provides SDK methods (`client.auth_tokens.create()`). Since gateway.py is stdlib-only (no pip), we cannot import the google-genai SDK. The underlying REST endpoint exists but is not publicly documented, making it fragile to reverse-engineer.
-
-The server-side proxy approach:
-1. Keeps the API key on the server (vault.yaml). Browser never sees it.
-2. Uses stdlib `ssl` + `socket` to open a WebSocket client connection to Gemini.
-3. Uses stdlib `socket` to accept a WebSocket connection from the browser.
-4. Relays JSON messages bidirectionally in a dedicated thread per connection.
-5. Intercepts `toolCall` messages from Gemini to execute tools server-side.
-
-This is architecturally similar to how `proxy_to_goose()` already works (gateway.py proxies HTTP to goosed), except bidirectional and persistent.
-
-## Component Boundaries
-
-| Component | Responsibility | New/Modified | Communicates With |
-|-----------|---------------|-------------|-------------------|
-| **voice.html** | Voice dashboard UI (mic, visualizer, transcript) | NEW | gateway.py (WebSocket + REST APIs) |
-| **WebSocket acceptor** | Detect WS upgrade on /ws/voice, perform handshake | NEW (in gateway.py) | Browser WebSocket |
-| **WebSocket proxy loop** | Bidirectional relay: browser frames <-> Gemini frames | NEW (in gateway.py) | Browser, Gemini Live API |
-| **Gemini WS client** | Open outbound WebSocket to Gemini, send setup config | NEW (in gateway.py) | Gemini Live API (wss://) |
-| **Tool executor** | Intercept toolCall from Gemini, dispatch to goosed, return toolResponse | NEW (in gateway.py) | goosed (/agent/reply REST) |
-| **Voice API endpoints** | /api/voice/token (session init), /api/voice/tools (tool list) | NEW (in gateway.py) | voice.html |
-| **Setup wizard** | Add Gemini API key as optional provider | MODIFIED | vault.yaml |
-| **Vault** | Store GEMINI_API_KEY | MODIFIED (new key) | gateway.py |
-| **gateway.py routing** | Add /voice, /ws/voice, /api/voice/* routes | MODIFIED | All voice components |
-
-## Data Flows
-
-### Flow 1: Voice Session Establishment
+## Recommended Project Structure
 
 ```
-Browser                    gateway.py                    Gemini Live API
-   |                          |                              |
-   |  GET /voice              |                              |
-   |  (with auth cookie)      |                              |
-   |------------------------->|                              |
-   |  <- voice.html           |                              |
-   |                          |                              |
-   |  GET /api/voice/token    |                              |
-   |  (check Gemini key)      |                              |
-   |------------------------->|                              |
-   |  <- {ready: true,        |                              |
-   |      tools: [...]}       |                              |
-   |                          |                              |
-   |  WS Upgrade: /ws/voice   |                              |
-   |  Sec-WebSocket-Key: xxx  |                              |
-   |------------------------->|                              |
-   |  <- 101 Switching Proto  |                              |
-   |                          |                              |
-   |  (WS open)               |  WS Connect to:             |
-   |                          |  wss://generativelanguage..  |
-   |                          |  ?key=GEMINI_API_KEY         |
-   |                          |-------------------------->   |
-   |                          |  <- WS open                  |
-   |                          |                              |
-   |                          |  Send setup config:          |
-   |                          |  {config: {model: ...,       |
-   |                          |   tools: [...],              |
-   |                          |   responseModalities: [AUDIO]|
-   |                          |   systemInstruction: ...}}   |
-   |                          |-------------------------->   |
-   |                          |  <- {setupComplete: ...}     |
-   |                          |                              |
-   |  <- {type: "ready"}      |                              |
+docker/
+├── extensions/                    # NEW: auto-generation system
+│   ├── __init__.py
+│   ├── detector.py                # Credential detection + classification
+│   ├── generator.py               # Template rendering + file writing
+│   ├── registry.py                # Extension registry (what's generated, status)
+│   └── templates/                 # Service-specific MCP server templates
+│       ├── base.py.tmpl           # Shared FastMCP boilerplate
+│       ├── email_imap.py.tmpl     # IMAP/SMTP email extension
+│       ├── calendar_caldav.py.tmpl # CalDAV calendar extension
+│       ├── rest_api.py.tmpl       # Generic REST API extension
+│       └── oauth_service.py.tmpl  # OAuth-based service extension
+/data/
+├── extensions/                    # Generated extensions (persists across deploys)
+│   ├── registry.json              # Metadata: what was generated, when, from what creds
+│   └── email_fastmail/            # One dir per generated extension
+│       └── server.py              # The generated FastMCP MCP server
+├── secrets/
+│   └── vault.yaml                 # Credentials (existing)
+└── config/
+    └── config.yaml                # goosed config with extension entries (existing)
 ```
 
-### Flow 2: Audio Streaming (Ongoing)
+### Structure Rationale
 
-```
-Browser                    gateway.py                    Gemini Live API
-   |                          |                              |
-   |  mic audio chunk         |                              |
-   |  (PCM 16kHz, base64)     |                              |
-   |  {realtimeInput: {       |                              |
-   |    audio: {data: "...",  |                              |
-   |    mimeType: "audio/pcm  |                              |
-   |    ;rate=16000"}}}        |                              |
-   |------------------------->|                              |
-   |                          |  Forward verbatim            |
-   |                          |-------------------------->   |
-   |                          |                              |
-   |                          |  <- {serverContent: {        |
-   |                          |       modelTurn: {parts: [{  |
-   |                          |         inlineData: {        |
-   |                          |           data: "base64...", |
-   |                          |           mimeType: "audio   |
-   |                          |           /pcm;rate=24000"   |
-   |                          |       }}]}}}                 |
-   |                          |                              |
-   |  <- forward verbatim     |                              |
-   |  (browser plays audio)   |                              |
-   |                          |                              |
-   |                          |  <- {serverContent: {        |
-   |                          |       outputTranscription:   |
-   |                          |       {text: "Hello!"}}}     |
-   |  <- forward verbatim     |                              |
-   |  (browser shows text)    |                              |
-```
+- **docker/extensions/templates/**: Ships with the container image. Templates are versioned with the codebase, not user data. Uses `.py.tmpl` suffix to distinguish from executable Python.
+- **/data/extensions/**: On the persistent volume. Generated servers survive redeploys. Each extension gets its own subdirectory for isolation (future: requirements.txt per extension).
+- **/data/extensions/registry.json**: Tracks what was generated, from which vault keys, and when. Enables re-generation on template updates and orphan cleanup.
+- **detector.py, generator.py, registry.py**: Separate files in docker/extensions/ rather than inline in gateway.py (which is already 12,000+ lines). Gateway imports and calls these modules.
 
-### Flow 3: Tool Calling (Mid-Conversation)
+## Architectural Patterns
 
-```
-Browser                    gateway.py                    Gemini Live API
-   |                          |                              |
-   |                          |  <- {toolCall: {             |
-   |                          |       functionCalls: [{      |
-   |                          |         id: "call_123",      |
-   |                          |         name: "search_email",|
-   |                          |         args: {q: "meeting"} |
-   |                          |       }]}}                   |
-   |                          |                              |
-   |  <- {type: "tool_call",  |                              |
-   |      name: "search_email"|  (notify browser for UI)     |
-   |      status: "executing"}|                              |
-   |                          |                              |
-   |                          |  Execute tool via goosed:    |
-   |                          |  POST /agent/reply           |
-   |                          |  session_id, tool prompt     |
-   |                          |  (or direct MCP dispatch)    |
-   |                          |                              |
-   |                          |  tool result: {...}          |
-   |                          |                              |
-   |                          |  Send to Gemini:             |
-   |                          |  {toolResponse: {            |
-   |                          |    functionResponses: [{     |
-   |                          |      id: "call_123",         |
-   |                          |      name: "search_email",   |
-   |                          |      response: {result: ...} |
-   |                          |    }]}}                       |
-   |                          |-------------------------->   |
-   |                          |                              |
-   |  <- {type: "tool_call",  |                              |
-   |      name: "search_email"|                              |
-   |      status: "complete"} |                              |
-   |                          |                              |
-   |                          |  <- {serverContent: ...}     |
-   |                          |  (Gemini speaks the result)  |
-   |  <- audio response       |                              |
-```
+### Pattern 1: Template-Based Code Generation (not AI-generated)
 
-### Flow 4: Session Cleanup
+**What:** Pre-authored Python FastMCP server templates with placeholder variables. The generator does string substitution, not LLM code generation.
+**When to use:** Always. Every generated extension uses a template.
+**Trade-offs:** Limited to supported service types (templates must exist), but deterministic, fast, and auditable. AI selects which template, not what code to write.
 
-```
-Browser                    gateway.py                    Gemini Live API
-   |                          |                              |
-   |  WS close frame          |                              |
-   |------------------------->|                              |
-   |                          |  WS close frame              |
-   |                          |-------------------------->   |
-   |                          |                              |
-   |                          |  Cleanup:                    |
-   |                          |  - Close Gemini socket       |
-   |                          |  - Remove session from map   |
-   |                          |  - Log session stats         |
-   |                          |  (thread exits naturally)    |
-```
+**Why not LLM-generated code:** LLM-generated MCP servers would be non-deterministic, hard to debug, potential security risk (arbitrary code from model output), and slow. Templates are the right call here. The LLM's role is limited to: (1) detecting credential type from user message, (2) selecting the correct template name.
 
-## WebSocket Implementation in Python Stdlib
-
-**This is the hardest part of the build.** Python's `http.server` module has no WebSocket support. The WebSocket protocol (RFC 6455) must be implemented from scratch using stdlib modules.
-
-### Required stdlib Modules
-
-| Module | Purpose |
-|--------|---------|
-| `socket` | Raw TCP for outbound Gemini connection |
-| `ssl` | TLS wrapping for wss:// to Gemini |
-| `hashlib` | SHA-1 for WebSocket handshake accept key |
-| `base64` | Base64 for handshake + audio data |
-| `struct` | Binary frame packing/unpacking |
-| `threading` | Thread-per-connection (consistent with ThreadingHTTPServer) |
-| `json` | Message serialization (Gemini protocol is JSON over WebSocket text frames) |
-
-### WebSocket Server Handshake (Browser -> Gateway)
-
+**Example template (email_imap.py.tmpl):**
 ```python
-# In GatewayHandler.do_GET, detect WebSocket upgrade:
-def do_GET(self):
-    if (self.headers.get("Upgrade", "").lower() == "websocket" and
-        path == "/ws/voice"):
-        self._handle_voice_websocket()
-        return
-    # ... existing routing ...
+"""Auto-generated MCP extension: ${service_name} Email
+Generated: ${generated_at}
+Vault keys: ${vault_keys}
+"""
+import os
+import sys
+import subprocess
+import imaplib
+import smtplib
+import email
+from mcp.server.fastmcp import FastMCP
 
-def _handle_voice_websocket(self):
-    """Upgrade HTTP connection to WebSocket, then proxy to Gemini."""
-    # 1. Validate auth (cookie or query param token)
-    if not check_auth(self):
-        self.send_error(401)
-        return
+mcp = FastMCP("${extension_name}")
 
-    # 2. Check Gemini API key exists in vault
-    gemini_key = _get_gemini_api_key()
-    if not gemini_key:
-        self.send_error(503, "Gemini API key not configured")
-        return
-
-    # 3. Perform WebSocket handshake
-    ws_key = self.headers.get("Sec-WebSocket-Key", "")
-    MAGIC = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-    accept = base64.b64encode(
-        hashlib.sha1((ws_key + MAGIC).encode()).digest()
-    ).decode()
-
-    self.send_response(101, "Switching Protocols")
-    self.send_header("Upgrade", "websocket")
-    self.send_header("Connection", "Upgrade")
-    self.send_header("Sec-WebSocket-Accept", accept)
-    self.end_headers()
-
-    # 4. Connection is now WebSocket. Take over the socket.
-    browser_sock = self.request  # the raw socket
-    browser_sock.settimeout(None)  # no timeout for long-lived WS
-
-    # 5. Open outbound WebSocket to Gemini
-    gemini_sock = _connect_gemini_ws(gemini_key)
-
-    # 6. Send Gemini setup config
-    _ws_send_text(gemini_sock, json.dumps({
-        "setup": {
-            "model": "models/gemini-2.0-flash-live-001",
-            "generationConfig": {
-                "responseModalities": ["AUDIO"],
-                "speechConfig": {
-                    "voiceConfig": {
-                        "prebuiltVoiceConfig": {"voiceName": "Kore"}
-                    }
-                }
-            },
-            "systemInstruction": {
-                "parts": [{"text": _build_system_prompt()}]
-            },
-            "tools": _build_tool_declarations()
-        }
-    }))
-
-    # 7. Wait for setupComplete from Gemini
-    setup_resp = _ws_recv(gemini_sock)
-    _ws_send_text(browser_sock, json.dumps({"type": "ready"}))
-
-    # 8. Start bidirectional relay
-    _voice_relay_loop(browser_sock, gemini_sock)
-```
-
-### WebSocket Frame Reading/Writing (Core Protocol)
-
-```python
-# ~100 lines of code for the core WebSocket frame protocol.
-# This is well-understood, stable protocol code (RFC 6455).
-
-OPCODE_TEXT = 0x1
-OPCODE_BINARY = 0x2
-OPCODE_CLOSE = 0x8
-OPCODE_PING = 0x9
-OPCODE_PONG = 0xA
-
-def _ws_recv_frame(sock):
-    """Read one WebSocket frame. Returns (opcode, payload_bytes, fin)."""
-    header = _recv_exact(sock, 2)
-    fin = (header[0] >> 7) & 1
-    opcode = header[0] & 0x0F
-    masked = (header[1] >> 7) & 1
-    length = header[1] & 0x7F
-
-    if length == 126:
-        length = struct.unpack(">H", _recv_exact(sock, 2))[0]
-    elif length == 127:
-        length = struct.unpack(">Q", _recv_exact(sock, 8))[0]
-
-    if masked:
-        mask = _recv_exact(sock, 4)
-        payload = bytearray(_recv_exact(sock, length))
-        for i in range(length):
-            payload[i] ^= mask[i % 4]
-    else:
-        payload = _recv_exact(sock, length)
-
-    return opcode, bytes(payload), fin
-
-def _ws_send_text(sock, text, masked=False):
-    """Send a text WebSocket frame."""
-    payload = text.encode("utf-8")
-    _ws_send_frame(sock, OPCODE_TEXT, payload, masked)
-
-def _ws_send_frame(sock, opcode, payload, masked=False):
-    """Send a WebSocket frame with proper length encoding."""
-    header = bytearray()
-    header.append(0x80 | opcode)  # FIN + opcode
-
-    length = len(payload)
-    if masked:
-        if length <= 125:
-            header.append(0x80 | length)
-        elif length <= 65535:
-            header.append(0x80 | 126)
-            header.extend(struct.pack(">H", length))
-        else:
-            header.append(0x80 | 127)
-            header.extend(struct.pack(">Q", length))
-        mask = os.urandom(4)
-        header.extend(mask)
-        masked_payload = bytearray(payload)
-        for i in range(length):
-            masked_payload[i] ^= mask[i % 4]
-        sock.sendall(header + masked_payload)
-    else:
-        if length <= 125:
-            header.append(length)
-        elif length <= 65535:
-            header.append(126)
-            header.extend(struct.pack(">H", length))
-        else:
-            header.append(127)
-            header.extend(struct.pack(">Q", length))
-        sock.sendall(header + payload)
-```
-
-### Outbound WebSocket Client (Gateway -> Gemini)
-
-```python
-def _connect_gemini_ws(api_key):
-    """Open a WebSocket connection to Gemini Live API using stdlib."""
-    import socket as _socket
-
-    host = "generativelanguage.googleapis.com"
-    path = ("/ws/google.ai.generativelanguage.v1beta."
-            "GenerativeService.BidiGenerateContent"
-            f"?key={api_key}")
-
-    # TCP + TLS
-    raw = _socket.create_connection((host, 443), timeout=10)
-    ctx = ssl.create_default_context()
-    sock = ctx.wrap_socket(raw, server_hostname=host)
-
-    # WebSocket upgrade handshake (client side)
-    ws_key = base64.b64encode(os.urandom(16)).decode()
-    handshake = (
-        f"GET {path} HTTP/1.1\r\n"
-        f"Host: {host}\r\n"
-        f"Upgrade: websocket\r\n"
-        f"Connection: Upgrade\r\n"
-        f"Sec-WebSocket-Key: {ws_key}\r\n"
-        f"Sec-WebSocket-Version: 13\r\n"
-        f"\r\n"
+def _vault_get(key):
+    """Read credential from vault at runtime. Never hardcoded."""
+    result = subprocess.run(
+        ["secret", "get", key],
+        capture_output=True, text=True
     )
-    sock.sendall(handshake.encode())
+    if result.returncode != 0:
+        raise RuntimeError(f"Vault key not found: {key}")
+    return result.stdout.strip()
 
-    # Read HTTP response (101 expected)
-    response = b""
-    while b"\r\n\r\n" not in response:
-        response += sock.recv(4096)
+@mcp.tool()
+def email_search(query: str, folder: str = "INBOX", limit: int = 10) -> str:
+    """Search emails by subject, sender, or content.
 
-    if b"101" not in response.split(b"\r\n")[0]:
-        raise ConnectionError(f"Gemini WS handshake failed: {response[:200]}")
-
-    return sock
+    Args:
+        query: Search query (subject, from address, or keyword)
+        folder: IMAP folder to search (default: INBOX)
+        limit: Maximum results to return
+    """
+    host = _vault_get("${vault_prefix}.imap_host")
+    user = _vault_get("${vault_prefix}.username")
+    password = _vault_get("${vault_prefix}.app_password")
+    # ... template continues with actual IMAP logic
 ```
 
-### Bidirectional Relay Loop
+### Pattern 2: Runtime Vault Resolution (not build-time injection)
 
-**Key design: two threads per voice session. One reads browser frames, one reads Gemini frames. Shared shutdown event.**
+**What:** Generated extensions read credentials from vault at runtime via `secret get`, never baking secrets into the generated .py file.
+**When to use:** Always. This is a security requirement.
+**Trade-offs:** Slight overhead per tool call (subprocess to read vault), but credentials are never on disk in extension code. If vault key is rotated, extension picks it up on next call without regeneration.
 
-```python
-def _voice_relay_loop(browser_sock, gemini_sock):
-    """Bidirectional WebSocket relay between browser and Gemini."""
-    shutdown = threading.Event()
+**Implementation detail:** Use `subprocess.run(["secret", "get", "service.key"])` inside the generated server. This matches how the existing vault works (shell script with python inline). Alternative: read vault.yaml directly with PyYAML. The subprocess approach is safer (uses the existing secret CLI's permission model) but either works.
 
-    def _browser_to_gemini():
-        """Read frames from browser, forward to Gemini."""
-        try:
-            while not shutdown.is_set():
-                opcode, payload, fin = _ws_recv_frame(browser_sock)
-                if opcode == OPCODE_CLOSE:
-                    shutdown.set()
-                    break
-                if opcode == OPCODE_PING:
-                    _ws_send_frame(browser_sock, OPCODE_PONG, payload)
-                    continue
-                if opcode in (OPCODE_TEXT, OPCODE_BINARY):
-                    # Forward to Gemini (client frames must be masked)
-                    _ws_send_frame(gemini_sock, opcode, payload, masked=True)
-        except Exception:
-            shutdown.set()
+### Pattern 3: Extension-per-Service Isolation
 
-    def _gemini_to_browser():
-        """Read frames from Gemini, forward to browser (with tool interception)."""
-        try:
-            while not shutdown.is_set():
-                opcode, payload, fin = _ws_recv_frame(gemini_sock)
-                if opcode == OPCODE_CLOSE:
-                    shutdown.set()
-                    break
-                if opcode == OPCODE_TEXT:
-                    msg = json.loads(payload)
-                    if "toolCall" in msg:
-                        # Intercept: execute tool, send result back to Gemini
-                        _handle_tool_call(msg["toolCall"], gemini_sock, browser_sock)
-                    else:
-                        # Forward to browser (server frames unmasked)
-                        _ws_send_frame(browser_sock, opcode, payload)
-                elif opcode == OPCODE_BINARY:
-                    _ws_send_frame(browser_sock, opcode, payload)
-        except Exception:
-            shutdown.set()
+**What:** Each generated integration gets its own MCP server process. Email is one server, calendar is another.
+**When to use:** Always. Matches how goosed already manages extensions (knowledge, mem0-memory are separate processes).
+**Trade-offs:** More processes, but isolation means one crashing extension doesn't take down others. goosed already manages N extension subprocesses, so this is free.
 
-    t1 = threading.Thread(target=_browser_to_gemini, daemon=True)
-    t2 = threading.Thread(target=_gemini_to_browser, daemon=True)
-    t1.start()
-    t2.start()
+### Pattern 4: Registry-Driven Boot (entrypoint.sh integration)
 
-    # Wait for either thread to finish (connection closed or error)
-    shutdown.wait()
+**What:** A registry.json file at /data/extensions/registry.json tracks all generated extensions. On boot, entrypoint.sh reads this registry and injects entries into config.yaml before goosed starts.
+**When to use:** Container restart, deploy, extension generation.
+**Trade-offs:** Adds a new file to manage, but solves the core problem: config.yaml is regenerated on every boot (existing behavior), so generated extensions would be lost without a registry.
 
-    # Cleanup
-    try:
-        _ws_send_frame(browser_sock, OPCODE_CLOSE, b"", masked=False)
-    except Exception:
-        pass
-    try:
-        _ws_send_frame(gemini_sock, OPCODE_CLOSE, b"", masked=True)
-    except Exception:
-        pass
-    try:
-        gemini_sock.close()
-    except Exception:
-        pass
+**Boot sequence (existing + new):**
+```
+entrypoint.sh
+  1. Preserve extensions from old config.yaml    (EXISTING)
+  2. Generate base config.yaml                    (EXISTING)
+  3. Restore preserved extensions                 (EXISTING)
+  4. Sync template extensions (context7, mem0)    (EXISTING)
+  5. Load /data/extensions/registry.json          (NEW)
+  6. For each registered extension:               (NEW)
+     a. Verify /data/extensions/{name}/server.py exists
+     b. Verify vault keys still present
+     c. Add stdio extension entry to config.yaml
+  7. Start goosed                                 (EXISTING)
 ```
 
-## Threading Model
+## Data Flow
 
-**gateway.py uses `ThreadingHTTPServer`, which spawns one thread per HTTP request.** This is important: the voice WebSocket connection hijacks the HTTP request thread and keeps it alive for the duration of the voice session (up to 15 minutes).
+### Flow 1: Credential Detection and Extension Generation
 
-### Thread Budget
+```
+User drops credential in chat
+    |
+    v
+Gateway receives message via _relay_to_goosed()
+    |
+    v
+Credential Detector scans message text
+    |  (regex patterns for API keys, app passwords, IMAP configs)
+    |  (LLM classification for ambiguous cases)
+    |
+    ├── NOT a credential -> pass through to goosed normally
+    |
+    v
+Credential classified (type: imap, caldav, rest_api, oauth)
+    |
+    v
+Vault stores credential via `secret set service.key value`
+    |
+    v
+Extension Generator invoked
+    |
+    ├── 1. Select template based on credential type
+    ├── 2. Render template with vault key references
+    ├── 3. Write server.py to /data/extensions/{service_name}/
+    ├── 4. Update /data/extensions/registry.json
+    └── 5. Add extension entry to config.yaml
+    |
+    v
+goosed restart (or hot-reload if supported)
+    |
+    v
+Extension available for tool calls
+    |
+    v
+User confirmation message sent back
+```
 
-| Thread | Lifetime | Count |
-|--------|----------|-------|
-| HTTP request handler (normal) | ~50ms | Comes and goes |
-| SSE proxy (goose web streaming) | Seconds to minutes | 0-2 concurrent |
-| Voice session (main) | Up to 15 min | 1 per voice user |
-| Voice browser->Gemini relay | Same as session | 1 per voice user |
-| Voice Gemini->browser relay | Same as session | 1 per voice user |
-| Tool execution | Seconds | 0-1 per voice session |
+### Flow 2: Tool Call Execution (post-generation)
 
-**Total for one voice session: 3 threads (handler + 2 relay threads).**
+```
+User: "check my email"
+    |
+    v
+goosed routes to email extension (MCP stdio)
+    |
+    v
+email/server.py starts (or is already running)
+    |
+    v
+email_search() tool called
+    |
+    ├── _vault_get("fastmail.imap_host")  -> subprocess: secret get fastmail.imap_host
+    ├── _vault_get("fastmail.username")    -> subprocess: secret get fastmail.username
+    └── _vault_get("fastmail.app_password") -> subprocess: secret get fastmail.app_password
+    |
+    v
+IMAP connection with runtime credentials
+    |
+    v
+Results returned via MCP protocol -> goosed -> gateway -> user
+```
 
-For a single-user personal agent, this is fine. ThreadingHTTPServer creates threads on demand. There is no thread pool exhaustion risk with one user.
+### Flow 3: Boot-time Extension Restoration
 
-### Why Threading (Not asyncio)
+```
+Container starts (deploy/restart)
+    |
+    v
+entrypoint.sh runs
+    |
+    v
+Existing config.yaml extensions preserved (EXISTING LOGIC)
+    |
+    v
+Base config.yaml regenerated (EXISTING LOGIC)
+    |
+    v
+Preserved extensions restored (EXISTING LOGIC)
+    |
+    v
+/data/extensions/registry.json loaded (NEW LOGIC)
+    |
+    ├── For each entry:
+    │   ├── Check server.py exists on disk
+    │   ├── Check vault keys exist (secret get)
+    │   └── Add to config.yaml extensions section:
+    │       name: {display_name}
+    │       type: stdio
+    │       cmd: python3
+    │       args: [/data/extensions/{name}/server.py]
+    │       envs: {}
+    │       timeout: 300
+    |
+    v
+goosed starts with all extensions registered
+```
 
-gateway.py is 10,700 lines of synchronous, threading-based code. Converting to asyncio would be a rewrite. The threading model works because:
+## Component Boundary Details
 
-1. All I/O is blocking socket reads/writes, which threads handle naturally
-2. Thread-per-connection is the standard WebSocket server model (see python-websocket-server library, ~550 lines)
-3. The relay loop is I/O-bound (waiting for frames), not CPU-bound
-4. Python's GIL is not a bottleneck for I/O-bound work
-5. Single user means 1-3 concurrent voice sessions max
+### Credential Detector (`docker/extensions/detector.py`)
 
-## Tool Execution Architecture
-
-### Tool Declaration to Gemini
-
-Tools are declared in the WebSocket setup message. These map to goosed MCP tools that the user has configured.
+**Input:** Raw user message text (string)
+**Output:** `DetectedCredential` or `None`
 
 ```python
-def _build_tool_declarations():
-    """Build Gemini-format tool declarations from available goosed tools."""
-    # Option A: Static list of known tools
-    # Option B: Query goosed for available tools dynamically
-    return [
-        {
-            "functionDeclarations": [
-                {
-                    "name": "search_memory",
-                    "description": "Search user's long-term memory",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "query": {"type": "string", "description": "Search query"}
-                        },
-                        "required": ["query"]
-                    }
-                },
-                {
-                    "name": "search_knowledge",
-                    "description": "Search knowledge base documents",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "query": {"type": "string", "description": "Search query"}
-                        },
-                        "required": ["query"]
-                    }
-                },
-                # ... more tools
-            ]
+@dataclass
+class DetectedCredential:
+    service_type: str       # "imap", "caldav", "rest_api", "oauth"
+    service_name: str       # "fastmail", "google", "github", user-provided
+    credentials: dict       # {"imap_host": "...", "username": "...", "app_password": "..."}
+    vault_prefix: str       # "fastmail" -> stored as fastmail.imap_host, etc.
+    template_name: str      # "email_imap" -> maps to email_imap.py.tmpl
+```
+
+**Detection strategy:** Two-phase.
+1. **Regex pre-filter** (fast, no LLM cost): patterns for common credential formats. IMAP configs have host:port patterns. API keys match `sk-`, `xoxb-`, etc. App passwords are typically 16-char alphanumeric.
+2. **LLM classification** (only if regex matches): Ask goosed to classify the credential type and extract structured fields. This is a single relay call, not code generation.
+
+**Boundary rule:** The detector NEVER stores credentials. It returns a structured object. The caller (gateway) handles vault storage and triggers generation.
+
+### Extension Generator (`docker/extensions/generator.py`)
+
+**Input:** `DetectedCredential` + template name
+**Output:** Generated server.py file on disk + registry entry
+
+```python
+def generate_extension(cred: DetectedCredential) -> GeneratedExtension:
+    """Generate a FastMCP server from template + credential metadata."""
+    template_path = f"/app/docker/extensions/templates/{cred.template_name}.py.tmpl"
+    output_dir = f"/data/extensions/{cred.vault_prefix}"
+    # ... render template, write file, update registry
+```
+
+**Template engine:** Use Python's `string.Template` (stdlib). Jinja2 is overkill for variable substitution in Python source files, and adding a dependency for `${variable}` replacement is wasteful. The templates are Python files with `${placeholders}`, not HTML. `string.Template.safe_substitute()` handles this cleanly.
+
+**Boundary rule:** The generator NEVER reads raw credentials. It receives vault key paths (e.g., "fastmail.imap_host") and embeds those paths in the generated code. The generated server reads credentials at runtime.
+
+### Extension Registry (`docker/extensions/registry.py`)
+
+**Input/Output:** JSON file at `/data/extensions/registry.json`
+
+```python
+# registry.json schema
+{
+    "extensions": {
+        "email_fastmail": {
+            "template": "email_imap",
+            "vault_prefix": "fastmail",
+            "vault_keys": ["fastmail.imap_host", "fastmail.username", "fastmail.app_password"],
+            "server_path": "/data/extensions/email_fastmail/server.py",
+            "generated_at": "2026-04-01T12:00:00Z",
+            "template_version": "1.0",
+            "enabled": true
         }
-    ]
+    },
+    "version": 1
+}
 ```
 
-### Tool Execution Flow
+**Operations:**
+- `register(name, metadata)` - add/update extension entry
+- `unregister(name)` - remove extension, optionally delete files
+- `list_extensions()` - return all registered extensions
+- `get_config_entries()` - return goosed config.yaml extension dicts for all registered extensions
+- `validate()` - check all extensions have valid server.py + vault keys
 
-When Gemini sends a `toolCall`, the gateway intercepts it and executes the function. Two approaches:
+**Boundary rule:** The registry is the single source of truth for "what auto-generated extensions exist." entrypoint.sh reads it on boot. gateway.py reads it for status/management APIs.
 
-**Approach A: Direct MCP Tool Dispatch (Recommended)**
-- Gateway creates a goosed session
-- Sends the tool call as a natural language prompt: "Call the memory_search tool with query='meeting tomorrow'"
-- goosed's MCP tools execute and return the result
-- Gateway extracts the result and sends `toolResponse` to Gemini
+### Config Writer (integrated into existing gateway.py patterns)
 
-**Approach B: Direct Tool Implementation in gateway.py**
-- For simple tools (memory search, knowledge search), call the underlying service directly
-- Skip goosed entirely for these calls
-- Faster, but duplicates tool logic
-
-**Recommendation: Start with Approach A (goosed relay).** It reuses the existing MCP tool infrastructure. If latency is too high (goosed session creation + LLM reasoning overhead), optimize specific tools with Approach B later.
-
-### Important: Gemini 2.0 Flash Live - Sequential Tool Calling Only
-
-Per Google's docs: "Function calling is sequential only. The model will not start responding until you've sent the tool response."
-
-This means:
-- Gemini pauses audio generation while waiting for tool results
-- The browser will experience silence during tool execution
-- The browser UI should show a "thinking" or "searching" indicator
-- Tool execution latency directly impacts user experience
-- Keep tool implementations fast (sub-2-second target)
-
-## Audio Pipeline Details
-
-### Browser Side (voice.html)
-
-```
-Microphone (MediaStream API)
-    |
-    v
-AudioWorklet / ScriptProcessorNode
-    |
-    v
-Resample to 16kHz mono (if needed)
-    |
-    v
-Convert to Int16 PCM
-    |
-    v
-Base64 encode
-    |
-    v
-WebSocket send: {realtimeInput: {audio: {data: "...", mimeType: "audio/pcm;rate=16000"}}}
-
----
-
-WebSocket receive: {serverContent: {modelTurn: {parts: [{inlineData: {data: "...", mimeType: "audio/pcm;rate=24000"}}]}}}
-    |
-    v
-Base64 decode
-    |
-    v
-PCM Int16 at 24kHz
-    |
-    v
-AudioContext.decodeAudioData / AudioWorklet playback
-    |
-    v
-Speaker
-```
-
-### Audio Format Summary
-
-| Direction | Format | Sample Rate | Encoding | Wire Format |
-|-----------|--------|-------------|----------|-------------|
-| Browser -> Gateway -> Gemini | Raw PCM 16-bit LE | 16 kHz | Base64 in JSON | WebSocket text frames |
-| Gemini -> Gateway -> Browser | Raw PCM 16-bit LE | 24 kHz | Base64 in JSON | WebSocket text frames |
-
-### Key Audio Considerations
-
-1. **Sample rate mismatch**: Input is 16kHz, output is 24kHz. Browser must handle both.
-2. **No transcoding needed on gateway**: Audio passes through as-is (base64 JSON). Gateway doesn't touch audio data.
-3. **Chunk size**: Browser should send audio in ~100ms chunks (1600 samples at 16kHz = 3200 bytes = ~4400 base64 chars).
-4. **Interruption handling**: When user speaks while Gemini is speaking, Gemini auto-interrupts. Browser must stop playback and clear audio queue on interrupt signal.
-
-## Session Management
-
-### Voice Session State
+No new component needed. The existing patterns in `apply_config()` and `entrypoint.sh` handle config.yaml writes. The extension generator calls the same pattern:
 
 ```python
-# In-memory session tracking (gateway.py)
-_voice_sessions = {}        # session_id -> {browser_sock, gemini_sock, created, thread}
-_voice_sessions_lock = threading.Lock()
-
-# Session lifecycle:
-# 1. Created on WebSocket upgrade (/ws/voice)
-# 2. Active during voice conversation (up to 15 min)
-# 3. Destroyed on: browser disconnect, Gemini disconnect, timeout, error
+# In gateway.py, after generating an extension:
+def _register_generated_extension(name, server_path, description):
+    """Add a generated extension to config.yaml (same pattern as existing code)."""
+    import yaml
+    config_path = os.path.join(CONFIG_DIR, "config.yaml")
+    with open(config_path) as f:
+        config = yaml.safe_load(f) or {}
+    exts = config.setdefault("extensions", {})
+    exts[name] = {
+        "enabled": True,
+        "type": "stdio",
+        "name": name,
+        "description": description,
+        "cmd": "python3",
+        "args": [server_path],
+        "envs": {},
+        "env_keys": [],
+        "timeout": 300,
+        "bundled": None,
+        "available_tools": [],
+    }
+    with open(config_path, "w") as f:
+        yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 ```
-
-### Session Limits
-
-| Limit | Value | Source |
-|-------|-------|--------|
-| Max session duration (audio only) | 15 minutes | Gemini API limit |
-| Max session duration (audio + video) | 2 minutes | Gemini API limit |
-| Context window | 128k tokens (native audio) | Gemini API limit |
-| Concurrent sessions per API key | Unknown, likely low | Needs testing |
-| Reconnection within session | Possible via session resumption | Gemini supports `sessionResumption` handle |
-
-### Session Timeout Strategy
-
-```
-- Browser sends periodic ping frames (every 30s)
-- Gateway forwards pings as-is (Gemini handles keep-alive)
-- If no frames received from browser for 60s, close session
-- If Gemini sends close frame, notify browser and cleanup
-- At 14 min mark, send warning to browser: {type: "session_expiring", remaining_seconds: 60}
-```
-
-## Voice Dashboard HTML (voice.html)
-
-**Self-contained single-file HTML/CSS/JS, consistent with setup.html and admin.html pattern.**
-
-### Page Serving
-
-```python
-VOICE_HTML = os.path.join(APP_DIR, "docker", "voice.html")
-
-# In do_GET routing:
-elif path.rstrip("/") == "/voice":
-    self.handle_voice_page()
-
-def handle_voice_page(self):
-    """Serve voice dashboard. Requires auth + Gemini key."""
-    if not check_auth(self):
-        self.send_response(302)
-        self.send_header("Location", "/login")
-        self.end_headers()
-        return
-    # Gate on Gemini key presence
-    if not _get_gemini_api_key():
-        self.send_response(302)
-        self.send_header("Location", "/setup")
-        self.end_headers()
-        return
-    # Serve file (same pattern as handle_setup_page / handle_admin_page)
-    with open(VOICE_HTML, "rb") as f:
-        content = f.read()
-    # ... ETag, CSP headers, etc.
-```
-
-### CSP Adjustments for Voice
-
-```python
-# voice.html needs additional CSP permissions:
-csp = (
-    "default-src 'self'; "
-    "script-src 'self' 'unsafe-inline'; "
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-    "font-src https://fonts.gstatic.com; "
-    "img-src 'self' data:; "
-    "connect-src 'self' wss:; "           # WebSocket connections
-    "media-src 'self' blob:; "            # Audio playback from blobs
-    "worker-src 'self' blob:; "           # AudioWorklet
-    "frame-ancestors 'none'"
-)
-```
-
-## Integration Points with Existing Gateway
-
-### Gemini API Key in Vault
-
-```yaml
-# /data/secrets/vault.yaml (existing format)
-# New nested key for Gemini:
-google:
-  GEMINI_API_KEY: "AIza..."
-```
-
-Or as a flat key (consistent with how other provider keys are stored):
-```yaml
-GEMINI_API_KEY: "AIza..."
-```
-
-**Recommendation: Flat key.** Simpler vault read. `_get_gemini_api_key()` just reads from vault.yaml. The setup wizard already handles API key validation and storage.
-
-### Setup Wizard Integration
-
-The setup wizard (setup.html) already handles 23+ providers. Gemini key is added as an optional, separate entry since it serves a different purpose (voice, not text LLM):
-
-```python
-# New API endpoint
-# POST /api/setup/validate with provider="gemini-voice"
-# Validates key by attempting a quick Gemini API call
-
-# Gemini key stored separately from GOOSE_PROVIDER
-# It's not a goose provider, it's specifically for voice
-```
-
-### Auth Flow
-
-Voice dashboard reuses existing auth:
-- Same cookie-based session auth as admin.html
-- `check_auth(self)` works identically
-- WebSocket auth: pass session cookie in initial upgrade request
-- Browser WebSocket API automatically sends cookies for same-origin connections
-
-## Patterns to Follow
-
-### Pattern 1: Self-Contained HTML Pages
-
-**What:** voice.html follows the same pattern as setup.html and admin.html. Single file, no build step, inline CSS/JS.
-**Why:** Maintains architectural consistency. No new tooling needed.
-**Example:** setup.html is ~12K lines of HTML/CSS/JS serving a complex multi-step wizard with API calls.
-
-### Pattern 2: Thread-Per-Connection WebSocket
-
-**What:** Each voice session gets a dedicated thread (from ThreadingHTTPServer) plus 2 relay threads.
-**Why:** Consistent with gateway.py's threading model. Simple to reason about. Each session is isolated.
-**Caveat:** ThreadingHTTPServer may time out the initial request thread. After WebSocket upgrade, the handler method blocks until the session ends. This works because the thread is kept alive by the blocking relay loop.
-
-### Pattern 3: Message Passthrough with Selective Interception
-
-**What:** Most messages between browser and Gemini pass through verbatim. Gateway only intercepts `toolCall` messages.
-**Why:** Minimizes gateway complexity. Audio frames don't need parsing. JSON messages are forwarded as-is except when tool execution is needed.
-**Benefit:** If Gemini adds new message types, they automatically work without gateway changes.
 
 ## Anti-Patterns to Avoid
 
-### Anti-Pattern 1: Decoding Audio on the Server
+### Anti-Pattern 1: LLM-Generated Extension Code
 
-**What:** Base64-decoding audio, resampling, or transcoding on the gateway.
-**Why bad:** Adds latency, CPU overhead, complexity. Audio is already in the right format (browser produces 16kHz PCM, Gemini expects 16kHz PCM).
-**Instead:** Pass audio frames through verbatim. The gateway is a relay, not a media processor.
+**What people do:** Use the LLM to write the entire MCP server from scratch based on the credential type.
+**Why it's wrong:** Non-deterministic output. Security risk (model could generate code that exfiltrates credentials). Slow (requires full LLM generation). Impossible to debug template issues. Can't version-control the output pattern.
+**Do this instead:** Pre-authored templates with variable substitution. The LLM only classifies credentials and selects a template name.
 
-### Anti-Pattern 2: Using asyncio for WebSocket Only
+### Anti-Pattern 2: Hardcoding Credentials in Generated Code
 
-**What:** Adding asyncio event loop inside the threading-based gateway for just the WebSocket feature.
-**Why bad:** Mixing async and sync in the same process creates complexity. asyncio event loops don't play well inside threads. Risk of blocking the event loop from synchronous gateway code.
-**Instead:** Use pure threading with blocking socket I/O. It's simpler and consistent with the rest of gateway.py.
+**What people do:** Inject the actual API key/password into the generated .py file.
+**Why it's wrong:** Credentials on disk in plaintext. If the generated file is accidentally exposed (logs, error messages, backups), secrets leak. Can't rotate credentials without regenerating.
+**Do this instead:** Generated code calls `secret get vault.key` at runtime. Only vault key paths appear in generated code.
 
-### Anti-Pattern 3: Exposing Gemini API Key to Browser
+### Anti-Pattern 3: Monolithic Extension Server
 
-**What:** Sending the API key to the browser (via JS variable, API endpoint, etc.) and letting the browser connect directly to Gemini.
-**Why bad:** API key leaks. Anyone with browser devtools can steal the key.
-**Instead:** Server-side proxy. API key never leaves the server.
+**What people do:** Generate one big MCP server that handles all integrations (email + calendar + APIs in one process).
+**Why it's wrong:** One integration crashing kills all others. Harder to add/remove individual integrations. Doesn't match goosed's extension model.
+**Do this instead:** One MCP server per integration. Matches existing pattern (knowledge and mem0-memory are separate servers).
 
-### Anti-Pattern 4: Creating a New HTTP Server for WebSocket
+### Anti-Pattern 4: Bypassing the Existing Extension Preserve/Restore Cycle
 
-**What:** Running a second server (e.g., on a different port) for WebSocket connections.
-**Why bad:** Railway exposes one PORT. Running two servers requires port multiplexing or a second Railway service. Adds deployment complexity.
-**Instead:** Handle WebSocket upgrade within the existing GatewayHandler.do_GET, same port, same server.
+**What people do:** Write extensions directly to config.yaml and hope they survive reboots.
+**Why it's wrong:** entrypoint.sh regenerates config.yaml on every boot. Extensions added after first boot are preserved via the EXTENSIONS_STATE_FILE mechanism, but this is fragile and depends on config.yaml existing at shutdown time. If the container crashes, the preserve step in entrypoint.sh runs on next boot from the previous config, which should work, but a dedicated registry.json is more reliable.
+**Do this instead:** Use registry.json as the authoritative source. entrypoint.sh reads registry.json and injects extensions on every boot, independent of the preserve/restore cycle.
 
-### Anti-Pattern 5: Persistent Gemini Connections (Connection Pooling)
+### Anti-Pattern 5: Requiring goosed Restart for Every New Extension
 
-**What:** Keeping Gemini WebSocket connections open between voice sessions for reuse.
-**Why bad:** Gemini sessions are stateful. Each session has its own context. Reusing a session means inheriting previous conversation context. Sessions timeout after 15 min anyway.
-**Instead:** One Gemini connection per voice session. Clean setup, clean teardown.
+**What people do:** Restart the entire goosed process to pick up a new extension.
+**Why it's wrong:** Kills all active sessions. Users lose conversation context. Takes 10-30 seconds. Bad UX.
+**Do this instead:** First version can restart goosed (acceptable for MVP, generation is rare). Later, investigate goosed's config reload behavior: goosed re-reads config.yaml from disk on every API call (discovered in apply_config comment at line 3390-3392 of gateway.py). This means writing the extension to config.yaml and ensuring the .py file is ready may be enough without restart. Needs validation.
+
+## Integration Points
+
+### Internal Boundaries
+
+| Boundary | Communication | Notes |
+|----------|---------------|-------|
+| Gateway -> Detector | Direct Python import, sync function call | Detector is a pure function, no side effects |
+| Gateway -> Generator | Direct Python import, sync function call | Generator writes files, updates registry |
+| Generator -> Templates | File read from /app/docker/extensions/templates/ | Templates ship with container image |
+| Generator -> Registry | JSON file read/write at /data/extensions/registry.json | File locking needed for concurrent access |
+| Generator -> Config | YAML read/write at /data/config/config.yaml | Use existing yaml dump pattern |
+| entrypoint.sh -> Registry | JSON file read at boot | Shell reads JSON via inline python (existing pattern) |
+| goosed -> Generated Extension | stdio MCP protocol (stdin/stdout) | Standard goosed extension lifecycle |
+| Generated Extension -> Vault | subprocess: `secret get key` | Runtime credential resolution |
+
+### External Services
+
+| Service | Integration Pattern | Notes |
+|---------|---------------------|-------|
+| IMAP servers | Generated extension connects via imaplib | Template handles SSL/TLS, STARTTLS |
+| SMTP servers | Generated extension connects via smtplib | Template handles authentication |
+| CalDAV servers | Generated extension uses caldav Python library | May need pip install at generation time |
+| REST APIs | Generated extension uses urllib.request | No extra dependencies needed |
+| OAuth providers | Device flow or manual token paste | Browser OAuth is out of scope (per PROJECT.md) |
+
+## Scaling Considerations
+
+| Scale | Architecture Adjustments |
+|-------|--------------------------|
+| 1-5 extensions | Current design is fine. Each extension is a separate Python process managed by goosed. Memory overhead ~20-50MB per extension process. |
+| 5-15 extensions | May want lazy loading. goosed starts all extensions on boot. Consider only starting extensions when first called. Check if goosed supports lazy extension startup. |
+| 15+ extensions | Unlikely for single-user system. If reached, consolidate related extensions (e.g., all email accounts into one email server with account parameter). |
+
+### First Bottleneck: Boot Time
+
+With many generated extensions, container boot slows down (each stdio extension is a subprocess that needs to initialize). Mitigation: goosed likely starts extensions lazily on first tool call, not eagerly on boot. Verify this.
+
+### Second Bottleneck: Memory
+
+Each Python MCP server process uses ~20-50MB baseline. 10 extensions = 200-500MB extra. On Railway's typical plans this is fine, but worth monitoring.
 
 ## Suggested Build Order
 
-Dependencies flow top-down. Each phase builds on the previous one.
+Based on component dependencies, build in this order:
 
-### Phase 1: WebSocket Protocol Layer (~200 lines)
+1. **Template Registry + Base Template** - Write the email_imap template first. This is the foundation everything else depends on. Can be tested standalone (run the template output as a script).
 
-Build the core WebSocket frame reader/writer. This is the foundation everything else needs.
+2. **Extension Generator** - Takes a template name + vault key references, renders the template, writes to /data/extensions/. Can be tested without gateway integration.
 
-- `_ws_recv_frame(sock)` - read one WebSocket frame
-- `_ws_send_frame(sock, opcode, payload, masked)` - write one WebSocket frame
-- `_ws_send_text(sock, text)` - convenience for text frames
-- `_recv_exact(sock, n)` - read exactly n bytes
-- WebSocket handshake (server side for browser, client side for Gemini)
-- Unit testable in isolation
+3. **Config Writer integration** - Add the generated extension to config.yaml. Test that goosed picks it up on restart.
 
-**Dependency:** None. Pure protocol code.
+4. **Boot Loader (entrypoint.sh)** - Add registry.json reading to entrypoint.sh. Test that generated extensions survive container restarts.
 
-### Phase 2: Gemini WebSocket Client (~100 lines)
+5. **Credential Detector** - The user-facing piece. Regex patterns + LLM classification. Wire into gateway message relay. This is last because it's the most complex and least critical for proving the system works (you can manually trigger generation first).
 
-Outbound connection to Gemini Live API.
+6. **Additional Templates** - CalDAV, REST API, OAuth. Each is independent and can be added incrementally.
 
-- `_connect_gemini_ws(api_key)` - TLS + WebSocket handshake
-- `_send_gemini_setup(sock, config)` - send initial config
-- Test with simple text prompt to verify connection works
+**Rationale for this order:**
+- Steps 1-4 form the "can we generate and run an extension?" proof. You can manually create a test extension without any detection logic.
+- Step 5 adds the "user drops a credential" UX. Separating this lets you validate the generation pipeline before adding detection complexity.
+- Step 6 is pure template authoring, the simplest work once the pipeline exists.
 
-**Dependency:** Phase 1 (frame reader/writer)
+## Key Discovery: goosed Re-reads Config on Every Call
 
-### Phase 3: Voice Route + Bidirectional Relay (~150 lines)
+From gateway.py line 3390-3392 comment:
+> "goose re-reads config.yaml from disk on every API call. If we strip the extensions: section, the gateway detects 'extensions changed' on every telegram message"
 
-The proxy core.
-
-- WebSocket upgrade detection in `do_GET`
-- `_handle_voice_websocket()` - orchestrates the session
-- `_voice_relay_loop()` - two-thread bidirectional relay
-- Session tracking (`_voice_sessions` dict)
-- Graceful close on either side disconnecting
-
-**Dependency:** Phase 1 + Phase 2
-
-### Phase 4: Voice Dashboard HTML (~2000 lines)
-
-The browser UI.
-
-- Microphone capture (MediaStream + AudioWorklet)
-- PCM resampling to 16kHz
-- WebSocket connection to /ws/voice
-- Audio playback (PCM 24kHz from Gemini responses)
-- Live transcript display
-- Mic toggle button + voice visualizer
-- Session timeout warnings
-- Mobile-friendly layout
-
-**Dependency:** Phase 3 (needs working WebSocket endpoint)
-
-### Phase 5: Tool Calling (~200 lines)
-
-Mid-conversation tool execution.
-
-- Tool declaration builder (Gemini format)
-- `_handle_tool_call()` - intercept, execute, respond
-- goosed session creation for tool execution
-- Browser notification of tool status
-- Timeout handling for slow tools
-
-**Dependency:** Phase 3 + Phase 4 (needs working relay + UI for testing)
-
-### Phase 6: Setup Wizard Integration (~100 lines)
-
-Gemini key management.
-
-- Add Gemini API key field to setup wizard
-- Key validation (test API call)
-- Vault storage
-- Voice dashboard gating on key presence
-- Link from admin dashboard to voice page
-
-**Dependency:** Phase 4 (needs dashboard to gate)
-
-## Open Questions
-
-1. **Which Gemini model?** `gemini-2.0-flash-live-001` is current, but `gemini-3.1-flash-live-preview` appears in recent docs. Need to verify which model is stable/recommended at build time.
-
-2. **Tool execution latency:** goosed session creation + MCP tool call + LLM reasoning could take 2-5 seconds. Is this acceptable during a voice conversation? May need to pre-create a goosed session at voice session start and reuse it.
-
-3. **Concurrent voice sessions:** What happens if the user opens /voice in two tabs? Need to decide: allow multiple sessions (each gets its own Gemini connection) or enforce single session (close previous on new connection).
-
-4. **Session resumption:** Gemini supports resuming sessions via `sessionResumption` handles. Worth implementing to handle brief network interruptions? Or just restart the session?
-
-5. **Ephemeral token fallback:** If Google documents the REST endpoint for ephemeral token creation in the future, switching to direct browser-to-Gemini (skipping the proxy) would reduce latency. Keep the architecture modular enough to support this later.
+This is critical. It means adding a new extension to config.yaml and having the server.py ready on disk may be enough for goosed to pick it up WITHOUT a restart. The extension would appear on the next tool call. This needs validation but would eliminate the biggest UX friction (restart = lost sessions).
 
 ## Sources
 
-- [Gemini Live API WebSocket reference](https://ai.google.dev/api/live) - HIGH confidence
-- [Gemini Live API overview](https://ai.google.dev/gemini-api/docs/live-api) - HIGH confidence
-- [Gemini Live API get started (WebSocket)](https://ai.google.dev/gemini-api/docs/live-api/get-started-websocket) - HIGH confidence
-- [Gemini Live API capabilities](https://ai.google.dev/gemini-api/docs/live-api/capabilities) - HIGH confidence
-- [Gemini ephemeral tokens](https://ai.google.dev/gemini-api/docs/ephemeral-tokens) - HIGH confidence
-- [RFC 6455 WebSocket Protocol](https://www.rfc-editor.org/rfc/rfc6455.html) - HIGH confidence
-- [MDN: Writing WebSocket Servers](https://developer.mozilla.org/en-US/docs/Web/API/WebSockets_API/Writing_WebSocket_servers) - HIGH confidence
-- [python-websocket-server (stdlib-only reference)](https://github.com/Pithikos/python-websocket-server) - MEDIUM confidence
-- [google-gemini/live-api-web-console](https://github.com/google-gemini/live-api-web-console) - MEDIUM confidence
-- [google-gemini/gemini-live-api-examples](https://github.com/google-gemini/gemini-live-api-examples) - MEDIUM confidence
-- GooseClaw gateway.py source code analysis - HIGH confidence
+- GooseClaw codebase analysis: entrypoint.sh (extension preserve/restore cycle, boot sequence), gateway.py (config management, relay, extension discovery), memory/server.py and knowledge/server.py (existing FastMCP MCP server patterns), scripts/secret.sh (vault implementation)
+- [Goose Extension Documentation](https://block.github.io/goose/docs/getting-started/using-extensions/) - config.yaml format for stdio extensions
+- [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) - FastMCP server pattern (already used by knowledge + mem0 servers)
+- [FastMCP](https://github.com/jlowin/fastmcp) - Template pattern for MCP servers
+- [Goose GitHub](https://github.com/block/goose) - Extension system architecture
 
 ---
-*Architecture research for: GooseClaw v6.0 Voice Dashboard*
-*Researched: 2026-03-27*
+*Architecture research for: GooseClaw Auto-Generated MCP Extensions*
+*Researched: 2026-04-01*

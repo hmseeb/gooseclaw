@@ -1,453 +1,131 @@
-# Stack Research: Voice Dashboard (Gemini Live API)
+# Technology Stack
 
-**Domain:** Real-time voice AI channel (WebSocket audio streaming)
-**Researched:** 2026-03-27
-**Confidence:** HIGH (protocol/audio), MEDIUM (Gemini 3.1 Flash Live specifics, model is preview)
+**Project:** GooseClaw Auto-Generated MCP Extensions
+**Researched:** 2026-04-01
 
-## Existing Stack (DO NOT CHANGE)
+## Recommended Stack
 
-| Technology | Version | Purpose | Status |
-|------------|---------|---------|--------|
-| Python 3.10 | 3.10.x | Container runtime (stdlib only for gateway.py) | KEEP |
-| http.server + ThreadingHTTPServer | stdlib | HTTP server, thread-per-request | KEEP |
-| setup.html | single file | Self-contained HTML/CSS/JS wizard | Pattern to follow for voice.html |
-| gateway.py | ~10K lines | Monolith HTTP handler, reverse proxy | Extend with WebSocket + voice endpoints |
-| Docker ubuntu:22.04 | base image | Railway deployment | KEEP |
-
-## New Stack Additions
-
-### Core: Gemini 3.1 Flash Live API (Server-Side)
-
-| Technology | Version/ID | Purpose | Why Recommended |
-|------------|-----------|---------|-----------------|
-| Gemini 3.1 Flash Live | `gemini-3.1-flash-live-preview` | STT + LLM + TTS in one model | Single model handles entire voice pipeline. No separate Whisper/TTS. 131K token context, 65K output tokens. Supports function calling during voice sessions. Released 2026-03-26. |
-| Gemini Live API (WebSocket) | v1beta / v1alpha | Bi-directional audio streaming | Stateful WebSocket at `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent`. JSON messages with base64 audio. |
-| Ephemeral Tokens API | v1alpha | Secure browser-to-API auth | Short-lived tokens (1min new session, 30min messages). Gateway creates via REST, browser uses to connect. Prevents exposing raw API key to client. |
-
-**Confidence:** HIGH for protocol. MEDIUM for model stability (preview suffix, released yesterday).
-
-**Key model facts:**
-- Input: text, images, audio, video
-- Output: text and audio
-- Function calling: YES (sequential/synchronous only on 3.1 Flash Live)
-- Audio generation pauses during tool execution, resumes after tool response
-- Audio input: raw 16-bit PCM, 16kHz, little-endian
-- Audio output: raw 16-bit PCM, 24kHz, little-endian
-- Session limits: ~15 min audio-only (without compression), ~10 min connection lifetime
-- Session resumption: tokens valid 2 hours after disconnect
-- Context window compression: sliding window, extends sessions indefinitely
-- Voices: configurable via `speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName`
-- Code execution: NOT supported on this model
-- Structured outputs: NOT supported on this model
-- Thinking: supported
-
-**Fallback model:** If `gemini-3.1-flash-live-preview` is unstable (it's a day-old preview), fall back to `gemini-2.5-flash-live-001` which is GA. Note: Gemini 2.0 Flash retires June 2026, skip it entirely.
-
-### WebSocket Server: Python stdlib RFC 6455 Implementation
-
-| Technology | Version | Purpose | Why Recommended |
-|------------|---------|---------|-----------------|
-| Python `hashlib` + `struct` + `socket` | stdlib | WebSocket handshake + frame parsing | Gateway.py is stdlib-only. No pip allowed. WebSocket RFC 6455 handshake is ~50 lines (SHA-1 + base64 of Sec-WebSocket-Key). Frame parsing is ~100 lines (opcodes, masking, payload length). |
-| Python `threading.Thread` | stdlib | Per-connection WebSocket handler | Matches existing ThreadingHTTPServer pattern. Each voice session gets its own thread. |
-| Python `ssl` + `http.client` | stdlib | Outbound WebSocket client to Gemini | Gateway needs to be a WebSocket CLIENT connecting to Gemini's WSS endpoint. Use `ssl.create_default_context()` + raw socket + WebSocket handshake. |
-
-**Confidence:** HIGH. RFC 6455 is well-specified, Python stdlib has everything needed (hashlib.sha1, struct.pack/unpack, base64, socket, ssl). The gateway already imports all these modules.
-
-**Architecture: gateway.py is BOTH WebSocket server (browser-facing) AND WebSocket client (Gemini-facing).**
-
-The WebSocket implementation needs two distinct components:
-
-1. **WebSocket Server** (browser -> gateway): Upgrade HTTP connection in `GatewayHandler.do_GET` when path is `/ws/voice`. Perform RFC 6455 handshake, then hijack the socket from `http.server` for bidirectional framing.
-
-2. **WebSocket Client** (gateway -> Gemini): Open outbound WSS connection to Gemini's endpoint using `ssl` + raw `socket`. Send setup message, then relay audio frames bidirectionally.
-
-**WebSocket Handshake (server-side, ~30 lines):**
-```python
-import hashlib, base64
-
-WS_MAGIC = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-
-def ws_accept_key(client_key):
-    """Compute Sec-WebSocket-Accept from client's Sec-WebSocket-Key."""
-    digest = hashlib.sha1((client_key + WS_MAGIC).encode()).digest()
-    return base64.b64encode(digest).decode()
-```
-
-**WebSocket Frame Parsing (server-side, ~80 lines):**
-```python
-import struct
-
-def ws_recv_frame(sock):
-    """Read one WebSocket frame. Returns (opcode, payload_bytes)."""
-    header = sock.recv(2)
-    if len(header) < 2:
-        return None, b""
-    fin = header[0] & 0x80
-    opcode = header[0] & 0x0F
-    masked = header[1] & 0x80
-    length = header[1] & 0x7F
-    if length == 126:
-        length = struct.unpack(">H", sock.recv(2))[0]
-    elif length == 127:
-        length = struct.unpack(">Q", sock.recv(8))[0]
-    if masked:
-        mask_key = sock.recv(4)
-    payload = b""
-    while len(payload) < length:
-        chunk = sock.recv(length - len(payload))
-        if not chunk:
-            break
-        payload += chunk
-    if masked:
-        payload = bytes(b ^ mask_key[i % 4] for i, b in enumerate(payload))
-    return opcode, payload
-
-def ws_send_frame(sock, opcode, payload, mask=False):
-    """Send one WebSocket frame. Server->client: mask=False."""
-    frame = bytearray()
-    frame.append(0x80 | opcode)  # FIN + opcode
-    length = len(payload)
-    if length < 126:
-        frame.append(length | (0x80 if mask else 0))
-    elif length < 65536:
-        frame.append(126 | (0x80 if mask else 0))
-        frame.extend(struct.pack(">H", length))
-    else:
-        frame.append(127 | (0x80 if mask else 0))
-        frame.extend(struct.pack(">Q", length))
-    if mask:
-        import os
-        mask_key = os.urandom(4)
-        frame.extend(mask_key)
-        payload = bytes(b ^ mask_key[i % 4] for i, b in enumerate(payload))
-    frame.extend(payload)
-    sock.sendall(frame)
-```
-
-**Critical detail:** When acting as WebSocket CLIENT (to Gemini), frames MUST be masked (client->server per RFC 6455). When acting as WebSocket SERVER (to browser), frames MUST NOT be masked.
-
-### Ephemeral Token Creation: REST API (No SDK)
+### Core Framework: MCP Server Generation
 
 | Technology | Version | Purpose | Why |
 |------------|---------|---------|-----|
-| `urllib.request` | stdlib | POST to Gemini auth_tokens endpoint | Gateway already uses urllib.request for outbound HTTP. No new dependency. |
+| `mcp` (Python SDK) | 1.26.0 | MCP server runtime, FastMCP decorator API | Already pinned in requirements.txt. Provides `mcp.server.fastmcp.FastMCP` which is the exact pattern used by existing knowledge and memory extensions. Zero new dependencies. |
+| Python | 3.10+ | Runtime for generated servers | Matches existing container Python version. MCP SDK requires 3.10+. |
+| Jinja2 | 3.1.6 | Template engine for code generation | Battle-tested, zero-dependency templating. Generates Python source files from service-specific templates. Already a transitive dep via MCP SDK's starlette. |
+| PyYAML | 6.0.2 | Template manifest and vault reading | Already in requirements.txt. Used for vault.yaml credential loading and extension config generation. |
 
-**Confidence:** MEDIUM. REST endpoint path derived from SDK source code analysis. The SDK calls `POST /auth_tokens` on the v1alpha base URL.
-
-**REST endpoint (derived from python-genai SDK source):**
-```
-POST https://generativelanguage.googleapis.com/v1alpha/auth_tokens?key=GEMINI_API_KEY
-Content-Type: application/json
-
-{
-    "uses": 1,
-    "expire_time": "2026-03-27T12:30:00Z",
-    "new_session_expire_time": "2026-03-27T12:01:00Z"
-}
-```
-
-Response contains a token object with a `name` field that becomes the ephemeral token.
-
-**If REST endpoint doesn't work as derived:** Fall back to passing API key directly via query parameter on the WebSocket URL. Less secure but functional. The setup wizard already stores the Gemini API key in vault, so it's not exposed to end-users beyond the container.
-
-**WebSocket URL with ephemeral token (v1alpha):**
-```
-wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained?access_token=EPHEMERAL_TOKEN
-```
-
-**WebSocket URL with API key directly (v1beta, fallback):**
-```
-wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=GEMINI_API_KEY
-```
-
-### Browser: Web Audio API + Native WebSocket
+### Credential Detection and Validation
 
 | Technology | Version | Purpose | Why |
 |------------|---------|---------|-----|
-| Web Audio API (AudioWorklet) | Browser native | Mic capture as PCM 16kHz 16-bit mono | No npm. AudioWorklet runs in separate thread for low-latency capture. Create AudioContext at sampleRate: 16000 to avoid resampling. |
-| WebSocket API | Browser native | Bidirectional audio/JSON streaming | Native browser API. No library needed. Send binary (PCM) and text (JSON) frames. |
-| MediaDevices.getUserMedia() | Browser native | Microphone access permission | Standard API, works on all modern browsers including mobile Safari/Chrome. |
-| AudioContext | Browser native | PCM playback at 24kHz | Decode Gemini's 24kHz PCM output and queue for playback via AudioBufferSourceNode. |
+| `re` (stdlib) | builtin | Credential pattern detection | Regex-based detection of API keys, app passwords, OAuth tokens in chat messages. No external dep needed. |
+| Pydantic | >=2.12.0 | Template config validation, credential schema | Already a transitive dependency of `mcp` SDK. Use for validating template parameters and credential structures before generation. |
 
-**Confidence:** HIGH. All browser-native APIs, no dependencies.
+### Service-Specific Libraries (for generated extensions)
 
-**Browser audio pipeline:**
-```
-Mic -> getUserMedia() -> AudioContext(16kHz) -> AudioWorkletProcessor
-  -> Float32 to Int16 PCM -> WebSocket binary frame -> gateway -> Gemini
+| Library | Version | Purpose | Why |
+|---------|---------|---------|-----|
+| `imaplib` / `smtplib` (stdlib) | builtin | Email (IMAP/SMTP) template | Standard library. Zero additional deps. Sufficient for read/search/send email via app passwords. |
+| `caldav` | >=3.0.0 | Calendar (CalDAV) template | Mature Python CalDAV client. Requires Python 3.10+. Handles iCal parsing internally. |
+| `httpx` | >=0.27.1 | REST API template (authenticated HTTP) | Already a dependency of `mcp` SDK. Async-capable, HTTP/2 support, modern replacement for `requests`. Use for generic API key / bearer token integrations. |
 
-Gemini -> gateway -> WebSocket binary frame -> Int16 PCM to Float32
-  -> AudioContext(24kHz) -> AudioBufferSourceNode -> speakers
-```
+### Code Generation Infrastructure
 
-**AudioWorklet processor (inline in voice.html):**
-```javascript
-// Runs in audio thread, captures 128 samples at a time
-class PCMProcessor extends AudioWorkletProcessor {
-    process(inputs) {
-        const input = inputs[0][0]; // mono channel
-        if (input) {
-            // Convert Float32 [-1,1] to Int16 [-32768,32767]
-            const pcm16 = new Int16Array(input.length);
-            for (let i = 0; i < input.length; i++) {
-                pcm16[i] = Math.max(-32768, Math.min(32767, input[i] * 32768));
-            }
-            this.port.postMessage(pcm16.buffer, [pcm16.buffer]);
-        }
-        return true;
-    }
-}
-registerProcessor('pcm-processor', PCMProcessor);
-```
+| Technology | Version | Purpose | Why |
+|------------|---------|---------|-----|
+| Jinja2 | 3.1.6 | Template rendering | Renders Python MCP server source from `.j2` templates. Supports conditionals, loops, includes. NOT Cookiecutter/Copier because we generate at runtime, not as a CLI scaffold. |
+| `importlib` / `subprocess` (stdlib) | builtin | Generated server validation | Syntax-check generated code before writing to disk. `python3 -c "import ast; ast.parse(code)"` for validation. |
 
-**Critical constraint for single-file HTML:** The AudioWorklet processor normally loads from a separate `.js` file via `audioWorklet.addModule('processor.js')`. For single-file HTML, use a Blob URL:
-```javascript
-const processorCode = `class PCMProcessor extends AudioWorkletProcessor { ... }`;
-const blob = new Blob([processorCode], { type: 'application/javascript' });
-const url = URL.createObjectURL(blob);
-await audioCtx.audioWorklet.addModule(url);
-```
+### Storage and Persistence
 
-### Gemini Live API Protocol Messages
-
-**Setup message (gateway -> Gemini, first message after WS connect):**
-```json
-{
-    "setup": {
-        "model": "models/gemini-3.1-flash-live-preview",
-        "generationConfig": {
-            "responseModalities": ["AUDIO"],
-            "speechConfig": {
-                "voiceConfig": {
-                    "prebuiltVoiceConfig": {
-                        "voiceName": "Aoede"
-                    }
-                }
-            }
-        },
-        "systemInstruction": {
-            "parts": [{"text": "You are a helpful AI assistant..."}]
-        },
-        "tools": [{
-            "functionDeclarations": [{
-                "name": "search_gmail",
-                "description": "Search user's Gmail",
-                "parameters": {
-                    "type": "OBJECT",
-                    "properties": {
-                        "query": {"type": "STRING", "description": "Search query"}
-                    },
-                    "required": ["query"]
-                }
-            }]
-        }],
-        "realtimeInputConfig": {
-            "automaticActivityDetection": {
-                "disabled": false
-            }
-        },
-        "sessionResumptionConfig": {
-            "handle": null
-        },
-        "inputAudioTranscription": {},
-        "outputAudioTranscription": {}
-    }
-}
-```
-
-**Audio input (gateway -> Gemini, continuous):**
-```json
-{
-    "realtimeInput": {
-        "mediaChunks": [{
-            "mimeType": "audio/pcm;rate=16000",
-            "data": "<base64-encoded-pcm-bytes>"
-        }]
-    }
-}
-```
-
-**Tool call (Gemini -> gateway):**
-```json
-{
-    "toolCall": {
-        "functionCalls": [{
-            "id": "call_123",
-            "name": "search_gmail",
-            "args": {"query": "meeting tomorrow"}
-        }]
-    }
-}
-```
-
-**Tool response (gateway -> Gemini):**
-```json
-{
-    "toolResponse": {
-        "functionResponses": [{
-            "id": "call_123",
-            "response": {"results": [{"subject": "Team standup", "date": "2026-03-28"}]}
-        }]
-    }
-}
-```
-
-## Session Management Strategy
-
-| Concern | Solution | Confidence |
-|---------|----------|------------|
-| 10-min connection timeout | Enable `sessionResumptionConfig`. Save latest handle. Auto-reconnect when `goAway` received. | HIGH |
-| 15-min audio session limit | Enable `contextWindowCompression` with sliding window. Triggers at 80% of 131K context. | HIGH |
-| Browser disconnect/refresh | Store resumption handle in sessionStorage. Reconnect with handle on page load. | MEDIUM |
-| Concurrent sessions | One voice session per user. Gateway tracks active voice WebSocket per auth token. | HIGH |
-
-**Context window compression config:**
-```json
-{
-    "contextWindowCompression": {
-        "slidingWindow": {},
-        "triggerTokens": 104858,
-        "targetTokens": 65536
-    }
-}
-```
-
-## Tool Calling Architecture
-
-The gateway proxies tool calls between Gemini and goosed. When Gemini sends a `toolCall`, the gateway:
-
-1. Receives `toolCall` JSON from Gemini WebSocket
-2. Executes the tool via goosed REST API (existing `_do_rest_relay` pattern)
-3. Sends `toolResponse` JSON back to Gemini WebSocket
-4. Gemini resumes audio generation with tool results
-
-**Tools to expose to Gemini via function declarations:**
-- `memory_search` - search mem0 memories (via goosed MCP)
-- `search_gmail` - Gmail search (via goosed MCP, if configured)
-- `search_calendar` - Calendar lookup (via goosed MCP, if configured)
-- `web_search` - Web search (via goosed MCP)
-- `knowledge_search` - ChromaDB doc search (via goosed MCP)
-
-**Gateway is the tool executor, not the browser.** Browser just streams audio. All tool logic stays server-side.
-
-## Alternatives Considered
-
-| Recommended | Alternative | Why Not |
-|-------------|-------------|---------|
-| stdlib WebSocket (RFC 6455) | `websockets` pip package | gateway.py is stdlib-only. websockets is 16K lines of well-tested code, but violates the constraint. RFC 6455 for this use case is ~150 lines of simple frame parsing. |
-| stdlib WebSocket (RFC 6455) | `asyncio` + `websockets` | Would require rewriting gateway.py from ThreadingHTTPServer to asyncio. Massive refactor for one feature. Thread-per-connection works fine for single-user voice. |
-| Gemini 3.1 Flash Live | OpenAI Realtime API | Requires separate STT + TTS. More expensive. Doesn't do audio-to-audio natively. GooseClaw already supports 23+ providers, Gemini is just one more. |
-| Gemini 3.1 Flash Live | Gemini 2.5 Flash Live | 2.5 is GA and more stable, but 3.1 has better latency for voice. Use 2.5 as fallback if 3.1 preview is buggy. |
-| Ephemeral tokens | Direct API key in browser | Security risk. API key visible in browser DevTools. Ephemeral tokens expire in minutes. |
-| Ephemeral tokens | Gateway proxies ALL audio | Higher latency (extra hop). Higher bandwidth on gateway. Ephemeral tokens let browser connect directly to Gemini, gateway just issues the token. |
-| Gateway proxy (chosen) | Browser direct to Gemini | Tool calling requires server-side execution. Gateway must intercept tool calls. So gateway MUST proxy, not just issue tokens. |
-| AudioWorklet | ScriptProcessorNode | ScriptProcessorNode is deprecated. Runs on main thread, causes glitches. AudioWorklet runs in audio thread. |
-| Blob URL for AudioWorklet | Separate processor.js file | Single-file HTML constraint. Blob URL works in all modern browsers. |
-| PCM binary WebSocket frames | Base64 JSON WebSocket frames | 33% less bandwidth with binary. But Gemini protocol uses JSON with base64 audio. Gateway-to-browser CAN use binary for efficiency. |
+| Technology | Version | Purpose | Why |
+|------------|---------|---------|-----|
+| Filesystem (`/data/extensions/`) | n/a | Store generated extension code | Matches existing `/data` volume pattern on Railway. Survives redeploys. Each extension gets its own directory. |
+| YAML (`config.yaml`) | via PyYAML 6.0.2 | Register extensions with goosed | Existing pattern. Extensions are appended to `config.yaml` under `extensions:` key with `type: stdio`. |
+| `vault.yaml` | via PyYAML 6.0.2 | Credential storage | Existing vault system at `/data/secrets/vault.yaml`. Generated extensions read credentials via environment variables hydrated from vault at boot. |
 
 ## What NOT to Use
 
-| Avoid | Why | Use Instead |
-|-------|-----|-------------|
-| `websockets` pip package | Violates stdlib-only constraint for gateway.py | Inline RFC 6455 implementation (~150 lines) |
-| `asyncio` event loop in gateway | Would require rewriting entire gateway from threading to async. Massive scope creep. | Thread-per-connection with blocking socket I/O |
-| ScriptProcessorNode | Deprecated browser API, runs on main thread, audio glitches | AudioWorklet (modern, separate audio thread) |
-| MediaRecorder API | Outputs compressed formats (webm/opus), not raw PCM. Would need server-side decoding. | getUserMedia + AudioWorklet for raw PCM |
-| Opus/WebM encoding | Extra complexity. Gemini accepts raw PCM. Transcoding wastes CPU. | Raw PCM 16kHz 16-bit (Gemini native format) |
-| Socket.IO / SignalR | Over-engineered for single-user voice. Adds npm/pip dependencies. | Native WebSocket API (browser) + stdlib WebSocket (Python) |
-| Gemini 2.0 Flash | Retiring June 2026. Don't build on a deprecated model. | Gemini 3.1 Flash Live (or 2.5 as fallback) |
-| WebRTC | Designed for peer-to-peer. Overkill for client-server audio streaming. STUN/TURN complexity. | WebSocket + raw PCM |
-| Flask/FastAPI/aiohttp | Adding a web framework to gateway.py violates stdlib-only. gateway.py IS the web server. | Extend existing GatewayHandler |
-| npm build tooling for voice.html | Violates single-file constraint. setup.html works without it. | Inline everything in voice.html |
+| Category | Rejected | Why Not |
+|----------|----------|---------|
+| Code generation | Cookiecutter / Copier | These are CLI scaffolding tools for creating new projects. We need runtime code generation within a running application. Jinja2 templates rendered programmatically is the right abstraction. |
+| Code generation | `mcp-codegen` | Generates from YAML specs, but overkill. We need simple template rendering, not a full codegen pipeline. Also immature (LOW confidence on stability). |
+| Code generation | Standalone FastMCP (3.x) | The built-in `mcp.server.fastmcp` from the `mcp` package is sufficient. Adding standalone `fastmcp` 3.x introduces a second dependency with potential version conflicts. The existing extensions already use `mcp.server.fastmcp`. |
+| HTTP client | `requests` | No async support. `httpx` is already a dependency of the MCP SDK and supports both sync and async. |
+| HTTP client | `aiohttp` | Different API surface. `httpx` already present, no reason to add another HTTP library. |
+| Email | `imapclient` | Adds a dependency for marginal benefit. `imaplib` (stdlib) is sufficient for the email operations we need (search, fetch, parse). The generated template will handle the parsing boilerplate. |
+| Template format | OpenAPI-to-MCP generators | Our templates are service-type-specific (email, calendar, REST), not OpenAPI-driven. The template approach is simpler and more predictable than trying to parse arbitrary OpenAPI specs. |
+| Validation | JSON Schema directly | Pydantic is already available (MCP SDK dep) and provides better Python DX than raw jsonschema validation. |
 
-## Stack Patterns by Variant
+## Alternatives Considered
 
-**If Gemini 3.1 Flash Live is stable (happy path):**
-- Model: `gemini-3.1-flash-live-preview`
-- Lower latency, audio-to-audio native
-- Sequential function calling (audio pauses during tool execution)
+| Category | Recommended | Alternative | Why Not |
+|----------|-------------|-------------|---------|
+| Template engine | Jinja2 | Python f-strings / string.Template | Jinja2 handles conditionals, loops, and includes cleanly. f-strings become unreadable for multi-file code generation. string.Template lacks control flow. |
+| Template engine | Jinja2 | Mako | Less popular, more complex syntax, no advantage for this use case. |
+| Extension format | stdio MCP servers | Streamable HTTP MCP servers | Existing extensions all use stdio. Goosed launches them as child processes. Stdio is simpler (no port management, no auth needed for local IPC). |
+| Credential flow | Vault + env vars | Direct file reads in extensions | Vault hydration at boot is the existing pattern. Extensions get credentials via environment variables. Consistent, secure, no file permission issues. |
+| Generated code storage | `/data/extensions/` | SQLite / database | Files are simpler, debuggable (cat the generated code), and match the existing `/data` volume pattern. No need for a database layer. |
 
-**If Gemini 3.1 Flash Live is unstable (fallback):**
-- Model: `gemini-2.5-flash-live-001`
-- GA, more stable
-- Supports async function calling (`behavior: NON_BLOCKING`)
-- Audio doesn't pause during tool execution (better UX but more complex state management)
+## Dependency Impact Analysis
 
-**If ephemeral token REST endpoint doesn't work as derived:**
-- Skip ephemeral tokens entirely
-- Gateway proxies all audio (browser -> gateway WS -> Gemini WS)
-- Slightly higher latency but simpler auth model
-- API key never leaves server
+### New dependencies to add to requirements.txt
 
-**If user has no Gemini API key:**
-- Voice dashboard shows "Add Gemini API key in Setup to enable voice"
-- Gate on key presence (same pattern as Telegram channel gating)
-- No degraded mode, voice requires Gemini specifically
+```
+Jinja2>=3.1.6
+caldav>=3.0.0
+```
 
-## Version Compatibility
+That's it. Two new packages. Everything else is already present:
+- `mcp[cli]==1.26.0` (provides FastMCP, pydantic, httpx, starlette)
+- `PyYAML==6.0.2` (vault and config reading)
+- Python stdlib provides `imaplib`, `smtplib`, `re`, `ast`, `subprocess`
 
-| Component | Compatible With | Notes |
-|-----------|-----------------|-------|
-| Python 3.10 stdlib | WebSocket RFC 6455 | hashlib.sha1, struct, socket, ssl, base64 all available |
-| ThreadingHTTPServer | WebSocket upgrade | Socket hijack after HTTP 101 response. Thread stays alive for WS session. |
-| Gemini 3.1 Flash Live | v1beta WebSocket endpoint | v1alpha required only for ephemeral tokens |
-| AudioWorklet + Blob URL | Chrome 66+, Firefox 76+, Safari 14.1+ | All modern browsers. Mobile Safari included. |
-| getUserMedia | HTTPS only | Railway provides HTTPS via TLS termination. localhost exempted for dev. |
-| PCM 16kHz input | Gemini Live API | Native format, no resampling needed if AudioContext created at 16000Hz |
-| PCM 24kHz output | Web Audio API | Create separate AudioContext at 24000Hz for playback, or resample in browser |
+### Installation
 
-## Audio Format Reference
+```bash
+# Add to requirements.txt
+pip3 install --no-cache-dir Jinja2>=3.1.6 caldav>=3.0.0
+```
 
-| Direction | Format | Sample Rate | Bit Depth | Channels | Encoding |
-|-----------|--------|-------------|-----------|----------|----------|
-| Browser -> Gateway | Raw PCM | 16,000 Hz | 16-bit signed | Mono | Binary WebSocket frame |
-| Gateway -> Gemini | Raw PCM | 16,000 Hz | 16-bit signed | Mono | Base64 in JSON (`audio/pcm;rate=16000`) |
-| Gemini -> Gateway | Raw PCM | 24,000 Hz | 16-bit signed | Mono | Base64 in JSON |
-| Gateway -> Browser | Raw PCM | 24,000 Hz | 16-bit signed | Mono | Binary WebSocket frame |
+### Already available (no install needed)
 
-**Why different formats gateway<->browser vs gateway<->Gemini:** Gemini protocol requires JSON with base64 audio. Browser WebSocket can use binary frames (more efficient, 33% less bandwidth than base64). Gateway transcodes between binary PCM (browser) and base64 JSON (Gemini).
+```
+mcp[cli]==1.26.0        # FastMCP, pydantic >=2.12, httpx >=0.27.1
+PyYAML==6.0.2           # Config and vault
+Python stdlib            # imaplib, smtplib, re, ast, json, subprocess
+```
 
-## Infrastructure Changes
+## Key Architecture Decision: Runtime Jinja2 vs Static Templates
 
-| Change | Type | Cost | When |
-|--------|------|------|------|
-| Gemini API key in vault | Setup wizard addition | Free (API key) | Phase 1 |
-| voice.html file | New file in docker/ | Free | Phase 1 |
-| WebSocket handler in gateway.py | Code addition (~300 lines) | Free | Phase 1 |
-| No new Railway services | N/A | $0 | N/A |
+The core decision is: **generate Python source files from Jinja2 templates at runtime, not scaffold projects with Cookiecutter/Copier.**
 
-**Total new infrastructure cost:** $0. Gemini API usage is pay-per-token (priced at ~$0.15/M input tokens for Flash models). Voice sessions use roughly 1-5M tokens/hour depending on conversation density.
+Rationale:
+1. **Runtime context matters.** The AI picks a template based on credential type and user intent. This happens during a chat conversation, not a CLI session.
+2. **No project structure needed.** Generated extensions are single Python files (like `knowledge/server.py` and `memory/server.py`). No `pyproject.toml`, no package structure, no entry points.
+3. **Vault integration.** Credentials come from vault environment variables, not template prompts. The generator reads vault state and injects the right env var names.
+4. **Hot registration.** After generation, the extension must be registered in goosed's config.yaml and (ideally) loaded without a full restart.
 
-## Gateway.py Integration Points
+## Confidence Assessment
 
-| Integration Point | Existing Pattern | Voice Addition |
-|-------------------|-----------------|----------------|
-| Route matching | `do_GET` path matching in GatewayHandler | Add `/voice` (serve HTML) and `/ws/voice` (WebSocket upgrade) |
-| Auth check | `check_auth(self)` before serving pages | Same auth check before WebSocket upgrade |
-| HTML serving | `handle_setup_page()` reads file, sends with CSP headers | `handle_voice_page()` same pattern, different CSP (needs `connect-src wss:`) |
-| Outbound HTTP | `urllib.request.Request` for API calls | Same pattern for ephemeral token creation |
-| Outbound WebSocket | None (new) | New: raw socket + SSL + RFC 6455 client |
-| Inbound WebSocket | None (new) | New: HTTP upgrade in do_GET, socket hijack |
-| Tool execution | `_do_rest_relay()` for goosed sessions | Same function, called when Gemini sends toolCall |
-| Logging | `logging.getLogger("component")` | Add `_voice_log = logging.getLogger("voice")` |
-| Rate limiting | `RateLimiter` class, per-IP | Add voice-specific limiter (1 concurrent session per user) |
+| Decision | Confidence | Rationale |
+|----------|------------|-----------|
+| `mcp` SDK 1.26.0 with built-in FastMCP | HIGH | Already in use, verified on PyPI, matches existing extensions exactly |
+| Jinja2 for code generation | HIGH | Industry standard for Python code generation, stable API, verified 3.1.6 on PyPI |
+| Stdio transport for generated extensions | HIGH | All existing GooseClaw extensions use stdio, goosed config format confirmed |
+| `httpx` for REST API template | HIGH | Already a dependency of `mcp` SDK, verified in pyproject.toml |
+| Pydantic for config validation | HIGH | Already a dependency of `mcp` SDK (>=2.12.0), verified |
+| `caldav` for calendar template | MEDIUM | Actively maintained (3.x released March 2026), but not yet tested in this codebase |
+| `imaplib`/`smtplib` for email template | MEDIUM | Standard library, well-documented, but IMAP parsing requires careful error handling |
+| Vault env var hydration for credentials | HIGH | Existing pattern confirmed in entrypoint.sh, already handles custom keys |
 
 ## Sources
 
-- [Gemini Live API Overview](https://ai.google.dev/gemini-api/docs/live-api) -- capabilities, audio format, session limits (HIGH confidence)
-- [Gemini Live API WebSocket Reference](https://ai.google.dev/api/live) -- message types, JSON schema, setup config (HIGH confidence)
-- [Gemini Live API Getting Started (WebSocket)](https://ai.google.dev/gemini-api/docs/live-api/get-started-websocket) -- endpoint URL, auth, code examples (HIGH confidence)
-- [Gemini 3.1 Flash Live Preview Model Card](https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-live-preview) -- model ID, context limits, supported features (HIGH confidence)
-- [Gemini Ephemeral Tokens](https://ai.google.dev/gemini-api/docs/ephemeral-tokens) -- token creation, lifetime defaults, v1alpha requirement (MEDIUM confidence, REST endpoint derived from SDK)
-- [Gemini Live API Session Management](https://ai.google.dev/gemini-api/docs/live-session) -- resumption, compression, goAway handling (HIGH confidence)
-- [Gemini Live API Capabilities](https://ai.google.dev/gemini-api/docs/live-api/capabilities) -- tool calling behavior, audio format details (HIGH confidence)
-- [Firebase Live API Limits](https://firebase.google.com/docs/ai-logic/live-api/limits-and-specs) -- rate limits, audio specs, MIME types (HIGH confidence)
-- [MDN: Writing WebSocket Servers](https://developer.mozilla.org/en-US/docs/Web/API/WebSockets_API/Writing_WebSocket_servers) -- RFC 6455 handshake, frame format, masking (HIGH confidence)
-- [web.dev: Microphone Processing](https://web.dev/patterns/media/microphone-process) -- getUserMedia, AudioWorklet pattern (HIGH confidence)
-- [python-genai SDK tokens.py](https://github.com/googleapis/python-genai/blob/main/google/genai/tokens.py) -- REST endpoint path `POST /auth_tokens` (MEDIUM confidence, derived from source)
-- [Gemini Live API Examples (GitHub)](https://github.com/google-gemini/gemini-live-api-examples) -- reference implementations (MEDIUM confidence)
-- [Gemini 3.1 Flash Live Announcement (MarkTechPost)](https://www.marktechpost.com/2026/03/26/google-releases-gemini-3-1-flash-live/) -- release confirmation (MEDIUM confidence)
-
----
-*Stack research for: GooseClaw v6.0 Voice Dashboard*
-*Researched: 2026-03-27*
+- [MCP Python SDK on PyPI](https://pypi.org/project/mcp/) - v1.26.0, verified 2026-04-01
+- [MCP Python SDK GitHub](https://github.com/modelcontextprotocol/python-sdk) - FastMCP built-in, pyproject.toml dependencies
+- [FastMCP standalone on PyPI](https://pypi.org/project/fastmcp/) - v3.2.0, but we use built-in version
+- [Jinja2 on PyPI](https://pypi.org/project/Jinja2/) - v3.1.6, released 2025-03-05
+- [caldav on PyPI](https://pypi.org/project/caldav/) - v3.x, Python 3.10+
+- [Python imaplib docs](https://docs.python.org/3/library/imaplib.html) - stdlib
+- [Goose custom extensions](https://block.github.io/goose/docs/tutorials/custom-extensions/) - stdio config format
+- GooseClaw codebase: `docker/entrypoint.sh` (extension registration), `docker/knowledge/server.py` and `docker/memory/server.py` (existing FastMCP patterns), `docker/requirements.txt` (current deps)

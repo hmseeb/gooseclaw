@@ -1,318 +1,330 @@
 # Pitfalls Research
 
-**Domain:** Real-time voice AI dashboard (adding WebSocket voice channel to existing Python stdlib HTTP server)
-**Researched:** 2026-03-27
-**Confidence:** MEDIUM-HIGH (Gemini Live API is preview, some findings are LOW confidence)
+**Domain:** Auto-generated MCP extensions from user credentials (GooseClaw)
+**Researched:** 2026-04-01
+**Confidence:** HIGH (grounded in codebase analysis + MCP security research)
 
 ## Critical Pitfalls
 
-### Pitfall 1: Python stdlib http.server Was Not Designed for Long-Lived Connections
+### Pitfall 1: Credentials Leaked Into Generated Extension Source Code
 
 **What goes wrong:**
-`ThreadingHTTPServer` spawns one thread per request. Each thread is expected to handle a request quickly and die. WebSocket connections are long-lived (minutes to hours). With voice sessions, each connected user ties up a thread indefinitely. The `do_GET` handler returns when the request is done, but a WebSocket connection never "finishes" in the HTTP sense. You end up fighting the framework's assumptions at every turn: the handler wants to close the socket, the server wants to reap the thread, and none of the connection lifecycle hooks expect persistent bidirectional communication.
+The template system interpolates vault credentials directly into the generated Python MCP server source file. The credential value ends up as a string literal in `/data/extensions/email_server.py`. Anyone with filesystem access (or a `cat` command from the AI agent itself via the developer extension) can read plaintext secrets. Worse: credentials appear in stack traces, log files, and error messages when the extension crashes.
 
 **Why it happens:**
-The existing gateway.py (10K+ lines) works great as an HTTP server because it follows the request/response pattern `http.server` was built for. Developers assume "I'll just upgrade the connection and keep reading/writing" but `http.server` has no concept of WebSocket frames, ping/pong, or connection state machines.
+It's the simplest template approach. `API_KEY = "sk-abc123"` is easier to template than vault-read-at-runtime. Developers think "it's on disk anyway in vault.yaml, what's the difference?" The difference is vault.yaml has 600 permissions and is a known secret store. A Python file at `/data/extensions/` is not treated as sensitive by anyone scanning the filesystem.
 
 **How to avoid:**
-- Implement WebSocket as a raw socket takeover: after the HTTP 101 handshake, extract the underlying `self.request` socket from the handler and hand it to a dedicated WebSocket management loop running in its own thread. Do NOT try to keep using the `BaseHTTPRequestHandler` methods after upgrade.
-- Build a minimal RFC 6455 frame parser (handshake + frame read/write + masking + ping/pong). It is ~200 lines of code. The handshake is just: read `Sec-WebSocket-Key`, SHA-1 hash with magic GUID, base64 encode, respond with 101.
-- Cap concurrent WebSocket connections (this is a single-user app, so 1-2 max is fine).
-- Use `threading.Thread(daemon=True)` for the WebSocket read/write loops so they die with the process.
+Generated extensions must NEVER contain credential values. Two viable patterns exist in the codebase already:
+1. **Environment variable pattern** (matches `_inject_vault_secrets_into_env()` in gateway.py line 8501): The extension's config.yaml `envs:` block references env vars that get populated from the vault at goosed startup.
+2. **Vault CLI pattern**: The extension calls `secret get imap.password` at runtime via subprocess, matching how the existing `secret.sh` CLI works.
+
+Pattern 1 is preferred because it matches existing extensions (knowledge, mem0-memory) and avoids subprocess overhead.
+
+Additionally: run a post-generation lint that `grep`s the output file for strings matching credential patterns (`sk-`, `ghp_`, `Bearer `, any string >20 chars that looks like base64). Zero matches = pass.
 
 **Warning signs:**
-- Handler method returns but socket stays open (undefined behavior)
-- Thread count grows without bound during testing
-- `BrokenPipeError` or `ConnectionResetError` on socket operations after handler returns
+- `grep -rE "sk-|ghp_|Bearer |password.*=.*['\"]" /data/extensions/*.py` returns hits
+- Generated .py files contain string literals longer than 20 characters that aren't URLs or descriptions
+- Extension code contains `API_KEY = "..."` patterns with actual values
 
 **Phase to address:**
-Phase 1 (WebSocket infrastructure). This is the foundation everything else depends on. Get this wrong and nothing works.
+Phase 1 (Template System Design). This is a foundational architectural decision. Getting it wrong means rewriting every template later.
 
 ---
 
-### Pitfall 2: Gemini Live API Session Limits Will Kill Voice Calls Silently
+### Pitfall 2: config.yaml Race Condition on Extension Registration
 
 **What goes wrong:**
-The Gemini Live API has hard session limits that are easy to miss:
-- **Connection lifetime: ~10 minutes** regardless of activity (the server sends a `GoAway` message before disconnecting)
-- **Audio-only sessions: 15 minutes** without context window compression (context fills up)
-- **Audio+video sessions: 2 minutes** without compression
-- **Context window: 128K tokens** (native audio models consume ~25 tokens/second)
+Adding a new extension requires writing to `/data/config/config.yaml` and restarting goosed. The gateway already has a **documented race condition problem** with config.yaml writes. From gateway.py lines 1548-1573:
 
-At 25 tokens/second, a 15-minute voice call consumes ~22,500 tokens of context. Without compression, the session just dies. Users will be mid-sentence when the connection drops with no explanation.
+> "Pairings are stored on disk in config.yaml under gateway_pairings:, but goose sessions or apply_config() calls can race and rewrite the file, temporarily wiping pairings. This cache survives disk rewrites so a freshly paired user never gets 'You are not paired' due to a race condition."
+
+The `_pairing_cache` and `_re_persist_cached_pairings()` exist as workarounds for this exact problem. Adding auto-extension registration introduces another concurrent writer. Extensions, pairings, gateway configs, and provider settings can all be lost during concurrent writes.
 
 **Why it happens:**
-Developers build a happy-path demo that works for 5 minutes and ship it. The 10-minute connection reset is not obvious in short testing sessions. The 15-minute context limit only hits when you actually have a real conversation.
+config.yaml is a shared mutable file with no file-level locking. Multiple code paths read-modify-write it: `apply_config()` (line 3372), `_re_persist_cached_pairings()` (line 1569), extension sync in entrypoint.sh, and the proposed auto-extension registration. The `_extract_yaml_sections()` helper (line 3284) tries to preserve sections during rewrites but is fragile (regex-based YAML parsing).
 
 **How to avoid:**
-- Enable context window compression from day one: `ContextWindowCompressionConfig(sliding_window=SlidingWindow())`. This extends sessions to unlimited duration by discarding old context.
-- Implement session resumption: capture `SessionResumptionUpdate` tokens from the server (valid for 2 hours). When `GoAway` arrives, reconnect using the resumption handle within the `timeLeft` grace period.
-- Monitor for `GoAway` messages and proactively reconnect before the server kills the connection.
-- Show users a "reconnecting..." indicator rather than a hard error when session cycling occurs.
+1. **Separate registry file.** Store auto-generated extension configs in `/data/extensions/registry.json`. Only merge into config.yaml during controlled events: boot (entrypoint.sh) or explicit goosed restart.
+2. **Single writer pattern.** All config.yaml writes go through one function with a `threading.Lock`. No direct file writes from multiple code paths.
+3. **Atomic write.** Use the existing tmp+rename pattern (already used in `_save_vault_key()` at line 8615). But atomic writes don't solve the read-modify-write gap. The lock is still needed.
 
 **Warning signs:**
-- Voice calls work perfectly for 8 minutes then drop
-- No error in logs, just a clean WebSocket close from Gemini
-- Testing only in short sessions masks the problem entirely
+- Telegram pairings disappear after extension generation
+- config.yaml missing the `extensions:` section entirely after a restart
+- goosed fails to start with "invalid config" after concurrent operations
+- Intermittent "extension not found" for previously working extensions
 
 **Phase to address:**
-Phase 2 (Gemini Live API integration). Must be built into the connection manager from the start, not bolted on later.
+Phase 2 (Extension Registration). Must be solved before any dynamic registration goes live.
 
 ---
 
-### Pitfall 3: Railway Proxy Will Kill Idle WebSocket Connections at 10 Minutes
+### Pitfall 3: Goosed Restart Interrupts Active Sessions
 
 **What goes wrong:**
-Railway's load balancer / proxy layer kills idle TCP connections. "When proxying requests at Railway scale, keep alive connections have to be killed." Users report consistent disconnections "exactly after 10 minutes" even with bidirectional traffic. This compounds with Gemini's own 10-minute connection limit, creating a double timeout problem.
+Registering a new extension requires restarting goosed (it reads config.yaml at startup and launches stdio extension processes). The `start_goosed()` function in gateway.py (line 8622) explicitly terminates the old process:
+
+```python
+if goosed_process and goosed_process.poll() is None:
+    goosed_process.terminate()
+    try:
+        goosed_process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        goosed_process.kill()
+```
+
+This kills ALL active MCP server processes (knowledge, mem0-memory, Context7, Exa) and terminates any in-flight LLM session. If the user is mid-conversation via Telegram or voice, the conversation dies. If a scheduled job is executing, it fails silently.
 
 **Why it happens:**
-Railway's proxy infrastructure is optimized for HTTP request/response, not persistent connections. WebSocket connections that look idle (no frame-level traffic) get reaped. Even connections with application-level activity can be killed if the proxy doesn't see WebSocket ping/pong frames.
+goosed doesn't support hot-adding extensions. The existing `save` endpoint handler (line 10865) already does async restart: `threading.Thread(target=_restart).start()` with a 1-second delay. But there's no session-awareness. It restarts regardless of active work.
 
 **How to avoid:**
-- Implement WebSocket ping/pong at the protocol level (not application-level JSON messages) every 20-25 seconds. 25 seconds is the sweet spot: clears the 30-second cellular NAT timeout and stays under the 60-second default of most proxies.
-- The server must send WebSocket ping frames (opcode 0x9) and handle pong responses (opcode 0xA). This is in addition to any application-level heartbeat.
-- Add a custom domain to the Railway project (Railway docs suggest this helps).
-- Handle reconnection gracefully on the client side with exponential backoff.
+1. **Defer registration to idle periods.** Queue the extension config write. Apply when no sessions are active (check `_active_relays` in ChannelState, check `goosed_startup_state`).
+2. **Batch registrations.** If the user provides multiple credentials in one conversation, generate all extensions first, do a single restart at the end.
+3. **Notify the user.** "I've generated your email extension. I need to restart to activate it. Want me to do that now, or after we're done chatting?"
+4. **Graceful drain.** Wait for the current relay to complete before restarting. Set a flag that prevents new relays from starting, finish the active one, then restart.
 
 **Warning signs:**
-- Works locally, dies in production after exactly 10 minutes
-- Works on desktop but fails on mobile (cellular NATs are more aggressive)
-- Intermittent disconnects that seem random but are actually timeout-aligned
+- User complains conversation "reset" or "forgot everything" after adding a credential
+- Scheduled jobs fail with connection errors right after extension generation
+- Voice sessions drop immediately after credential submission
+- goosed startup state flaps between "ready" and "starting" rapidly
 
 **Phase to address:**
-Phase 1 (WebSocket infrastructure). The keepalive mechanism must be baked into the WebSocket frame handler, not added as an afterthought.
+Phase 2 (Extension Registration). The restart strategy must be designed before the first extension gets registered.
 
 ---
 
-### Pitfall 4: Browser Audio Autoplay Policy Blocks Voice Playback on First Interaction
+### Pitfall 4: AI Selects Wrong Template or Generates Malformed MCP Server
 
 **What goes wrong:**
-iOS Safari (and increasingly other mobile browsers) block all audio playback unless initiated by a user gesture. You create an `AudioContext`, connect it to playback, and... silence. No error thrown. The `AudioContext` state is `suspended` and will stay that way until the user taps something. This is particularly insidious because it works perfectly on desktop during development.
+The AI picks IMAP/SMTP for a REST API key, or CalDAV for an IMAP password. The generated extension either crashes on startup (wrong protocol), silently does nothing (connects to wrong endpoint), or exposes tools that don't match the user's intent. If the generated Python is syntactically invalid, the MCP server process crashes, goosed may retry in a loop, burning CPU.
 
 **Why it happens:**
-Browser vendors implemented autoplay policies to stop websites from blasting audio without permission. The Web Audio API is subject to the same policy. If you create the `AudioContext` at page load or in response to a WebSocket message (not a user click/tap), it stays suspended.
+Credential types are ambiguous. An "app password" could be for IMAP, CalDAV, or a proprietary API. A "token" could be OAuth, API key, or bearer token. Template selection is a classification problem that LLMs get wrong ~15-20% of the time without guardrails, because the credential itself carries no type metadata.
 
 **How to avoid:**
-- Create the `AudioContext` inside the mic button's click handler. A single user gesture unlocks it for the entire session.
-- After creating the context, call `audioContext.resume()` explicitly and await it.
-- Design the UI flow so the user MUST tap a "Start conversation" button before any audio processing begins. This is not just good UX, it is a technical requirement.
-- Check `audioContext.state === 'running'` before attempting playback. If suspended, show a "tap to enable audio" prompt.
-- Reuse the same `AudioContext` for the entire session. Do not create new ones.
+1. **Always confirm with the user.** "This looks like an email credential. Should I set up email access (IMAP/SMTP)?" Never silently select a template.
+2. **Template manifest with required fields.** Each template declares what inputs it needs (e.g., IMAP requires `host`, `port`, `username`, `password`). If the credential doesn't match, ask for missing info rather than guessing.
+3. **Validate generated code.** Run `ast.parse()` on the generated Python. Then run the MCP server in a subprocess with a 5-second timeout and verify it responds to `initialize` + `tools/list`.
+4. **Post-registration health check.** After goosed restarts, query its `/config` endpoint and verify the new extension's tools appear in the response.
 
 **Warning signs:**
-- Works on Chrome desktop, silent on iOS Safari
-- `audioContext.state` logged as `'suspended'` in mobile console
-- No errors thrown, just no audio output
+- Extension registers but no new tools appear in goosed `/config`
+- goosed stderr shows repeated "failed to start extension" errors
+- CPU spikes after extension registration (crash-restart loop from goosed retrying)
+- User says "I gave you my email password but you set up a calendar"
 
 **Phase to address:**
-Phase 3 (browser audio UI). The mic button click handler should be the single point where AudioContext is created and mic permissions are requested.
+Phase 1 (Template System) for manifest + matching rules. Phase 3 (Validation) for health checks.
 
 ---
 
-### Pitfall 5: Gemini Live API Tool Calling Is Synchronous and Blocks Voice Response
+### Pitfall 5: Stdout Corruption in Generated Extensions
 
 **What goes wrong:**
-On Gemini 3.1 Flash Live, function calling is synchronous only. "The model will not start responding until you've sent the tool response." This means if a user asks "what's on my calendar today?" and the tool call takes 3 seconds, there are 3 seconds of dead silence. Worse: if the tool call fails or times out, the conversation hangs indefinitely. The model literally cannot speak until it gets the function response.
-
-Additionally, when VAD detects an interruption during a pending tool call, Gemini discards the pending function calls and sends their IDs as cancelled. If your proxy already dispatched the tool call to goose, you now have orphaned work running in the background.
+Generated extension writes to stdout via `print()` statements, library logging defaults, or imported packages that write to stdout. This corrupts the MCP JSON-RPC protocol over stdio. The extension appears to register but ALL tool calls fail with parse errors or timeouts.
 
 **Why it happens:**
-Developers familiar with non-realtime LLM tool calling don't realize the blocking nature in Live API. The latency of tool execution directly becomes voice latency. Async function calling (NON_BLOCKING behavior) is only available on Gemini 2.5 Flash Live, not 3.1 Flash Live.
+Default Python behavior is `print()` to stdout. Many libraries log to stdout unless explicitly configured. The existing codebase handles this (both `knowledge/server.py` and `memory/server.py` use `logging.basicConfig(stream=sys.stderr)`), but a template author or AI generator can easily forget.
 
 **How to avoid:**
-- Set aggressive timeouts on all tool calls (2-3 seconds max). If a tool doesn't respond in time, send a "still working on that" placeholder response.
-- Use the `scheduling` parameter on function responses: `SILENT` for background updates, `WHEN_IDLE` for non-urgent results, `INTERRUPT` only for time-critical responses.
-- Track cancelled tool call IDs from interruption messages. If goose already started executing, let it finish but discard the result.
-- Consider pre-fetching likely tool results during conversation setup (e.g., calendar for today, recent emails).
-- Test with realistic tool latencies. A 100ms mock does not reveal the problem.
+Every generated template MUST include this boilerplate at the top:
+```python
+import sys
+import logging
+logging.basicConfig(stream=sys.stderr, level=logging.INFO)
+```
+Never use `print()` in generated code. If importing third-party libraries, redirect their loggers to stderr. Include a pre-registration test that captures the process's stdout and verifies it only contains valid JSON-RPC messages.
 
 **Warning signs:**
-- Awkward silence after tool-triggering questions
-- Conversation hangs and never resumes
-- Duplicate or orphaned tool executions in goose logs
-- User interrupts during tool call, causing confusing state
+- Tool calls return garbled JSON or timeout
+- Extension process produces output but tools never work
+- `goosed` stderr shows JSON parse errors from the extension's stdio transport
 
 **Phase to address:**
-Phase 4 (tool calling integration). Build the tool call proxy with timeout handling and cancellation from the start.
+Phase 1 (Template System). This is a template boilerplate requirement, not a per-extension concern.
 
 ---
 
-### Pitfall 6: WebSocket Frame Parsing Bugs in Stdlib Implementation
+### Pitfall 6: Credential Auto-Detection False Positives in Chat
 
 **What goes wrong:**
-When implementing RFC 6455 frame parsing from scratch (required since gateway.py is stdlib-only), subtle bugs in masking, fragmentation, or payload length parsing cause silent data corruption or crashes. The three most common bugs:
-1. **Masking math error:** Client frames are masked with a 4-byte key via XOR. Getting the modulo indexing wrong (`data[i] ^ mask[i % 4]`) silently corrupts audio data.
-2. **Extended payload length:** Payloads 126-65535 bytes use a 2-byte extended length field. Payloads over 65535 use an 8-byte field. Audio chunks hit these thresholds regularly. Misreading the length causes the parser to read frame headers as payload data, cascading into garbage.
-3. **Fragmented frames:** Large audio chunks may be split across multiple frames (FIN bit = 0 on non-final frames). If you only handle single-frame messages, you silently drop audio data.
+The system tries to auto-detect when a user "drops a credential in chat." It interprets a long string, a code snippet, a URL with a query parameter, or a base64-encoded value as a credential and vaults it. The user didn't intend to store a credential. Now there's garbage in the vault and possibly a generated extension for a non-existent service.
+
+Alternatively: a real credential is shared but the heuristic misses it (false negative), and the user expects the system to have stored it.
 
 **Why it happens:**
-RFC 6455 framing looks simple but has edge cases. Most tutorials show the happy path (small text messages, no fragmentation). Audio streams hit all the edge cases: large binary payloads, continuous streaming, high throughput.
+Credential detection is inherently fuzzy. API keys look like random strings. OAuth tokens look like JWTs. App passwords look like short random strings. All of these also look like: commit hashes, UUIDs, encoded data, URL parameters, and code variables.
 
 **How to avoid:**
-- Use an existing minimal Python WebSocket implementation as reference. The GitHub project "Pithikos/python-websocket-server" is a clean stdlib-only implementation.
-- Write explicit tests for: masked binary frames, 126-byte extended length, 65536-byte extended length, fragmented messages, ping/pong handling, close frame handling.
-- Test with actual audio data sizes (PCM 16-bit at 16kHz = 32KB/second, chunks of 640-1280 bytes every 20-40ms).
-- Log frame metadata (opcode, length, FIN bit) during development to catch parsing errors early.
+1. **Never auto-vault without confirmation.** Detect candidate credentials, but always ask: "That looks like it might be an API key. Want me to store it securely?"
+2. **Prefer structured input.** Point users to `secret set service.key "value"` or the setup wizard. Don't rely on free-text detection for primary flow.
+3. **Use high-specificity patterns.** Only auto-detect strings matching known formats: `sk-[a-zA-Z0-9]{48}` (OpenAI), `ghp_[a-zA-Z0-9]{36}` (GitHub), `AIza[a-zA-Z0-9_-]{35}` (Google). Unknown formats require explicit user intent.
+4. **Provide undo.** If the system vaults something incorrectly, the user says "that wasn't a credential, delete it" and it's cleaned up.
 
 **Warning signs:**
-- Audio sounds garbled or has periodic clicks/pops
-- WebSocket connection drops with close code 1002 (protocol error)
-- Intermittent crashes when audio chunks cross payload length boundaries
-- Works with small text messages but fails with binary audio
+- Vault fills with entries the user doesn't recognize
+- Extensions get generated for non-existent services
+- User pastes code and the system tries to vault variable names or constants
 
 **Phase to address:**
-Phase 1 (WebSocket infrastructure). The frame parser is the lowest-level component. A bug here poisons everything above it.
+Phase 1 (Credential Detection). Must be designed conservatively from the start. Overly aggressive detection destroys trust.
 
 ---
 
-### Pitfall 7: Safari/iOS MediaRecorder Does Not Support WebM/Opus, and You Should Not Use MediaRecorder Anyway
+### Pitfall 7: Template Injection via User-Provided Values
 
 **What goes wrong:**
-You use `MediaRecorder` with `mimeType: 'audio/webm;codecs=opus'` (the default on Chrome) and it works great. On Safari, `MediaRecorder.isTypeSupported('audio/webm;codecs=opus')` returns false. Safari supports MP4/AAC only. But you don't actually need `MediaRecorder` at all for this use case, and using it is a trap.
-
-The Gemini Live API wants raw PCM audio (16-bit, 16kHz, little-endian), NOT encoded audio. MediaRecorder encodes audio into container formats (WebM, MP4), which then need to be decoded back to PCM on the server. This is a pointless encode-decode cycle that adds latency and complexity.
+User-provided service name, hostname, or credential value contains Jinja2 syntax (`{{ }}`, `{% %}`), Python code, or YAML special characters that get executed or misinterpreted during template rendering or config generation.
 
 **Why it happens:**
-Developers default to MediaRecorder because it is the "standard" way to capture audio in browsers. They don't realize that for real-time voice streaming, you need raw PCM from the Web Audio API, not encoded chunks from MediaRecorder.
+String interpolation without sanitization. If the template uses `f"API_KEY = '{user_value}'"` and the user's password contains a single quote, the generated Python is syntactically broken. If using Jinja2 and the service name contains `{{ }}`, it gets evaluated.
 
 **How to avoid:**
-- Use `getUserMedia()` + `AudioWorklet` (or `ScriptProcessorNode` as fallback) to capture raw PCM samples directly.
-- Create the AudioContext with `sampleRate: 16000` to match Gemini's expected input rate. Chrome and Safari both support custom sample rates.
-- Convert Float32Array samples to 16-bit PCM integers: `Math.max(-1, Math.min(1, sample)) * 0x7FFF`.
-- Base64 encode the PCM buffer and send via WebSocket as JSON, or send as binary WebSocket frames (saves ~33% bandwidth).
-- Skip MediaRecorder entirely. It solves a different problem (recording to file).
+1. **Use `jinja2.sandbox.SandboxedEnvironment`** instead of regular `Environment`.
+2. **Validate all user inputs** against strict patterns: service names are `[a-z0-9-]` only, hostnames are valid DNS, ports are integers.
+3. **Never interpolate credentials into source code** (see Pitfall 1). This eliminates the credential-value injection vector entirely.
+4. **For YAML config generation**, use `yaml.dump()` not f-strings. `yaml.dump()` properly escapes special characters.
+5. **Run `ast.parse()`** on every generated Python file to catch syntax errors from bad interpolation.
 
 **Warning signs:**
-- Works on Chrome, fails or produces different format on Safari
-- Audio arriving at server needs decoding before sending to Gemini
-- Latency spikes from encode/decode overhead
-- Extra complexity handling multiple container formats
+- Generated Python fails `ast.parse()` check
+- Jinja2 raises `UndefinedError` or `TemplateSyntaxError` during generation
+- config.yaml contains un-escaped special YAML characters (`:`, `{`, `}`, `[`, `]`)
 
 **Phase to address:**
-Phase 3 (browser audio). Choose the right capture approach from the start. AudioWorklet, not MediaRecorder.
+Phase 1 (Template System). Input validation is a day-1 requirement.
 
 ---
 
 ## Technical Debt Patterns
 
+Shortcuts that seem reasonable but create long-term problems.
+
 | Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
 |----------|-------------------|----------------|-----------------|
-| Skip session resumption | Simpler connection logic | Users lose conversation on every 10-min reconnect | Never. Gemini's 10-min limit makes this mandatory. |
-| Skip WebSocket ping/pong, use app-level heartbeat | Simpler frame handler | Railway proxy kills connection, mobile NATs drop it | Never on Railway. Protocol-level pings are the only reliable keepalive. |
-| ScriptProcessorNode instead of AudioWorklet | Works in all browsers including older ones | Runs on main thread, causes audio glitches, deprecated | MVP only, must migrate before production |
-| Single WebSocket for everything (voice + control) | One connection to manage | Audio floods control messages, priority inversion | MVP only. Separate data/control channels or at minimum message priorities. |
-| Hardcode PCM sample rate (skip resampling) | Simpler audio pipeline | Breaks if browser AudioContext refuses 16kHz (rare but possible) | MVP, but add fallback resampling path |
-| Skip context window compression | Simpler Gemini config | 15-minute session hard limit, abrupt disconnection | Never. Always enable compression. |
-| Base64 encode audio in JSON (vs binary frames) | Simpler parsing on both ends | ~33% bandwidth overhead, higher latency | Acceptable for single-user. Optimize if latency matters. |
+| Hardcode service logic in templates instead of configurable parameters | Faster initial development | Every new service requires a new template file. Can't customize without editing templates | MVP only. Refactor to data-driven templates when >5 templates exist |
+| Store generated extensions as plain .py files without versioning | Simple, no extra infrastructure | Can't roll back if a template update breaks a working extension | Always acceptable for single-user system |
+| Restart goosed synchronously in the credential-handling flow | Simpler control flow | Blocks the user's chat for 5-30 seconds during restart. Health checks fail. Railway may kill container | Never. Always async restart with status feedback |
+| Skip connection validation on extension generation | Extension appears "ready" faster | User doesn't discover the credential is wrong until they try to use it. Gets a cryptic MCP error | MVP only. Add validation in Phase 3 |
+| Use `subprocess.run(["secret", "get", key])` in generated extensions | Simple, reuses existing CLI | Spawns a new process per secret read. Adds 50-100ms latency per secret | Acceptable if secrets are cached on first read. Never call per-request |
+| Single-account-per-service templates | Simpler template logic | User can't have work + personal email. Would need to duplicate the template or create naming hacks | Acceptable for MVP. Add multi-account support when users request it |
 
 ## Integration Gotchas
 
+Common mistakes when connecting to external services.
+
 | Integration | Common Mistake | Correct Approach |
 |-------------|----------------|------------------|
-| Gemini Live API | Using deprecated `LiveConnectConfig.generation_config` | Set `response_modalities`, `speech_config`, etc. directly on `LiveConnectConfig`. Deprecated pattern becomes an error after Q3 2025. |
-| Gemini Live API | Sending tool responses via `BidiGenerateContentToolResponse` | Use `FunctionResponse` Part wrapped in `clientContent` with `turnComplete: true`. The documented format has known issues (cookbook #906). |
-| Gemini Live API | Not sending `audioStreamEnd` after pauses > 1 second | Send `audioStreamEnd` event to flush cached audio data. Without this, Gemini waits for more audio instead of processing what it has. |
-| Gemini Live API | Connecting from browser directly with long-lived API key | Use server-generated ephemeral tokens. Token creation: `client.auth_tokens.create()` with `v1alpha` API. Default TTL: 1 min for new sessions, 30 min for messages. |
-| Railway | Using `wss://` URL without custom domain | Add custom domain. Railway's default domain may have stricter proxy rules for WebSocket connections. |
-| Web Audio API | Creating AudioContext before user gesture | Create inside click handler. Call `audioContext.resume()` and await it. Check `state === 'running'` before proceeding. |
-| Web Audio API | Assuming microphone permission persists (Safari) | Safari permissions are per-session and less persistent than Chrome. Always handle permission re-request gracefully. |
+| IMAP/SMTP email | Using port 143/25 (unencrypted) or not handling STARTTLS vs implicit TLS | Default to 993 (IMAPS) and 465 (SMTPS) with TLS. Only fall back to STARTTLS on 587 if explicitly configured |
+| IMAP connections | Opening connection at module import time. Connection times out after 30 min idle | Open per-tool-call with try/reconnect. MCP servers are long-running; IMAP connections are not |
+| CalDAV | Hardcoding the CalDAV URL path when providers use different paths (Google vs iCloud vs Fastmail) | Use `.well-known/caldav` discovery (RFC 6764) first. Fall back to user-configured URL. Store full CalDAV URL, not just hostname |
+| OAuth token paste | Accepting a refresh token but treating it as an access token (or vice versa) | Template must distinguish token types. If refresh token, generate code that exchanges it. If access token, warn about expiry |
+| REST API generic | Assuming all APIs use Bearer token auth | Support multiple auth methods: `Authorization: Bearer`, `X-API-Key` header, query parameter, Basic auth. Let user/AI specify |
+| Google services | Using an API key where OAuth is required (Gmail, Calendar, Drive need OAuth) | Document clearly which Google services need OAuth vs API key. Reject API key for services that require OAuth |
+| IMAP mailbox search | Searching entire mailbox without constraints. User has 50k emails, tool times out | Default to last 30 days, max 50 results. Require at least one constraint (folder, date, sender) |
 
 ## Performance Traps
 
+Patterns that work at small scale but fail as usage grows.
+
 | Trap | Symptoms | Prevention | When It Breaks |
 |------|----------|------------|----------------|
-| Base64 encoding audio on main thread | UI jank during voice conversations, audio stutters | Move PCM-to-base64 conversion into AudioWorklet or use binary WebSocket frames | Any sustained voice conversation > 30 seconds |
-| Buffering audio before sending (> 100ms chunks) | Noticeable delay between speaking and hearing response | Send 20-40ms chunks. Do not buffer beyond 100ms. | Immediately noticeable to users, destroys conversational feel |
-| Not clearing audio playback queue on interruption | Model's old audio keeps playing after user speaks | When server sends `interrupted: true`, immediately clear the playback buffer and stop current audio output | Every conversation with interruptions |
-| Synchronous tool execution in WebSocket thread | Entire WebSocket relay freezes while tool executes | Dispatch tool calls to goose in a separate thread. Use a queue with timeout. Return tool response asynchronously. | Any tool call > 500ms |
-| Thread-per-WebSocket without connection limits | Memory leak, thread exhaustion if browser reconnects rapidly | Cap at 2 concurrent WebSocket connections. Close old connections on new connect from same auth token. | Edge case: network flapping causes rapid reconnections |
-| Polling for Gemini responses instead of event-driven | Wasted CPU, added latency, complex timing code | Use blocking reads on the Gemini WebSocket with timeout. Process messages as they arrive. | Immediately. Polling adds minimum latency of poll interval. |
+| One Python process per MCP extension on boot | Boot time increases linearly. Railway container has ~512MB-1GB RAM | Monitor boot time. Cap at 10-15 extensions. Share Python interpreters if possible | >10 extensions: boot >30s, OOM kills from memory pressure |
+| Reading vault.yaml on every tool call (no caching) | 50-100ms latency per vault read on every tool invocation | Cache credentials in-process on first read. Invalidate on vault write | Noticeable from first use. Not a scale issue but a UX issue |
+| Synchronous goosed restart blocking gateway | Gateway unresponsive during restart. Health checks fail. Railway restarts container | Always async restart: `threading.Thread(target=_restart)` with startup state API for feedback | Any time. Already solved in `save` handler but easy to forget in new code paths |
+| No max-extension limit | User adds 20+ integrations. Container runs out of memory or file descriptors | Set a configurable max (default 15). Error with clear message when exceeded | >15 extensions on a 512MB container |
 
 ## Security Mistakes
 
+Domain-specific security issues beyond general web security.
+
 | Mistake | Risk | Prevention |
 |---------|------|------------|
-| Shipping Gemini API key to the browser | Key exposure in browser DevTools, token theft, unauthorized usage billed to user | Generate ephemeral tokens server-side. Lock tokens to specific model and config. Set `uses: 1`. |
-| No auth on voice WebSocket endpoint | Anyone with the URL can start voice sessions, consuming Gemini API credits | Reuse existing GooseClaw auth (PBKDF2 password check) before upgrading to WebSocket. Pass auth token in initial WebSocket message or query param. |
-| Audio data traverses untrusted networks in plaintext | Voice content interception | Railway handles TLS termination. Ensure `wss://` (not `ws://`) is used in browser. Ephemeral tokens have built-in transport security. |
-| Ephemeral token endpoint accessible without auth | Token farming, API credit theft | Gate token generation behind existing GooseClaw session auth. Rate limit token creation. |
-| Not validating WebSocket origin header | Cross-site WebSocket hijacking | Check `Origin` header during WebSocket upgrade handshake. Reject connections from unexpected origins. |
+| Generated code uses `os.system()`, `subprocess.run(shell=True)`, or `eval()` | Prompt injection in email content or API response could trigger arbitrary command execution | Templates must NEVER use shell=True, eval, exec, or os.system. Use parameterized API calls only. Lint generated code for dangerous patterns before registration |
+| AI agent can `cat /data/secrets/vault.yaml` via developer extension | All credentials readable by the AI. A prompt injection could exfiltrate them via tool calls | Vault file permissions (600) help but goosed runs as the same user. Consider: encrypted-at-rest vault with runtime decryption, or dev extension path restrictions |
+| Generated extensions inherit full goosed permissions | An email extension can also read/write files, execute commands if developer extension is active | goosed architectural limitation. Mitigate: generate minimal extensions that only import needed libraries. Never import `os` or `subprocess` except for vault reads |
+| User credential values contain special characters that break template rendering | Credential becomes executable code via template injection (see Pitfall 7) | Never interpolate credentials into source code. Use `yaml.dump()` for config. Validate credential characters |
+| Extension makes unrestricted outbound network calls | A compromised template could exfiltrate credentials to an attacker-controlled server | Generated extensions should connect only to the configured service host. Block arbitrary outbound connections at the template level |
+| No audit trail for credential access | Can't detect if/when credentials were exfiltrated | Log every vault read with timestamp and caller. Alert on reads from unexpected processes |
 
 ## UX Pitfalls
 
+Common user experience mistakes in this domain.
+
 | Pitfall | User Impact | Better Approach |
 |---------|-------------|-----------------|
-| No visual feedback during tool execution silence | User thinks connection is broken, mashes buttons | Show "thinking..." animation or a subtle pulsing indicator when model is waiting for tool response |
-| Hard error on session reconnect instead of seamless resume | User thinks conversation crashed, loses trust | Implement session resumption. Show brief "reconnecting..." then continue conversation naturally |
-| No voice activity indicator | User unsure if mic is working, speaks louder, gets frustrated | Show real-time waveform/level meter that responds to mic input immediately |
-| Latency spike with no indication | User starts repeating themselves, model hears duplicate input | Show connection quality indicator. If latency > 500ms, display warning |
-| Mobile browser: no way to end call without closing tab | User can't stop voice session gracefully | Prominent stop button that stays visible, not hidden by keyboard or scroll |
-| Starting audio before mic permission granted | Awkward state where audio plays but user can't respond | Request mic permission first. Only establish Gemini connection after permission granted. |
-| VAD too sensitive to background noise | Model interrupts itself because it thinks user spoke | Configure `startOfSpeechSensitivity` and `endOfSpeechSensitivity`. Default may be too aggressive for noisy environments. Expose sensitivity control in UI. |
+| Silent extension generation with no feedback | User drops a credential and gets no indication anything happened | Immediate acknowledgment: "Got it. Setting up email access..." then "Done! You now have: read_email, send_email, search_email" |
+| Extension generation fails silently | User thinks email is set up. Tries to use it, gets "tool not available" | Surface health. After registration, verify extension is running. If not: "Email setup failed because [error]. Want to try again?" |
+| No way to list or manage extensions | User forgets what they set up. Can't disable or delete without SSH | Provide tools: `list_extensions`, `disable_extension`, `remove_extension`. Surface in admin dashboard |
+| Credential update doesn't propagate | User changes password, updates vault, but running extension has old password cached | On vault update, restart affected extensions or invalidate caches. Tell user: "Password updated. Restarting email extension..." |
+| Goosed restart with no warning | User is mid-conversation, system restarts for extension registration | Always warn: "I need to restart to activate the new extension. This will briefly interrupt our conversation. OK?" |
+| Generated tool names are generic or confusing | User has `do_action_1`, `do_action_2` instead of `read_email`, `send_email` | Templates must define clear, specific tool names and descriptions. LLM tool selection depends on good descriptions |
 
 ## "Looks Done But Isn't" Checklist
 
-- [ ] **WebSocket ping/pong:** Often missing protocol-level ping. App-level heartbeat does NOT satisfy Railway's proxy or mobile NAT requirements.
-- [ ] **Session resumption:** Demo works for 5 minutes. Real usage hits 10-minute connection limit. Must handle `GoAway` + reconnect with resumption token.
-- [ ] **Context window compression:** Not enabled by default. Without it, sessions die at 15 minutes with no warning.
-- [ ] **iOS audio unlock:** Works on desktop. Fails silently on iOS. Must create AudioContext inside user gesture handler.
-- [ ] **Interrupted tool calls:** User interrupts during tool execution. Must handle cancelled tool call IDs and stop orphaned goose sessions.
-- [ ] **Close frame handling:** WebSocket close frame (opcode 0x8) must be sent/received with close code. Many stdlib implementations forget this, causing "unclean close" errors.
-- [ ] **Binary frame support:** Audio requires opcode 0x2 (binary). If frame handler only supports opcode 0x1 (text), audio transmission silently fails or crashes.
-- [ ] **Mic permission re-request:** Safari forgets mic permissions between sessions. Must handle `NotAllowedError` gracefully every time.
-- [ ] **Output audio sample rate:** Gemini outputs at 24kHz but browser AudioContext may be at 16kHz. Must handle sample rate mismatch or create separate playback context at 24kHz.
-- [ ] **Ephemeral token refresh:** Token valid for 30 min message sending. Sessions that reconnect every 10 min need fresh token coordination.
+Things that appear complete but are missing critical pieces.
+
+- [ ] **Template generates valid Python:** Often missing error handling for network timeouts, auth failures, and malformed API responses. Verify with `ast.parse()` AND a 5-second subprocess test
+- [ ] **Extension registered in config.yaml:** Often missing `envs:` block for vault references, or `timeout:` set too low for slow APIs (IMAP can take 10s+). Verify config entry matches pattern of existing extensions (knowledge, mem0-memory)
+- [ ] **Extension survives container reboot:** Often missing from boot-time registration flow. Verify the extension reappears in goosed `/config` after `docker restart` without user intervention
+- [ ] **Extension works via voice AND text:** Voice tool calls go through Gemini Flash, which may format parameters differently. Verify tool calls succeed from both Telegram and voice channels
+- [ ] **Credential auto-detection handles the credential format:** Often tested with OpenAI `sk-` keys but fails for app passwords, OAuth tokens, generic API keys. Test with at least 5 different credential formats
+- [ ] **Generated tool descriptions are LLM-usable:** Generic descriptions cause the LLM to pick the wrong tool or fall through to the slow assistant catch-all. Verify descriptions are specific enough for reliable tool selection
+- [ ] **MCP SDK version matches:** Container has `mcp[cli]==1.26.0`. Template code must use API patterns compatible with this version (`FastMCP`, not older patterns). Verify imports work against pinned version
+- [ ] **Concurrent extension generation works:** Two credentials provided in same conversation. Both extensions generated, both registered, no config corruption
 
 ## Recovery Strategies
 
+When pitfalls occur despite prevention, how to recover.
+
 | Pitfall | Recovery Cost | Recovery Steps |
 |---------|---------------|----------------|
-| WebSocket frame parser bug corrupts audio | LOW | Fix parser, add test with known-good audio frame. No state to repair. |
-| Session drops without resumption | MEDIUM | Add resumption token capture. Requires refactoring connection manager to separate session state from connection state. |
-| Thread leak from long-lived WebSocket | LOW | Add connection cap, use daemon threads, add explicit cleanup on close. |
-| Safari audio silent (autoplay policy) | LOW | Move AudioContext creation to click handler. No architectural change. |
-| Tool call blocks voice (sync only) | HIGH | Requires rethinking tool architecture. Must add timeout, background dispatch, and placeholder response generation. |
-| MediaRecorder used instead of AudioWorklet | HIGH | Full rewrite of audio capture pipeline. Should be caught before implementation. |
-| Gemini API key shipped to browser | HIGH | Architectural change to server-side proxy or ephemeral token generation. Must add token endpoint, change browser connection target. |
+| Credential leaked in generated code | MEDIUM | 1. Rotate the credential immediately. 2. Delete generated file. 3. Regenerate with vault-read pattern. 4. Audit access logs |
+| config.yaml corrupted by race | LOW | 1. Restart container (entrypoint.sh regenerates base config). 2. Extensions restored from state file. 3. Pairings restored from `_pairing_cache`. Already battle-tested |
+| Goosed restart kills active session | LOW | 1. User re-sends message. 2. Session context lost but mem0 preserves long-term memory. 3. Extension available next turn |
+| Wrong template selected | LOW | 1. Remove the generated extension. 2. Re-run with explicit template. 3. No credential rotation needed (vault-read pattern means no credential in code) |
+| Orphaned extensions accumulate | LOW | 1. Boot-time validation: check vault keys exist for each extension. 2. Auto-disable extensions with missing credentials. 3. Log for user review |
+| Extension crashes in loop | MEDIUM | 1. goosed may exhaust memory retrying. 2. Auto-disable after 3 consecutive startup failures. 3. Remove from config.yaml. 4. Notify user |
+| Template injection produces malicious code | HIGH | 1. Kill the extension immediately. 2. Audit vault for exfiltration. 3. Delete generated file. 4. Add input validation. 5. Regenerate with sanitized inputs |
 
 ## Pitfall-to-Phase Mapping
 
+How roadmap phases should address these pitfalls.
+
 | Pitfall | Prevention Phase | Verification |
 |---------|------------------|--------------|
-| stdlib http.server not designed for WebSocket | Phase 1: WebSocket infra | Verify WebSocket connection stays alive for 15+ minutes under load |
-| Gemini session limits (10 min connection, 15 min audio) | Phase 2: Gemini integration | Verify voice call survives a 20-minute conversation with auto-reconnect |
-| Railway proxy kills idle connections | Phase 1: WebSocket infra | Deploy to Railway, verify WebSocket survives 15 minutes of silence |
-| Browser autoplay policy blocks audio | Phase 3: Browser audio UI | Test on iOS Safari. Audio must play after mic button tap. |
-| Tool calling blocks voice (sync) | Phase 4: Tool integration | Time a tool call that takes 3 seconds. Verify user hears acknowledgment, not silence. |
-| WebSocket frame parsing bugs | Phase 1: WebSocket infra | Run test suite with binary frames at all payload length boundaries (125, 126, 65536 bytes) |
-| Safari MediaRecorder incompatibility | Phase 3: Browser audio UI | Verify on Safari that mic capture produces raw PCM, not encoded audio |
-| Ephemeral token security | Phase 2: Gemini integration | Verify Gemini API key never appears in browser network tab |
-| Thread leak / connection exhaustion | Phase 1: WebSocket infra | Rapid connect/disconnect 20 times, verify thread count returns to baseline |
-| Interrupted tool calls (orphaned work) | Phase 4: Tool integration | Interrupt user during pending tool call, verify goose session cleans up |
+| Credentials in generated code | Phase 1: Template System | `grep` generated files for credential patterns. Zero matches = pass |
+| Stdout corruption | Phase 1: Template System | Every template includes stderr redirect. Subprocess test produces valid JSON-RPC only on stdout |
+| Template injection | Phase 1: Template System | Fuzz test: generate extensions with special characters in all user inputs. All pass `ast.parse()` |
+| Credential detection false positives | Phase 1: Credential Detection | Test with 20 non-credential strings (UUIDs, hashes, code). Zero false vaultings = pass |
+| config.yaml race condition | Phase 2: Registration | Stress test: register 3 extensions while sending Telegram messages. No data loss = pass |
+| Goosed restart interrupts sessions | Phase 2: Registration | Register extension during active voice session. User notified or session preserved = pass |
+| Wrong template selection | Phase 1 + Phase 3: Validation | Generate extensions for 10 credential types. >90% correct template = pass |
+| Extension crashes in loop | Phase 3: Validation | Register with invalid credentials. Auto-disabled after 3 failures, user notified = pass |
+| Orphaned extensions | Phase 4: Lifecycle | Delete vault key, reboot. Orphaned extension disabled with warning = pass |
+| Credential exfiltration via extension | Phase 1: Template System | Generated code passes security lint (no os.system, eval, exec, unrestricted HTTP) = pass |
+| Extension name collisions | Phase 2: Registration | Register two extensions with same service type. Unique names assigned, both work = pass |
+| Dependency missing in container | Phase 1: Template System | Template manifest declares deps. Generator checks imports before writing. Missing dep = clear error, not crash |
 
 ## Sources
 
-- [Railway WebSocket disconnect after 10 minutes](https://station.railway.com/questions/socket-disconnects-after-10-minutes-bbceef40) (MEDIUM confidence)
-- [Railway WebSocket connection issues in production](https://station.railway.com/questions/web-socket-connection-issues-in-producti-ec8d4a69) (MEDIUM confidence)
-- [Gemini Live API session management](https://ai.google.dev/gemini-api/docs/live-session) (HIGH confidence, official docs)
-- [Gemini Live API capabilities guide](https://ai.google.dev/gemini-api/docs/live-api/capabilities) (HIGH confidence, official docs)
-- [Gemini Live API best practices](https://ai.google.dev/gemini-api/docs/live-api/best-practices) (HIGH confidence, official docs)
-- [Gemini Live API tool calling](https://ai.google.dev/gemini-api/docs/live-api/tools) (HIGH confidence, official docs)
-- [Gemini Live API ephemeral tokens](https://ai.google.dev/gemini-api/docs/ephemeral-tokens) (HIGH confidence, official docs)
-- [Gemini Live API WebSocket getting started](https://ai.google.dev/gemini-api/docs/live-api/get-started-websocket) (HIGH confidence, official docs)
-- [Gemini cookbook issue #906: tool call response format](https://github.com/google-gemini/cookbook/issues/906) (MEDIUM confidence, community workaround)
-- [Gemini Live API error 1008 during function calling](https://discuss.google.dev/t/gemini-live-api-apierror-1008-policy-violation-during-function-calling/337832) (LOW confidence, unresolved)
-- [Gemini Live API hangs on function calls](https://github.com/googleapis/python-genai/issues/803) (LOW confidence, may be version-specific)
-- [Safari MediaRecorder audio format issues](https://www.buildwithmatija.com/blog/iphone-safari-mediarecorder-audio-recording-transcription) (MEDIUM confidence)
-- [Web Audio API best practices (MDN)](https://developer.mozilla.org/en-US/docs/Web/API/Web_Audio_API/Best_practices) (HIGH confidence)
-- [Autoplay guide (MDN)](https://developer.mozilla.org/en-US/docs/Web/Media/Guides/Autoplay) (HIGH confidence)
-- [RFC 6455: The WebSocket Protocol](https://www.rfc-editor.org/rfc/rfc6455) (HIGH confidence)
-- [WebSocket keepalive and timeout guide](https://websocket.org/guides/troubleshooting/timeout/) (MEDIUM confidence)
-- [Python http.server threading memory leak (CPython tracker)](https://bugs.python.org/issue37193) (MEDIUM confidence)
-- [Pithikos/python-websocket-server (stdlib reference implementation)](https://github.com/Pithikos/python-websocket-server) (MEDIUM confidence)
-- [Browser power-saving WebSocket disconnection pitfall](https://www.pixelstech.net/article/1719122489-the-pitfall-of-websocket-disconnections-caused-by-browser-power-saving-mechanisms) (MEDIUM confidence)
-- [Suki: Lessons from scaling browser-based audio](https://www.suki.ai/blog/voice-first-future-lessons-from-scaling-browser-based-audio/) (MEDIUM confidence)
+- GooseClaw codebase: `docker/gateway.py` race condition documentation (lines 1548-1573), `apply_config()` (line 3372), `start_goosed()` (line 8622), `_save_vault_key()` (line 8603)
+- GooseClaw codebase: `docker/entrypoint.sh` extension registration and vault hydration flow
+- GooseClaw codebase: `docker/scripts/secret.sh` vault CLI implementation
+- GooseClaw codebase: `docker/knowledge/server.py` and `docker/memory/server.py` as reference MCP server patterns (stderr logging, FastMCP usage)
+- [MCP security best practices for credentials - Doppler](https://www.doppler.com/blog/mcp-server-credential-security-best-practices) (MEDIUM confidence)
+- [State of MCP Server Security 2025 - Astrix](https://astrix.security/learn/blog/state-of-mcp-server-security-2025/) (MEDIUM confidence)
+- [MCP Security Vulnerabilities - Practical DevSecOps](https://www.practical-devsecops.com/mcp-security-vulnerabilities/) (MEDIUM confidence)
+- [Using Extensions - Goose docs](https://block.github.io/goose/docs/getting-started/using-extensions/) (HIGH confidence)
+- [Extension Types and Configuration - DeepWiki](https://deepwiki.com/block/goose/5.3-extension-types-and-configuration) (MEDIUM confidence)
+- [Stdio Transport Failure - claude-code#3487](https://github.com/anthropics/claude-code/issues/3487) (HIGH confidence)
+- [Config file race condition - copilot-cli#1307](https://github.com/github/copilot-cli/issues/1307) (MEDIUM confidence)
+- [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) (HIGH confidence)
 
 ---
-*Pitfalls research for: GooseClaw v6.0 Voice Dashboard*
-*Researched: 2026-03-27*
+*Pitfalls research for: Auto-generated MCP extensions from user credentials (GooseClaw)*
+*Researched: 2026-04-01*

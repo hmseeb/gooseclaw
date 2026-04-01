@@ -8,8 +8,8 @@
 ### Template Engine
 
 - [x] **TMPL-01**: Jinja2-based template system renders single-file Python MCP servers
-- [ ] **TMPL-02**: Email template (IMAP/SMTP) - read, search, send emails
-- [ ] **TMPL-03**: REST API template - generic authenticated API calls (API key, bearer token)
+- [x] **TMPL-02**: Email template (IMAP/SMTP) - read, search, send emails
+- [x] **TMPL-03**: REST API template - generic authenticated API calls (API key, bearer token)
 - [x] **TMPL-04**: Templates read credentials from vault at runtime via `secret get` CLI
 - [x] **TMPL-05**: All generated servers redirect stdout to stderr (MCP protocol safety)
 
@@ -68,8 +68,8 @@
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | TMPL-01 | Phase 1 | Complete |
-| TMPL-02 | Phase 1 | Pending |
-| TMPL-03 | Phase 1 | Pending |
+| TMPL-02 | Phase 1 | Complete |
+| TMPL-03 | Phase 1 | Complete |
 | TMPL-04 | Phase 1 | Complete |
 | TMPL-05 | Phase 1 | Complete |
 | GEN-01 | Phase 1 | Complete |

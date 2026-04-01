@@ -9868,15 +9868,23 @@ def _mcp_schema_to_gemini(tool_schema):
         "object": "OBJECT",
     }
 
-    gemini_props = {}
-    for prop_name, prop_schema in properties.items():
-        json_type = prop_schema.get("type", "string")
+    def _convert_prop(pschema):
+        json_type = pschema.get("type", "string")
         gemini_type = type_map.get(json_type, "STRING")
         prop_def = {
             "type": gemini_type,
-            "description": prop_schema.get("description", f"Parameter: {prop_name}"),
+            "description": pschema.get("description", ""),
         }
-        gemini_props[prop_name] = prop_def
+        # Gemini requires "items" for ARRAY types
+        if gemini_type == "ARRAY":
+            items = pschema.get("items", {})
+            item_type = type_map.get(items.get("type", "string"), "STRING")
+            prop_def["items"] = {"type": item_type}
+        return prop_def
+
+    gemini_props = {}
+    for prop_name, prop_schema in properties.items():
+        gemini_props[prop_name] = _convert_prop(prop_schema)
 
     result = {
         "name": tool_schema.get("name", "unknown"),

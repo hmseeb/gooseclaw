@@ -61,11 +61,11 @@ Plans:
   4. After registration, a health check confirms the extension responds to MCP ping before declaring success
   5. Extensions that fail to start 3 consecutive times are automatically disabled
 
-**Plans**: TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] 03-01: TBD
-- [ ] 03-02: TBD
+- [ ] 03-01-PLAN.md -- Validation module: ast.parse syntax check, MCP health check, 3-strike auto-disable with failure tracking
+- [ ] 03-02-PLAN.md -- Credential detection + E2E pipeline: regex detector, template classifier, gateway endpoint, validation gates in registration
 
 ## Progress
 
@@ -76,4 +76,4 @@ Phases execute in numeric order: 1 → 2 → 3
 |-------|----------------|--------|-----------|
 | 1. Template Engine and Code Generation | 3/3 | Complete | 2026-04-01 |
 | 2. Extension Registration and Boot Lifecycle | 0/2 | Planning complete | - |
-| 3. Credential Detection, Validation, and End-to-End Flow | 0/? | Not started | - |
+| 3. Credential Detection, Validation, and End-to-End Flow | 0/2 | Planning complete | - |

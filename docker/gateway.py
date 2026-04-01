@@ -9431,7 +9431,29 @@ def _create_voice_goose_session():
             session = json.loads(body)
             sid = session.get("id") or session.get("session_id")
             if sid:
-                _set_session_default_provider(str(sid))
+                # Use Gemini Flash for voice tool execution
+                api_key = _get_gemini_api_key()
+                if api_key:
+                    try:
+                        gpayload = json.dumps({
+                            "provider": "google",
+                            "model": "gemini-3-flash-preview",
+                            "session_id": str(sid),
+                        }).encode("utf-8")
+                        gconn = _goosed_conn(timeout=10)
+                        gconn.request("POST", "/agent/update_provider", body=gpayload, headers={
+                            "Content-Type": "application/json",
+                            "X-Secret-Key": _INTERNAL_GOOSE_TOKEN,
+                        })
+                        gresp = gconn.getresponse()
+                        gresp.read()
+                        gconn.close()
+                        _vlog(f"voice session {sid}: provider set to google/gemini-3-flash-preview")
+                    except Exception as e:
+                        _vlog(f"voice session {sid}: gemini provider failed, using default: {e}")
+                        _set_session_default_provider(str(sid))
+                else:
+                    _set_session_default_provider(str(sid))
                 _vlog(f"voice session created: {sid} (clean workspace)")
                 return str(sid)
     except Exception as e:

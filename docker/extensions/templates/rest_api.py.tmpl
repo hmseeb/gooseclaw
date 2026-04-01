@@ -1,0 +1,141 @@
+
+import json
+import urllib.request
+import urllib.parse
+import urllib.error
+
+
+def _build_headers(extra_headers=None):
+    """Build request headers with authentication."""
+    api_key = _vault_get("${vault_prefix}.api_key")
+    auth_type = "${auth_type}"
+
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+    if auth_type == "bearer":
+        headers["Authorization"] = f"Bearer {api_key}"
+    elif auth_type == "api_key_header":
+        headers["${auth_header}"] = api_key
+    elif auth_type == "basic":
+        import base64
+        encoded = base64.b64encode(api_key.encode()).decode()
+        headers["Authorization"] = f"Basic {encoded}"
+
+    if extra_headers:
+        headers.update(extra_headers)
+
+    return headers
+
+
+def _make_request(method, path, body=None, params=None, headers=None):
+    """Make an HTTP request and return the parsed response."""
+    base_url = _vault_get("${vault_prefix}.base_url")
+    url = base_url.rstrip("/") + "/" + path.lstrip("/")
+
+    if params:
+        query_string = urllib.parse.urlencode(params)
+        url = url + "?" + query_string
+
+    req_headers = _build_headers(headers)
+
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers=req_headers,
+        method=method,
+    )
+
+    try:
+        with urllib.request.urlopen(req) as response:
+            response_body = response.read().decode("utf-8")
+            try:
+                return json.loads(response_body)
+            except json.JSONDecodeError:
+                return {"response": response_body}
+    except urllib.error.HTTPError as e:
+        error_body = ""
+        try:
+            error_body = e.read().decode("utf-8")
+        except Exception:
+            pass
+        return {
+            "error": True,
+            "status_code": e.code,
+            "reason": e.reason,
+            "body": error_body,
+        }
+    except urllib.error.URLError as e:
+        return {"error": True, "reason": str(e.reason)}
+
+
+@mcp.tool()
+def api_get(path: str, params: str = "") -> str:
+    """Make a GET request to ${service_description}.
+
+    Args:
+        path: API endpoint path (e.g., "/users/me").
+        params: JSON object string of query parameters (e.g., '{"page": 1}').
+    """
+    try:
+        parsed_params = json.loads(params) if params else None
+        result = _make_request("GET", path, params=parsed_params)
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool()
+def api_post(path: str, body: str = "{}") -> str:
+    """Make a POST request to ${service_description}.
+
+    Args:
+        path: API endpoint path (e.g., "/posts").
+        body: JSON object string of the request body.
+    """
+    try:
+        parsed_body = json.loads(body)
+        result = _make_request("POST", path, body=parsed_body)
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool()
+def api_put(path: str, body: str = "{}") -> str:
+    """Make a PUT request to ${service_description}.
+
+    Args:
+        path: API endpoint path (e.g., "/posts/1").
+        body: JSON object string of the request body.
+    """
+    try:
+        parsed_body = json.loads(body)
+        result = _make_request("PUT", path, body=parsed_body)
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool()
+def api_delete(path: str) -> str:
+    """Make a DELETE request to ${service_description}.
+
+    Args:
+        path: API endpoint path (e.g., "/posts/1").
+    """
+    try:
+        result = _make_request("DELETE", path)
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+if __name__ == "__main__":
+    mcp.run()

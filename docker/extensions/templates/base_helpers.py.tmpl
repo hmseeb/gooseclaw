@@ -1,0 +1,37 @@
+"""Auto-generated MCP extension: ${extension_name}
+Generated: ${generated_at}
+Template: ${template_name}
+Vault keys: ${vault_keys_display}
+"""
+import sys
+
+# Redirect stdout to stderr so print() never corrupts MCP JSON-RPC on stdout
+sys.stdout = sys.stderr
+
+import os
+import subprocess
+import logging
+
+logging.basicConfig(stream=sys.stderr, level=logging.INFO)
+logger = logging.getLogger("${extension_name}")
+
+from mcp.server.fastmcp import FastMCP
+
+
+def _vault_get(key):
+    """Read a credential from the vault at runtime. Never hardcoded."""
+    result = subprocess.run(
+        ["secret", "get", key],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Vault key not found: {key} (exit {result.returncode}): {result.stderr.strip()}"
+        )
+    return result.stdout.strip()
+
+
+mcp = FastMCP("${extension_name}")
+
+# --- template tools below ---
